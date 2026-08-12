@@ -12,6 +12,7 @@ import { runScoring } from "./pipeline/rescore.js";
 import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL } from "./analysis/analyzer.js";
 import { buildDailyReport, writeReport } from "./report/daily.js";
 import { writeHtmlReport } from "./report/html.js";
+import { prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
 import { computeCalibration, describeCalibration, loadCalibration } from "./pipeline/calibration.js";
 import { buildFunnel, renderFunnel } from "./stats/funnel.js";
 import { listBoardEndpoints } from "./sources/registry.js";
@@ -135,6 +136,67 @@ program
         );
       }
       return summary;
+    });
+  });
+
+// ---- apply ----------------------------------------------------------------
+
+program
+  .command("apply <jobId>")
+  .description("Prepare a full application package. Prepares only - never submits.")
+  .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
+  .option("--effort <level>", "reasoning effort (default high - this one is worth the tokens)")
+  .option("--open", "open the generated pack in your browser", false)
+  .action(async (jobId: string, opts: { model?: string; effort?: string; open: boolean }) => {
+    const profile = loadProfile();
+    await withRepo("apply", async (repo) => {
+      const job = repo.get(jobId);
+      if (!job) {
+        console.error(`No job matches "${jobId}". Use \`job-radar top\` to list ids.`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+
+      log.info(`Preparing application material for ${job.company} - ${job.title}`);
+      if (!job.analysis) {
+        log.warn("This job has not been analyzed yet. Run `analyze` first for a much better package.");
+      }
+
+      const { pack, usage } = await prepareApplication(job, profile, {
+        // Defaults higher than the analysis stage: this output is read closely
+        // by a human and acted on, so it is worth more thinking than a triage
+        // pass over hundreds of postings.
+        model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+        effort: opts.effort ?? "high",
+      });
+
+      const markdown = renderPack(job, pack, profile);
+      const { dir, md, html } = writePack(job, markdown);
+
+      // SAVED, not APPLIED. Recording an application that has not been
+      // submitted would corrupt the funnel metrics with a phantom data point,
+      // and the funnel is the thing that tells him what to fix.
+      repo.setStatus(job.id, "SAVED", "Application pack prepared; not yet submitted");
+
+      console.log("");
+      console.log(markdown);
+      console.log("");
+      log.info(`Pack written to ${dir}`);
+      log.info(`  markdown : ${md}`);
+      log.info(`  html     : ${html}`);
+      log.info(
+        `  tokens   : ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`,
+      );
+      log.info(`Status set to SAVED. After you actually submit: job-radar status ${job.id} APPLIED`);
+
+      if (opts.open) {
+        const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+        const child = spawn(cmd, [html], { detached: true, stdio: "ignore" });
+        child.on("error", () => console.log(`Open it yourself: file://${html}`));
+        child.unref();
+      }
+
+      return { ok: true, dir };
     });
   });
 
