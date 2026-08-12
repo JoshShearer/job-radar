@@ -35,3 +35,6 @@ config/personal.yaml
 
 # Persistent browser profile used by `autofill` (holds cookies/sessions)
 .browser-profile/
+
+# Master resume (real employment history)
+config/resume.yaml

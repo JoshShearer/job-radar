@@ -6,6 +6,12 @@ Local-first job intelligence pipeline. Read `README.md` for architecture and `TO
 
 **Never invent experience.** Not in prompts, not in generated resume text, not in outreach drafts, not in analysis output. If a posting demands something not in the career profile, that is a gap — say so. Never fabricate employers, metrics, technologies, or a person's name. Never claim to have inspected a company's website, traffic, or codebase.
 
+**Resume provenance is a mechanism, not a guideline.** `config/resume.yaml` is the only source of resume fact. A tailored resume is a SELECTION from it: the model returns bullet ids and replacement strings, and `src/resume/render.ts` assembles the document from master data. Never let a model emit resume prose directly into a rendered document.
+
+`enforceProvenance` must keep repairing rather than trusting: unknown or `verified: false` citations are dropped, and a rewrite that introduces a technology or a number is **reverted to the master wording**. Reverting is always available, so overreaching can only produce a worse resume, never a false one. Do not "fix" a reverted rewrite by loosening the check.
+
+`resume match` must keep three states, not two. `partial` — right technology, wrong scope — is the category that prevents over-claiming, and the qualifiers in `QUALIFIERS` (leadership, open source, enterprise scale, migration, public speaking) each have to be evidenced independently of the skill match. Using a library is not contributing to it.
+
 **Never auto-send anything.** No application, no email, no LinkedIn message. The system prepares; a human sends. This is the whole point of the design.
 
 **`autofill` fills, and stops.** It may type into an employer's form; it must never submit one. Three refusals are load-bearing and must not be "improved" into answers:
@@ -63,4 +69,4 @@ Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds`
 
 ## Verification
 
-Before claiming anything works: `npm test` (260 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+Before claiming anything works: `npm test` (302 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.

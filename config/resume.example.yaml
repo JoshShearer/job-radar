@@ -1,0 +1,75 @@
+# Master resume: the single source of truth for what you have actually done.
+#
+# Copy to config/resume.yaml (gitignored), or generate it:
+#   npm run cli -- resume import my-resume.txt   # structure an existing resume
+#   npm run cli -- resume init                   # scaffold from career-profile
+#
+# Every tailored resume is a SELECTION from this file. Generated output must
+# cite the bullet ids it used, those citations are checked against this file,
+# and a rewrite that adds a technology or a number is discarded. Anything
+# missing here therefore cannot appear in an application - which makes this
+# file the thing to invest in.
+
+basics:
+  name: Ada Lovelace
+  headline: Senior Software Engineer
+  location: Austin, TX
+  # Base summary. Tailoring rewrites this most heavily, within evidence.
+  summary: >-
+    Full-stack engineer who ships production systems end to end.
+
+skills:
+  # `aliases` is what makes matching survive a posting's spelling. A job asking
+  # for "NextJS" must match your "Next.js" or the requirement reads as a gap.
+  - name: TypeScript
+    aliases: [TS]
+    level: expert          # expert | strong | working | familiar
+    years: 8
+    category: Languages
+  - name: Next.js
+    aliases: [NextJS, Next JS]
+    level: expert
+    category: Frontend
+  - name: PostgreSQL
+    aliases: [postgres, psql]
+    level: strong
+    category: Backend
+
+experience:
+  - id: role-acme                    # stable id, referenced by tailored resumes
+    company: Acme Corp
+    title: Senior Software Engineer
+    start: 2021-03                   # YYYY-MM
+    end: null                        # null means current
+    location: Remote
+    context: B2B marketplace, Series B, ~40 engineers
+    employment_type: full_time       # full_time | contract | founder | part_time | internship
+    bullets:
+      - id: b-acme-checkout
+        text: Rebuilt the checkout flow in Next.js, cutting median time to purchase from 90s to 40s.
+        # What this bullet is EVIDENCE for. Untagged bullets can never match a
+        # requirement, so an untagged bullet is invisible to tailoring.
+        skills: [TypeScript, Next.js]
+        lanes: [full_stack]
+        # verified: false excludes a bullet from every generated resume.
+        # Use it for anything you could not defend under questioning.
+        verified: true
+
+projects:
+  - id: proj-sideproject
+    name: Side Project
+    url: https://example.com
+    context: Personal project, still running
+    bullets:
+      - id: b-side-1
+        text: Built and operate a production Next.js application.
+        skills: [Next.js, TypeScript]
+        verified: true
+
+education:
+  - id: edu-1
+    school: University of Somewhere
+    credential: BS Electrical Engineering
+    year: "2014"
+
+certifications: []
