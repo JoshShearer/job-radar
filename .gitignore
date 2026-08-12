@@ -1,0 +1,28 @@
+node_modules/
+dist/
+*.log
+
+# Local database and any backups of it
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Generated reports
+reports/
+
+# Personal resume source + generated variants (never commit these)
+resumes/*
+!resumes/README.md
+!resumes/.gitkeep
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/

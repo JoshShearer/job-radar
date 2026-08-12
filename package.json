@@ -1,0 +1,34 @@
+{
+  "name": "job-radar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first job intelligence pipeline: discover, normalize, dedupe, filter, score, analyze, and track senior engineering opportunities.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "radar": "tsx src/cli.ts daily",
+    "cli": "tsx src/cli.ts",
+    "ingest": "tsx src/cli.ts ingest",
+    "score": "tsx src/cli.ts score",
+    "analyze": "tsx src/cli.ts analyze",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
+    "better-sqlite3": "^11.10.0",
+    "commander": "^14.0.0",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
