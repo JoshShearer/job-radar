@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
 import { loadEnvFile } from "./config/env.js";
@@ -10,6 +11,8 @@ import { runIngest } from "./pipeline/ingest.js";
 import { runScoring } from "./pipeline/rescore.js";
 import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL } from "./analysis/analyzer.js";
 import { buildDailyReport, writeReport } from "./report/daily.js";
+import { writeHtmlReport } from "./report/html.js";
+import { computeCalibration, describeCalibration, loadCalibration } from "./pipeline/calibration.js";
 import { buildFunnel, renderFunnel } from "./stats/funnel.js";
 import { listBoardEndpoints } from "./sources/registry.js";
 import { PoliteFetcher } from "./lib/http.js";
@@ -31,11 +34,11 @@ program
     setVerbose(Boolean(thisCommand.opts().verbose));
   });
 
-function withRepo<T>(command: string, fn: (repo: JobRepo) => T | Promise<T>): Promise<T> {
+function withRepo<T>(command: string, fn: (repo: JobRepo, db: ReturnType<typeof openDb>) => T | Promise<T>): Promise<T> {
   const db = openDb();
   const repo = new JobRepo(db);
   const runId = repo.startRun(command);
-  return Promise.resolve(fn(repo))
+  return Promise.resolve(fn(repo, db))
     .then((result) => {
       repo.finishRun(runId, result ?? {}, true);
       return result;
@@ -80,8 +83,8 @@ program
   .description("Re-run hard filters and deterministic scoring over the whole index")
   .action(async () => {
     const profile = loadProfile();
-    await withRepo("score", (repo) => {
-      const summary = runScoring(repo, profile);
+    await withRepo("score", (repo, db) => {
+      const summary = runScoring(repo, profile, db);
       console.log("");
       console.log(
         `Scored ${summary.scored} | passed ${summary.passed} | rejected ${summary.rejected} | top fit ${summary.topScore}`,
@@ -145,7 +148,7 @@ program
     const profile = loadProfile();
     const sourcesConfig = loadSources();
 
-    await withRepo("daily", async (repo) => {
+    await withRepo("daily", async (repo, db) => {
       let ingestSummary = null;
       if (opts.ingest) {
         ingestSummary = await runIngest(repo, profile, sourcesConfig);
@@ -153,7 +156,7 @@ program
         log.info("Skipping ingest (--no-ingest)");
       }
 
-      const scoreSummary = runScoring(repo, profile);
+      let scoreSummary = runScoring(repo, profile, db);
 
       if (opts.analyze) {
         const analysis = await runAnalysis(repo, profile, {
@@ -166,6 +169,10 @@ program
         log.info(
           `Analysis: ${analysis.analyzed} new, ${analysis.fromCache} cached, ~$${analysis.estimatedCostUsd.toFixed(3)}`,
         );
+        // New analyses change the calibration and can flip priorities, so the
+        // report must be built from re-scored data, not from the pre-analysis
+        // pass above.
+        scoreSummary = runScoring(repo, profile, db);
       }
 
       const { markdown, jobCount } = buildDailyReport({
@@ -176,12 +183,16 @@ program
         scoring: scoreSummary,
       });
       const file = writeReport(markdown);
+      const htmlFile = writeHtmlReport(markdown);
 
       console.log("");
       console.log(markdown);
       console.log("");
-      log.info(`Report written to ${file} (${jobCount} actionable roles)`);
-      return { jobCount, file };
+      log.info(`Report written (${jobCount} actionable roles):`);
+      log.info(`  markdown : ${file}`);
+      log.info(`  html     : ${htmlFile}`);
+      log.info(`  open it  : npm run cli -- open`);
+      return { jobCount, file, htmlFile };
     });
   });
 
@@ -358,6 +369,63 @@ program
       console.log("");
       console.log(renderFunnel(funnel, repo.statusCounts()));
       return funnel;
+    });
+  });
+
+// ---- open -----------------------------------------------------------------
+
+program
+  .command("open")
+  .description("Open the latest HTML briefing in your browser")
+  .option("--md", "print the Markdown path instead of opening the browser", false)
+  .action((opts: { md: boolean }) => {
+    const dir = paths.reports();
+    const html = resolve(dir, "latest.html");
+    const md = resolve(dir, "latest.md");
+
+    if (!existsSync(html) && !existsSync(md)) {
+      console.error(`No report found in ${dir}. Run \`npm run radar\` first.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (opts.md || !existsSync(html)) {
+      console.log(md);
+      return;
+    }
+
+    // Platform-appropriate opener. Never shell-interpolate the path.
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+    const child = spawn(cmd, [html], { detached: true, stdio: "ignore" });
+    child.on("error", () => {
+      console.log(`Could not launch ${cmd}. Open this file manually:`);
+      console.log(`  file://${html}`);
+    });
+    child.unref();
+    console.log(`Opening file://${html}`);
+  });
+
+// ---- calibrate ------------------------------------------------------------
+
+program
+  .command("calibrate")
+  .description("Show how far the keyword engine drifts from the analysis, measured on your own data")
+  .action(async () => {
+    await withRepo("calibrate", (_repo, db) => {
+      const fresh = computeCalibration(db);
+      const stored = loadCalibration(db);
+      console.log("");
+      console.log(describeCalibration(fresh));
+      console.log("");
+      console.log(`  sample size    ${fresh.sampleSize}`);
+      console.log(`  fit ratio      ${fresh.fitRatio.toFixed(3)}   (applied to unanalyzed jobs)`);
+      console.log(`  roi ratio      ${fresh.roiRatio.toFixed(3)}`);
+      console.log(`  mean fit bias  ${fresh.fitBias >= 0 ? "+" : ""}${fresh.fitBias.toFixed(1)} points`);
+      console.log(`  mean roi bias  ${fresh.roiBias >= 0 ? "+" : ""}${fresh.roiBias.toFixed(1)} points`);
+      console.log(`  applied        ${fresh.usable ? "yes" : "no - below the sample floor"}`);
+      if (stored) console.log(`  last stored    ${stored.computedAt}`);
+      console.log("");
+      console.log("Run `score` to re-measure and re-project every unanalyzed job.");
+      return fresh;
     });
   });
 

@@ -18,7 +18,7 @@ DISCOVER → NORMALIZE → DEDUPE → FILTER → SCORE → RESEARCH → RANK →
                                         LEARN FROM RESULTS
 ```
 
-On a real run against the shipped config: **5,548 postings fetched → 539 duplicates collapsed → 638 pass hard filters → 28 analyzed → 1 Priority A and 3 Priority B.**
+On a real run against the shipped config: **5,792 postings fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → 2 Priority A, 5 Priority B.**
 
 A single-digit actionable slate out of five and a half thousand postings is the intended output. If the briefing is long, the filters are too loose.
 
@@ -33,9 +33,31 @@ npm run cli -- sources        # health-check every configured job board
 npm run radar                 # ingest + score + write today's briefing
 ```
 
-`npm run radar` is the daily driver. It writes `reports/YYYY-MM-DD.md` and `reports/latest.md` and prints the briefing to stdout.
+`npm run radar` is the daily driver.
 
 The pipeline runs end to end **without an API key**. Only the `analyze` stage calls Claude; everything else — ingestion, dedupe, filtering, scoring, ranking, reporting, tracking — is deterministic and free.
+
+---
+
+## Where the report goes
+
+Each run writes four files into `reports/` and prints the briefing to your terminal:
+
+| File | What it is |
+|---|---|
+| `reports/latest.html` | **The one to read.** Styled, self-contained page. |
+| `reports/latest.md` | Same content as Markdown — good for grep, diffing, pasting. |
+| `reports/YYYY-MM-DD.html` | Dated archive, so you can compare weeks. |
+| `reports/YYYY-MM-DD.md` | Dated archive. |
+
+```bash
+npm run cli -- open        # opens latest.html in your browser
+npm run cli -- open --md   # prints the Markdown path instead
+```
+
+The HTML is **fully self-contained** — no CDN, no remote fonts, no JavaScript, no network requests of any kind. It works offline, and opening it tells nobody what you are looking at. It respects your system light/dark setting and reads fine on a phone. Application links are clickable; compensation bands are colour-coded.
+
+`reports/` is gitignored — the briefing contains your job search.
 
 ---
 
@@ -46,7 +68,8 @@ src/
 ├── cli.ts                 Command surface (commander)
 ├── config/
 │   ├── schema.ts          Zod schemas for both YAML config files
-│   └── load.ts            Loading, caching, cross-field coherence checks
+│   ├── load.ts            Loading, caching, cross-field coherence checks
+│   └── env.ts             .env loading (real env vars win)
 ├── sources/               One adapter per provider; all emit the same SourceJob
 │   ├── types.ts           SourceJob contract + shared date/interval helpers
 │   ├── greenhouse.ts      Public board API
@@ -58,14 +81,17 @@ src/
 │   ├── normalize.ts       SourceJob → NormalizedJob; all classification lives here
 │   ├── dedupe.ts          Exact → content-hash → bounded fuzzy matching
 │   ├── filters.ts         Hard filters (reject on evidence, never on absence)
-│   ├── score.ts           Explainable fit + Application ROI
+│   ├── score.ts           Explainable fit + Application ROI + reconciliation
+│   ├── calibration.ts     Measures and corrects the keyword engine's bias
 │   ├── ingest.ts          Orchestrates discover → normalize → dedupe → persist
-│   └── rescore.ts         Re-filters and re-scores the whole index
+│   └── rescore.ts         Two-pass: score + calibrate, then reconcile/project
 ├── analysis/
 │   ├── schema.ts          JSON Schema for structured output
 │   ├── prompt.ts          Cached system prefix + per-job turn
 │   └── analyzer.ts        Claude call, validation, caching, cost accounting
-├── report/daily.ts        The daily briefing
+├── report/
+│   ├── daily.ts           The daily briefing (Markdown)
+│   └── html.ts            Self-contained HTML rendering
 ├── stats/funnel.ts        Conversion rates + bottleneck diagnosis
 ├── db/                    SQLite schema, migrations, repository
 ├── model/                 Job + status types, analysis contract
@@ -115,7 +141,13 @@ The file is validated on load. Beyond per-field types, `load.ts` runs **cross-fi
 
 ### `config/sources.yaml`
 
-Which boards to pull, and how politely. Every board token shipped in the file was verified live (HTTP 200 with a non-empty job list). Re-check them any time with `npm run cli -- sources`.
+**104 verified boards** across Greenhouse, Lever, Ashby, and Remote OK. Every token was confirmed live (HTTP 200, non-empty job list) before shipping. Re-check any time with `npm run cli -- sources`.
+
+The list is grouped by which lane each company serves, and is **deliberately weighted toward smaller companies**. The first version was seeded with recognizable names — Stripe, Databricks, Pinterest, Coinbase — and produced exactly one Priority A out of 5,000 postings, with the analyses repeating the same verdict: *"none of his real edge is valued or even mentioned here."* At a large company hiring a generic senior engineer, technical SEO, IoT, and WebGL depth count for nothing and you compete on level and scale alone.
+
+So the list now leads with headless CMS vendors (Sanity, Storyblok, Contentful, Prismic), SEO platforms (BrightEdge, Conductor, Similarweb), content and publishing tools, marketplaces, proptech and smart-building (Orchard, SmartRent, Latch, Roofstock), industrial IoT (Tulip, Augury, Samsara), and small AI-product companies (LangChain, Modal, Baseten, Browserbase, E2B). Large employers are still included for coverage; the competition proxy down-ranks them automatically.
+
+Companies with no public ATS endpoint go in `watchlist` — Payload, Ahrefs, Semrush, Botify, Statsig — surfaced as research reminders rather than scraped.
 
 ### Environment variables
 
@@ -148,10 +180,12 @@ npm run cli -- show <job-id>               # full detail (id or unique prefix)
 npm run cli -- status <job-id> APPLIED     # move a job through the funnel
 npm run cli -- stats                       # conversion rates + bottleneck diagnosis
 npm run cli -- sources                     # health-check every board
+npm run cli -- open                        # open the latest HTML briefing
+npm run cli -- calibrate                   # how far the keyword engine drifts from the analysis
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 151 tests
+npm test                                   # 173 tests
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -266,7 +300,31 @@ This is not deference for its own sake. Keyword matching structurally **cannot r
 
 Hard-filter rejections still stand regardless. The analysis cannot make an onsite-in-Seattle role workable.
 
-Expect the deterministic layer to run optimistic. Across 28 live analyses it over-scored consistently — that is the layer's known limitation, and the second layer exists to correct it.
+### Calibration — the system corrects its own bias
+
+The deterministic layer runs optimistic, and the bias is measurable. `calibrate` fits it from every job that has both a keyword score and an analysis:
+
+```
+Calibrated on 29 analyzed jobs. The keyword engine over-scores fit by 20 points
+on average (25% high), so unanalyzed jobs are projected at 0.75x fit / 0.70x ROI
+to keep the ranking comparable.
+```
+
+Unanalyzed jobs are then shown at their **projected** score, so they sit in one honest ranking alongside analyzed ones instead of floating above them on an uncorrected number. Every job records how its score was reached:
+
+| `score_confidence` | Meaning |
+|---|---|
+| `analyzed` | An analysis backs it |
+| `projected` | Deterministic, scaled by the measured correction |
+| `raw` | Deterministic, uncorrected — not enough samples yet |
+
+Three deliberate constraints:
+
+- **It uses the median ratio, not the mean.** One role scored 8 against a keyword 60 would otherwise drag the whole correction down.
+- **It refuses to act below 8 samples**, the same anti-overfitting stance as the funnel diagnosis. It still reports what it measured.
+- **A projected job can never reach Priority A.** "Apply and contact a human today" should rest on an actual analysis, not on a statistical correction of a keyword count.
+
+Eligibility for analysis is gated on the **raw** score, not the projected one — otherwise a stronger correction would shrink the candidate pool every time it improved. The two numbers answer different questions: raw asks *"worth an API call?"*, projected asks *"where does this belong in the ranking?"*
 
 ---
 
@@ -350,7 +408,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 151 tests
+npm test          # 173 tests
 npm run typecheck
 ```
 
@@ -373,9 +431,9 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation, daily markdown report, manual status tracking, funnel metrics, interview database, 151 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, manual status tracking, funnel metrics, interview database, 173 tests.
 
-A representative full run: 5,548 fetched → 539 duplicates collapsed → 638 pass hard filters → 28 analyzed → **1 Priority A, 3 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
+A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 
 Not yet implemented: company research, resume tailoring, outreach drafting, reverse company search, opportunity detection, web dashboard.
 

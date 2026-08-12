@@ -12,7 +12,14 @@ Phase 1 is complete and running. This is what comes next, roughly in value order
 - [ ] Recruitee, Personio, Teamtailor public endpoints
 - [ ] YC Work at a Startup (check terms before implementing)
 - [ ] We Work Remotely RSS (verified reachable; RSS parser needed)
-- [ ] Auto-discover the ATS for a company domain, so adding a company is one line
+- [ ] **`job-radar discover <company>`** — probe all three ATS platforms for a
+      company token and print the config line to paste. This was done by hand
+      with a throwaway script to build the current 104-board list; it should be
+      a command, since adding companies is the highest-leverage tuning move
+      available and it is currently the most manual step in the whole system.
+- [ ] Several on-lane companies have no public ATS at all (Ahrefs, Semrush,
+      Botify, Payload, Framer, Statsig). They sit in `watchlist` and need a
+      research path rather than an ingestion one.
 
 ### Company research (`job-radar research <job-id>`)
 - [ ] Pull public signals: funding announcements, headcount trend, tech stack
@@ -98,16 +105,16 @@ Phase 1 is complete and running. This is what comes next, roughly in value order
   next run retries it because nothing was cached.
 - **Lever `salaryRange` is mapped but was null on every board tested**, so that
   path is implemented against the documented shape rather than an observed one.
-- **The deterministic engine systematically over-scores.** Measured across 28
-  live analyses, it cannot read level or scale: it rated a Sr. Staff role
-  demanding org-wide technical leadership at 96 where the analysis said 33.
-  `reconcileWithAnalysis` corrects this after the fact, but the *ordering of
-  what gets analyzed* is still driven by the inflated number, so a genuinely
-  good role sitting below `analysis_threshold` never gets a second look. Worth
-  feeding observed analysis scores back into the signal weights.
-- **Unanalyzed jobs can outrank analyzed ones** in the ranking, because their
-  optimistic deterministic ROI has not been corrected yet. Running
-  `daily --analyze` regularly keeps this from mattering.
+- **Calibration corrects the symptom, not the cause.** The measured 0.75x
+  correction is applied uniformly to every unanalyzed job, but the bias is
+  almost certainly not uniform: it is probably worst on senior-title roles at
+  large companies and mildest on small-company roles in-lane. A per-lane or
+  per-company-size correction would be more accurate than one global ratio.
+  Better still, feed the observed analysis scores back into the individual
+  signal weights so the keyword engine actually improves.
+- **Nothing re-analyzes a job when the calibration shifts materially.** A job
+  analyzed when the correction was 0.9x is not revisited when it moves to 0.7x.
+  Low impact today, worth revisiting if the ratio drifts far.
 
 ---
 

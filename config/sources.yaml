@@ -8,10 +8,33 @@
 # Every board token below was verified live (HTTP 200 with a non-empty job
 # list) at the time this file was written. Boards go away; `job-radar sources`
 # re-checks them and reports which are dead.
+#
+# ---------------------------------------------------------------------------
+# HOW THIS LIST IS CHOSEN
+#
+# The first version of this file was seeded with recognizable companies -
+# Stripe, Databricks, Pinterest, Coinbase. Running it produced exactly one
+# Priority A out of 5,000 postings, and the analyses kept saying the same
+# thing: "none of his real edge is valued or even mentioned here." At a large
+# company hiring a generic senior engineer, technical SEO, IoT, and WebGL depth
+# count for nothing and you compete on level and scale alone.
+#
+# So this list is deliberately weighted toward companies where the unusual
+# combination is the product: headless CMS vendors, SEO platforms, content and
+# publishing tools, marketplaces, proptech and smart-building, industrial IoT,
+# and small AI-product companies. Smaller boards are the point, not a
+# limitation - the scoring engine's competition proxy already down-ranks a
+# company with 300 open roles.
+#
+# Companies are grouped by which lane they serve. Add to the group that matches
+# the lane you want more of.
+# ---------------------------------------------------------------------------
 
 # Global politeness settings applied to every outbound request.
 http:
-  # Milliseconds to wait between requests to the same host.
+  # Milliseconds to wait between requests to the same host. All Greenhouse
+  # boards share one host, so this serializes them - a large list costs
+  # wall-clock time, not load on any single provider.
   delay_ms: 1200
   timeout_ms: 20000
   max_retries: 2
@@ -23,51 +46,157 @@ sources:
   greenhouse:
     enabled: true
     boards:
-      - { token: vercel, company: Vercel }
+      # -- Lane 2: growth engineering / technical SEO --------------------
+      # SEO and web-analytics platforms. Engineering here is the SEO work.
+      - { token: similarweb, company: Similarweb }
+      # Headless CMS and content platforms - the Payload/Next.js neighbourhood.
+      - { token: contentful, company: Contentful }
+      - { token: storyblok, company: Storyblok }
+      - { token: ghost, company: Ghost }
+      - { token: netlify, company: Netlify }
       - { token: webflow, company: Webflow }
       - { token: squarespace, company: Squarespace }
-      - { token: faire, company: Faire }
-      - { token: instacart, company: Instacart }
-      - { token: reddit, company: Reddit }
-      - { token: pinterest, company: Pinterest }
+      - { token: vercel, company: Vercel }
+      # Commerce platforms - content-heavy, SEO-driven, programmatic pages.
+      - { token: vtex, company: VTEX }
+      - { token: commercetools, company: commercetools }
+      - { token: klaviyo, company: Klaviyo }
+      - { token: attentive, company: Attentive }
+      - { token: customerio, company: "Customer.io" }
+      - { token: iterable, company: Iterable }
+      # Learning/content businesses that live or die on organic search.
+      - { token: coursera, company: Coursera }
+      - { token: udemy, company: Udemy }
+      - { token: masterclass, company: MasterClass }
       - { token: duolingo, company: Duolingo }
+
+      # -- Lane 1: marketplaces and product engineering ------------------
+      - { token: faire, company: Faire }
+      - { token: stockx, company: StockX }
+      - { token: grailed, company: Grailed }
+      - { token: mercari, company: Mercari }
+      - { token: instawork, company: Instawork }
+      - { token: slice, company: Slice }
       - { token: upwork, company: Upwork }
-      - { token: life360, company: Life360 }
+
+      # -- Lane 4: proptech, smart building, industrial IoT --------------
+      - { token: orchard, company: Orchard }
+      - { token: roofstock, company: Roofstock }
+      - { token: homelight, company: HomeLight }
+      - { token: pacaso, company: Pacaso }
+      - { token: smartrent, company: SmartRent }
+      - { token: tulip, company: Tulip }
+      - { token: augury, company: Augury }
       - { token: samsara, company: Samsara }
+      - { token: physicsx, company: PhysicsX }
+      - { token: life360, company: Life360 }
+
+      # -- Lane 1/3: developer platforms and analytics -------------------
+      - { token: algolia, company: Algolia }
+      - { token: launchdarkly, company: LaunchDarkly }
+      - { token: mixpanel, company: Mixpanel }
+      - { token: amplitude, company: Amplitude }
+      - { token: hightouch, company: Hightouch }
+      - { token: planetscale, company: PlanetScale }
+      - { token: airtable, company: Airtable }
+      - { token: warp, company: Warp }
+      - { token: galileo, company: Galileo }
+      - { token: descope, company: Descope }
+
+      # -- Larger companies, kept for coverage --------------------------
+      # The competition proxy down-ranks these automatically; they are here so
+      # an unusually well-matched role is not invisible, not because a 300-req
+      # board is a good hunting ground.
       - { token: cloudflare, company: Cloudflare }
       - { token: gitlab, company: GitLab }
-      - { token: dropbox, company: Dropbox }
+      - { token: reddit, company: Reddit }
       - { token: discord, company: Discord }
+      - { token: dropbox, company: Dropbox }
+      - { token: instacart, company: Instacart }
+      - { token: pinterest, company: Pinterest }
       - { token: twilio, company: Twilio }
-      - { token: asana, company: Asana }
-      - { token: lyft, company: Lyft }
       - { token: affirm, company: Affirm }
       - { token: coinbase, company: Coinbase }
-      - { token: robinhood, company: Robinhood }
-      - { token: stripe, company: Stripe }
-      - { token: databricks, company: Databricks }
 
   # ---- Lever ------------------------------------------------------------
   # Public postings API: https://api.lever.co/v0/postings/<token>?mode=json
   lever:
     enabled: true
     boards:
+      # Enterprise SEO platform - the single most on-lane company in this file.
+      - { token: brightedge, company: BrightEdge }
+      # Headless CMS.
+      - { token: prismic, company: Prismic }
+      # Proptech / smart building.
+      - { token: belong, company: Belong }
+      - { token: latch, company: Latch }
+      # Marketplaces and commerce.
+      - { token: vestiairecollective, company: "Vestiaire Collective" }
+      - { token: chownow, company: ChowNow }
+      - { token: olo, company: Olo }
+      # Developer platform.
+      - { token: neon, company: Neon }
+      - { token: anyscale, company: Anyscale }
+      # Content/learning.
+      - { token: brilliant, company: Brilliant }
       - { token: ro, company: Ro }
       - { token: tala, company: Tala }
 
   # ---- Ashby ------------------------------------------------------------
   # Public posting API: https://api.ashbyhq.com/posting-api/job-board/<token>
+  # Ashby is the best-structured source: plain-text descriptions, an explicit
+  # remote flag, and real structured compensation.
   ashby:
     enabled: true
     boards:
-      - { token: ramp, company: Ramp }
+      # -- Lane 2: content platforms and SEO ----------------------------
+      - { token: sanity, company: Sanity }        # headless CMS, closest Payload analogue
+      - { token: conductor, company: Conductor }  # enterprise SEO platform
+      - { token: substack, company: Substack }
+      - { token: patreon, company: Patreon }
+      - { token: thinkific, company: Thinkific }
+
+      # -- Lane 1: marketplaces -----------------------------------------
+      - { token: poshmark, company: Poshmark }
+      - { token: backmarket, company: "Back Market" }
+      - { token: curated, company: Curated }
+
+      # -- Lane 3: AI product engineering -------------------------------
+      # Small AI-product companies are where "senior engineer who ships with
+      # LLMs" is the actual job rather than an ML-research role.
+      - { token: langchain, company: LangChain }
+      - { token: llamaindex, company: LlamaIndex }
+      - { token: baseten, company: Baseten }
+      - { token: modal, company: Modal }
+      - { token: fireworks, company: "Fireworks AI" }
+      - { token: browserbase, company: Browserbase }
+      - { token: e2b, company: E2B }
+      - { token: braintrust, company: Braintrust }
+      - { token: pinecone, company: Pinecone }
+      - { token: weaviate, company: Weaviate }
+      - { token: cursor, company: Cursor }
+      - { token: sierra, company: Sierra }
+      - { token: openai, company: OpenAI }
+
+      # -- Lane 1: developer platforms ----------------------------------
+      - { token: supabase, company: Supabase }
+      - { token: render, company: Render }
+      - { token: railway, company: Railway }
+      - { token: resend, company: Resend }
+      - { token: workos, company: WorkOS }
+      - { token: stytch, company: Stytch }
+      - { token: temporal, company: Temporal }
+      - { token: sentry, company: Sentry }
       - { token: linear, company: Linear }
       - { token: vanta, company: Vanta }
       - { token: replit, company: Replit }
       - { token: posthog, company: PostHog }
-      - { token: cursor, company: Cursor }
-      - { token: sierra, company: Sierra }
-      - { token: openai, company: OpenAI }
+      - { token: notion, company: Notion }
+      - { token: clickup, company: ClickUp }
+      - { token: ramp, company: Ramp }
+
+      # -- Lane 4: 3D / spatial -----------------------------------------
+      - { token: shapr3d, company: "Shapr3D" }
 
   # ---- RemoteOK ---------------------------------------------------------
   # Public JSON feed: https://remoteok.com/api
@@ -78,10 +207,18 @@ sources:
   remoteok:
     enabled: true
 
-# Companies worth watching that have no public feed, or that you want to reach
-# through a human rather than an application form. `job-radar top` surfaces
-# these as Priority C reminders; nothing is scraped for them.
+# Companies worth watching that have no public feed on any of the three ATS
+# platforms above, or that you want to reach through a human rather than an
+# application form. `job-radar daily` surfaces these as reminders; nothing is
+# scraped for them.
 watchlist:
-  - { company: Payload, why: "Payload CMS core team - exact stack match" }
-  - { company: Shopify, why: "Marketplace + technical SEO at scale" }
+  - { company: Payload, why: "Payload CMS core team - the exact stack, and they are small" }
+  - { company: Ahrefs, why: "SEO platform; engineering IS the SEO work. No public ATS found." }
+  - { company: Semrush, why: "Same. Check their careers page directly." }
+  - { company: Botify, why: "Enterprise technical SEO platform - unusually on-lane" }
+  - { company: Screaming Frog, why: "Crawler tooling; tiny team, direct outreach only" }
   - { company: Matterport, why: "3D/spatial + proptech, direct prior experience" }
+  - { company: Shopify, why: "Marketplace + technical SEO at scale" }
+  - { company: Framer, why: "Design/web platform, no public ATS endpoint found" }
+  - { company: Statsig, why: "Experimentation platform - matches the 200+ experiments story" }
+  - { company: Clerk, why: "Dev platform, Next.js-native" }
