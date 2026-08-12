@@ -15,7 +15,9 @@
     "analyze": "tsx src/cli.ts analyze",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "serve": "tsx src/cli.ts serve --open",
+    "discover": "tsx src/cli.ts discover"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

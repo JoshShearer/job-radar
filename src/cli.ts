@@ -15,6 +15,8 @@ import { writeHtmlReport } from "./report/html.js";
 import { computeCalibration, describeCalibration, loadCalibration } from "./pipeline/calibration.js";
 import { buildFunnel, renderFunnel } from "./stats/funnel.js";
 import { listBoardEndpoints } from "./sources/registry.js";
+import { discoverCompany, type DiscoveryHit } from "./sources/discover.js";
+import { startReportServer } from "./report/serve.js";
 import { PoliteFetcher } from "./lib/http.js";
 import { log, setVerbose } from "./lib/log.js";
 import { isStatus, STATUSES, INTERVIEW_STAGES } from "./model/status.js";
@@ -404,6 +406,45 @@ program
     console.log(`Opening file://${html}`);
   });
 
+// ---- serve ----------------------------------------------------------------
+
+program
+  .command("serve")
+  .description("Serve the briefing archive locally (read-only, 127.0.0.1 only)")
+  .option("-p, --port <n>", "port to listen on", "4321")
+  .option("--open", "open a browser once the server is up", false)
+  .action(async (opts: { port: string; open: boolean }) => {
+    const dir = paths.reports();
+    if (!existsSync(resolve(dir, "latest.html"))) {
+      console.log(`No briefing in ${dir} yet - serving an empty index. Run \`npm run radar\` to generate one.`);
+    }
+
+    const { port } = await startReportServer({ dir, port: Number(opts.port) || 4321 });
+    const url = `http://127.0.0.1:${port}/`;
+
+    console.log("");
+    console.log(`  Job Radar briefings  ${url}`);
+    console.log(`  serving              ${dir}`);
+    console.log(`  bound to             127.0.0.1 only (not reachable from your network)`);
+    console.log("");
+    console.log("  Ctrl-C to stop.");
+
+    if (opts.open) {
+      const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+      const child = spawn(cmd, [url], { detached: true, stdio: "ignore" });
+      child.on("error", () => console.log(`  (could not launch ${cmd} - open ${url} yourself)`));
+      child.unref();
+    }
+
+    // Hold the process open until interrupted.
+    await new Promise<void>((resolvePromise) => {
+      process.on("SIGINT", () => {
+        console.log("\nstopped");
+        resolvePromise();
+      });
+    });
+  });
+
 // ---- calibrate ------------------------------------------------------------
 
 program
@@ -427,6 +468,69 @@ program
       console.log("Run `score` to re-measure and re-project every unanalyzed job.");
       return fresh;
     });
+  });
+
+// ---- discover -------------------------------------------------------------
+
+program
+  .command("discover <companies...>")
+  .description("Find a company's public ATS board and print a sources.yaml line to paste")
+  .option("--all-tokens", "keep probing after the first hit (companies with several boards)", false)
+  .action(async (companies: string[], opts: { allTokens: boolean }) => {
+    const config = loadSources();
+    const fetcher = new PoliteFetcher({
+      delayMs: config.http.delay_ms,
+      timeoutMs: config.http.timeout_ms,
+      maxRetries: 0, // a 404 just means "not this ATS" - retrying it is waste
+      userAgent: config.http.user_agent,
+    });
+
+    // Companies already configured, so we can say so instead of suggesting a
+    // duplicate entry.
+    const existing = new Set<string>();
+    for (const group of [config.sources.greenhouse, config.sources.lever, config.sources.ashby]) {
+      for (const b of group.boards) existing.add(b.token.toLowerCase());
+    }
+
+    const found: DiscoveryHit[] = [];
+    const missing: string[] = [];
+
+    for (const company of companies) {
+      const result = await discoverCompany(company, fetcher, { allTokens: opts.allTokens });
+      if (result.hits.length === 0) {
+        missing.push(company);
+        console.log(`  --    ${company.padEnd(24)} no public board (tried: ${result.tokensTried.join(", ")})`);
+        continue;
+      }
+      for (const hit of result.hits) {
+        const dupe = existing.has(hit.token.toLowerCase());
+        console.log(
+          `  ${dupe ? "HAVE" : "NEW "}  ${company.padEnd(24)} ${hit.ats}:${hit.token} (${hit.jobCount} jobs)`,
+        );
+        if (!dupe) found.push(hit);
+      }
+    }
+
+    console.log("");
+    if (found.length === 0) {
+      console.log("Nothing new to add.");
+    } else {
+      console.log(`Add these to config/sources.yaml under the matching ATS, then run \`ingest\`:`);
+      for (const ats of ["greenhouse", "lever", "ashby"] as const) {
+        const lines = found.filter((h) => h.ats === ats);
+        if (lines.length === 0) continue;
+        console.log("");
+        console.log(`  # -- ${ats} --`);
+        for (const h of lines) console.log(h.configLine);
+      }
+    }
+    if (missing.length) {
+      console.log("");
+      console.log(
+        `No public ATS endpoint for: ${missing.join(", ")}. ` +
+          `Add them to \`watchlist\` in config/sources.yaml and approach a human instead.`,
+      );
+    }
   });
 
 // ---- sources --------------------------------------------------------------

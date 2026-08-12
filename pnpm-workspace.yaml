@@ -1,0 +1,11 @@
+# pnpm blocks dependency build scripts by default. Both of these genuinely
+# need to run:
+#
+#   better-sqlite3 - compiles a native SQLite binding. Without it every command
+#                    fails at startup with "Could not locate the bindings file".
+#   esbuild        - fetches/links its platform binary, used by tsx and vitest.
+#
+# Without these set, `pnpm install` succeeds and the project is still broken.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
