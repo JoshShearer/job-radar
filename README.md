@@ -149,7 +149,7 @@ npm run cli -- sources                     # health-check every board
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 138 tests
+npm test                                   # 151 tests
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -254,6 +254,18 @@ If a job's description changes on a later ingest, its cached analysis and score 
 
 Output includes fit, ROI, lane, recommendation, strengths, risks, missing requirements (each labeled *mandatory domain* vs *learnable tool*), differentiation, compensation read, interview probability, competition estimate, and outreach target **titles** — never invented names.
 
+Measured on a real run of 28 jobs with `claude-opus-5` at `medium` effort: **100% prompt-cache hit rate, ~$0.048/job.** `analyze` reports uncached / cache-write / cache-read / output tokens separately and warns if the cache is never read, since caching is what makes analyzing a large slate affordable.
+
+### The analysis overrules the keyword engine
+
+Where the two layers disagree, the analysis wins — `reconcileWithAnalysis` maps its recommendation onto priority and blends ROI 70/30 toward it.
+
+This is not deference for its own sake. Keyword matching structurally **cannot read level or scale**. A posting demanding "10+ years of large-scale distributed systems and 3+ years as an org-wide technical lead" contains every right technology word and is still a two-level mismatch. That exact case occurred on the first live run: the keyword engine scored it 96 and made it Priority A; the analysis scored it 33 and said skip.
+
+Hard-filter rejections still stand regardless. The analysis cannot make an onsite-in-Seattle role workable.
+
+Expect the deterministic layer to run optimistic. Across 28 live analyses it over-scored consistently — that is the layer's known limitation, and the second layer exists to correct it.
+
 ---
 
 ## Status tracking and funnel analytics
@@ -336,7 +348,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 138 tests
+npm test          # 151 tests
 npm run typecheck
 ```
 
@@ -357,9 +369,11 @@ External services are mocked. The suite runs offline in under a second.
 
 ## Status
 
-**Phase 1 is complete and running.** See `TODO.md` for what's next.
+**Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis, daily markdown report, manual status tracking, funnel metrics, interview database, 138 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation, daily markdown report, manual status tracking, funnel metrics, interview database, 151 tests.
+
+A representative full run: 5,548 fetched → 539 duplicates collapsed → 638 pass hard filters → 28 analyzed → **1 Priority A, 3 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 
 Not yet implemented: company research, resume tailoring, outreach drafting, reverse company search, opportunity detection, web dashboard.
 
