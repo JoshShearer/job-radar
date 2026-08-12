@@ -1,0 +1,449 @@
+# Job Radar - career profile
+#
+# This file drives filtering, scoring, and compensation classification.
+# Change your search strategy here; do not edit application code.
+# Every field is validated on load (src/config/schema.ts) - a typo fails loudly.
+
+identity:
+  name: Josh Shearer
+  headline: Senior full-stack engineer (TypeScript/React/Next.js/Node) with deep technical SEO and growth engineering experience
+  years_experience: 10
+
+compensation:
+  currency: USD
+  # Primary target band for base salary.
+  target_min: 160000
+  target_max: 180000
+  # Below this we start down-ranking hard.
+  acceptable_min: 145000
+  # Absolute floor: a posted max below this is a hard reject.
+  reject_below_max: 135000
+  # Stretch band - roles credibly reaching here get a bonus.
+  stretch_min: 190000
+  stretch_max: 220000
+  # Contract fallback, hourly.
+  contract_min_hourly: 85
+  contract_max_hourly: 110
+  prefer_employment_type: full_time # full_time | contract | either
+
+location:
+  home_metro: Austin, TX
+  remote_ok: true
+  hybrid_metros: # hybrid acceptable only in these metros
+    - Austin
+    - Austin, TX
+    - Austin, Texas
+  onsite_ok_metros: # onsite acceptable only in these metros
+    - Austin
+    - Austin, TX
+    - Austin, Texas
+  relocation_ok: false
+  # Country/region restrictions we cannot satisfy. Matching text => hard reject.
+  work_authorization_blockers:
+    - security clearance
+    - ts/sci
+    - top secret
+    - polygraph
+    - must be a us citizen
+    - us citizenship required
+    - citizenship is required
+    - eu work authorization required
+    - must reside in the uk
+    - must be located in canada
+
+# Lane weights express how much of the daily slate each lane should win.
+# They are applied as a multiplier on the lane's raw fit score.
+lanes:
+  full_stack:
+    label: Senior Full-Stack / Platform
+    weight: 0.35
+  growth_seo:
+    label: Growth Engineering / Technical SEO
+    weight: 0.30
+  ai_product:
+    label: AI-enabled Product Engineering
+    weight: 0.25
+  spatial_iot:
+    label: Proptech / 3D / IoT
+    weight: 0.10
+
+seniority:
+  # Titles at or above these are acceptable.
+  accept:
+    - senior
+    - staff
+    - lead
+    - principal
+    - founding
+    - architect
+    - head of
+    - director
+  # Junior signals - hard down-rank unless strategically interesting.
+  reject:
+    - intern
+    - internship
+    - junior
+    - jr.
+    - entry level
+    - entry-level
+    - new grad
+    - graduate program
+    - apprentice
+    - associate engineer
+    - i (entry
+    - level 1
+
+# Title patterns worth surfacing even when other signals are thin.
+target_titles:
+  full_stack:
+    - senior software engineer
+    - senior full stack
+    - senior fullstack
+    - staff software engineer
+    - staff full stack
+    - lead software engineer
+    - senior product engineer
+    - senior platform engineer
+    - web platform engineer
+    - founding engineer
+    - senior application engineer
+    - senior backend engineer
+    - senior frontend engineer
+  growth_seo:
+    - growth engineer
+    - senior growth engineer
+    - seo engineer
+    - technical seo engineer
+    - organic growth engineer
+    - search engineer
+    - technical seo lead
+    - programmatic seo
+    - seo platform engineer
+    - web performance engineer
+    - full stack growth engineer
+    - marketing engineer
+  ai_product:
+    - ai engineer
+    - ai product engineer
+    - applied ai engineer
+    - llm engineer
+    - forward deployed engineer
+    - agent engineer
+    - ai platform engineer
+    - ai infrastructure engineer
+  spatial_iot:
+    - 3d engineer
+    - webgl engineer
+    - graphics engineer
+    - iot engineer
+    - digital twin
+    - spatial computing
+    - firmware platform engineer
+
+# Positive signals. `weight` is points added when the term appears in title or
+# description. `lane` attributes the points to a lane for lane assignment.
+# `title_multiplier` scales the weight when the hit is in the job title.
+signals:
+  - { term: typescript, weight: 9, lane: full_stack }
+  - { term: javascript, weight: 4, lane: full_stack }
+  - { term: react, weight: 8, lane: full_stack }
+  - { term: next.js, weight: 9, lane: full_stack }
+  - { term: nextjs, weight: 9, lane: full_stack }
+  - { term: node.js, weight: 7, lane: full_stack }
+  - { term: nodejs, weight: 7, lane: full_stack }
+  - { term: express, weight: 3, lane: full_stack }
+  - { term: python, weight: 6, lane: full_stack }
+  - { term: payload cms, weight: 14, lane: full_stack }
+  - { term: payloadcms, weight: 14, lane: full_stack }
+  - { term: headless cms, weight: 7, lane: full_stack }
+  - { term: postgres, weight: 6, lane: full_stack }
+  - { term: postgresql, weight: 6, lane: full_stack }
+  - { term: mongodb, weight: 5, lane: full_stack }
+  - { term: sqlite, weight: 2, lane: full_stack }
+  - { term: graphql, weight: 5, lane: full_stack }
+  - { term: rest api, weight: 4, lane: full_stack }
+  - { term: aws, weight: 6, lane: full_stack }
+  - { term: cloudfront, weight: 4, lane: full_stack }
+  - { term: vercel, weight: 7, lane: full_stack }
+  - { term: firebase, weight: 3, lane: full_stack }
+  - { term: ci/cd, weight: 3, lane: full_stack }
+  - { term: react native, weight: 5, lane: full_stack }
+  - { term: stripe, weight: 5, lane: full_stack }
+  - { term: marketplace, weight: 6, lane: full_stack }
+  - { term: e-commerce, weight: 5, lane: full_stack }
+  - { term: ecommerce, weight: 5, lane: full_stack }
+  - { term: architecture, weight: 5, lane: full_stack }
+  - { term: system design, weight: 4, lane: full_stack }
+  - { term: end-to-end ownership, weight: 6, lane: full_stack }
+  - { term: product engineer, weight: 6, lane: full_stack }
+  - { term: startup, weight: 4, lane: full_stack }
+  - { term: founding, weight: 6, lane: full_stack }
+  - { term: 0 to 1, weight: 5, lane: full_stack }
+  - { term: zero to one, weight: 5, lane: full_stack }
+
+  - { term: technical seo, weight: 16, lane: growth_seo }
+  - { term: programmatic seo, weight: 16, lane: growth_seo }
+  - { term: seo, weight: 10, lane: growth_seo }
+  - { term: generative engine optimization, weight: 12, lane: growth_seo }
+  - { term: answer engine optimization, weight: 12, lane: growth_seo }
+  - { term: structured data, weight: 7, lane: growth_seo }
+  - { term: json-ld, weight: 8, lane: growth_seo }
+  - { term: schema.org, weight: 7, lane: growth_seo }
+  - { term: search console, weight: 9, lane: growth_seo }
+  - { term: ga4, weight: 6, lane: growth_seo }
+  - { term: google analytics, weight: 4, lane: growth_seo }
+  - { term: core web vitals, weight: 9, lane: growth_seo }
+  - { term: web performance, weight: 7, lane: growth_seo }
+  - { term: lighthouse, weight: 6, lane: growth_seo }
+  - { term: crawl, weight: 5, lane: growth_seo }
+  - { term: indexation, weight: 8, lane: growth_seo }
+  - { term: sitemap, weight: 7, lane: growth_seo }
+  - { term: hreflang, weight: 8, lane: growth_seo }
+  - { term: canonical, weight: 6, lane: growth_seo }
+  - { term: landing page, weight: 5, lane: growth_seo }
+  - { term: growth engineering, weight: 12, lane: growth_seo }
+  - { term: organic growth, weight: 9, lane: growth_seo }
+  - { term: organic search, weight: 9, lane: growth_seo }
+  - { term: experimentation, weight: 7, lane: growth_seo }
+  - { term: a/b test, weight: 6, lane: growth_seo }
+  - { term: conversion rate, weight: 4, lane: growth_seo }
+  - { term: acquisition, weight: 4, lane: growth_seo }
+  - { term: content platform, weight: 5, lane: growth_seo }
+  - { term: publishing, weight: 3, lane: growth_seo }
+
+  - { term: llm, weight: 9, lane: ai_product }
+  - { term: large language model, weight: 9, lane: ai_product }
+  - { term: openai, weight: 5, lane: ai_product }
+  - { term: anthropic, weight: 6, lane: ai_product }
+  - { term: claude, weight: 6, lane: ai_product }
+  - { term: rag, weight: 8, lane: ai_product }
+  - { term: retrieval augmented, weight: 8, lane: ai_product }
+  - { term: ai agent, weight: 10, lane: ai_product }
+  - { term: agentic, weight: 10, lane: ai_product }
+  - { term: tool calling, weight: 8, lane: ai_product }
+  - { term: function calling, weight: 7, lane: ai_product }
+  - { term: prompt engineering, weight: 5, lane: ai_product }
+  - { term: evaluation harness, weight: 8, lane: ai_product }
+  - { term: evals, weight: 7, lane: ai_product }
+  - { term: vector database, weight: 6, lane: ai_product }
+  - { term: embeddings, weight: 6, lane: ai_product }
+  - { term: ai product, weight: 8, lane: ai_product }
+  - { term: workflow automation, weight: 6, lane: ai_product }
+  - { term: human-in-the-loop, weight: 6, lane: ai_product }
+
+  - { term: three.js, weight: 13, lane: spatial_iot }
+  - { term: threejs, weight: 13, lane: spatial_iot }
+  - { term: webgl, weight: 12, lane: spatial_iot }
+  - { term: webgpu, weight: 8, lane: spatial_iot }
+  - { term: 3d, weight: 5, lane: spatial_iot }
+  - { term: proptech, weight: 12, lane: spatial_iot }
+  - { term: real estate, weight: 6, lane: spatial_iot }
+  - { term: digital twin, weight: 12, lane: spatial_iot }
+  - { term: smart building, weight: 10, lane: spatial_iot }
+  - { term: iot, weight: 10, lane: spatial_iot }
+  - { term: mqtt, weight: 12, lane: spatial_iot }
+  - { term: node-red, weight: 12, lane: spatial_iot }
+  - { term: websocket, weight: 6, lane: spatial_iot }
+  - { term: real-time, weight: 5, lane: spatial_iot }
+  - { term: telemetry, weight: 5, lane: spatial_iot }
+  - { term: edge device, weight: 8, lane: spatial_iot }
+  - { term: industrial automation, weight: 8, lane: spatial_iot }
+  - { term: scada, weight: 6, lane: spatial_iot }
+  - { term: plc, weight: 5, lane: spatial_iot }
+
+# Combination bonuses. All `all` terms must be present. This is where the
+# unusual-differentiation edge lives - it is the whole point of the system.
+combos:
+  - name: Payload CMS + Next.js
+    all: [payload, next]
+    bonus: 22
+    lane: full_stack
+    why: Direct match for ShroomSpy production stack. Extremely rare combination.
+  - name: Technical SEO + full-stack engineering
+    all: [seo, typescript]
+    bonus: 20
+    lane: growth_seo
+    why: Engineer who can ship the SEO fix, not just file the ticket.
+  - name: Programmatic SEO + TypeScript/Next
+    all: [programmatic seo, next]
+    bonus: 22
+    lane: growth_seo
+    why: 35+ programmatic landing pages already built and measured.
+  - name: SEO + marketplace/ecommerce
+    all: [seo, marketplace]
+    bonus: 16
+    lane: growth_seo
+    why: ShroomSpy is a production SEO-driven marketplace.
+  - name: React + Three.js + proptech
+    all: [react, three]
+    bonus: 20
+    lane: spatial_iot
+    why: Lead Application Platform Developer on an AI 3D real-estate platform.
+  - name: IoT + web platform
+    all: [iot, typescript]
+    bonus: 18
+    lane: spatial_iot
+    why: LoopString connects TypeScript cloud apps to Linux edge devices.
+  - name: MQTT + cloud application
+    all: [mqtt, cloud]
+    bonus: 16
+    lane: spatial_iot
+    why: Directly built this, end to end.
+  - name: Founding/startup ownership + senior IC
+    all: [founding, senior]
+    bonus: 14
+    lane: full_stack
+    why: Founder experience with real production delivery, not just title.
+  - name: LLM product + TypeScript
+    all: [llm, typescript]
+    bonus: 16
+    lane: ai_product
+    why: AI-assisted product engineering in the actual stack, not ML research.
+  - name: AI agents + product engineering
+    all: [agent, product]
+    bonus: 14
+    lane: ai_product
+    why: Agent architecture with human-in-the-loop design.
+  - name: Experimentation + engineering
+    all: [experimentation, engineer]
+    bonus: 12
+    lane: growth_seo
+    why: 200+ measured SEO experiments.
+
+# Negative signals: points subtracted. These down-rank but do not reject.
+negative_signals:
+  - { term: kubernetes, weight: 4 }
+  - { term: terraform, weight: 3 }
+  - { term: golang, weight: 5 }
+  - { term: " go " , weight: 3 }
+  - { term: rust, weight: 5 }
+  - { term: scala, weight: 6 }
+  - { term: kafka, weight: 3 }
+  - { term: spark, weight: 4 }
+  - { term: hadoop, weight: 5 }
+  - { term: on-call rotation, weight: 2 }
+  - { term: pytorch, weight: 5 }
+  - { term: tensorflow, weight: 5 }
+  - { term: cuda, weight: 6 }
+
+# Hard exclusions. If a term appears in the TITLE, reject outright.
+# Description-only matches are handled by negative_signals, because a senior
+# engineer can learn a tool - the discriminator is whether it is the core job.
+hard_exclude_titles:
+  - ios engineer
+  - ios developer
+  - android engineer
+  - android developer
+  - embedded engineer
+  - embedded software
+  - firmware engineer
+  - java engineer
+  - java developer
+  - .net developer
+  - .net engineer
+  - c# developer
+  - salesforce developer
+  - sap
+  - abap
+  - sharepoint
+  - drupal
+  - wordpress developer
+  - php developer
+  - ruby on rails developer
+  - qa engineer
+  - test engineer
+  - sdet
+  - data engineer
+  - data scientist
+  - machine learning research
+  - ml research
+  - research scientist
+  - devops engineer
+  - site reliability engineer
+  - security engineer
+  - network engineer
+  - database administrator
+  - technical writer
+  - sales engineer
+  - solutions architect
+  - recruiter
+  - designer
+  - product manager
+  - project manager
+  - program manager
+  - scrum master
+  # Non-engineering functions. These are the highest-value exclusions in this
+  # list: growth/SEO marketing roles are dense with exactly the keywords that
+  # score highest here, so without them a "Growth Marketing Manager" outranks
+  # every real engineering job. Each phrase is two words on purpose - "marketing
+  # manager" must not match "Growth Marketing Engineer".
+  - marketing manager
+  - marketing lead
+  - marketing director
+  - product marketing
+  - content manager
+  - content strategist
+  - community manager
+  - seo manager
+  - seo specialist
+  - seo strategist
+  - growth manager
+  - account executive
+  - account manager
+  - customer success
+  - business development
+  - operations manager
+  - chief of staff
+  - business analyst
+  - marketing analyst
+  - financial analyst
+
+# Description phrases indicating a mandatory domain we cannot claim.
+# These reject rather than down-rank.
+hard_exclude_description:
+  - phd in machine learning
+  - phd required
+  - publications at neurips
+  - publications in top-tier ml
+  - active security clearance
+  - must have an active ts/sci
+
+scoring:
+  # Raw signal points are divided by this then clamped to 0-100.
+  # Lower divisor => easier to reach a high score.
+  normalize_divisor: 1.6
+  # Points awarded when the title itself matches a target_titles entry.
+  title_match_bonus: 18
+  # Multiplier on a signal's weight when it appears in the title.
+  title_multiplier: 2.0
+  # Recency: jobs older than this many days lose points.
+  freshness_full_days: 7
+  freshness_zero_days: 45
+  freshness_max_points: 10
+  # Minimum fit score to be eligible for LLM analysis (cost control).
+  analysis_threshold: 55
+  # Minimum fit score to appear in the daily report at all.
+  report_threshold: 45
+
+roi:
+  # Weights for the Application ROI composite. They should sum to ~1.0.
+  weights:
+    fit: 0.34
+    differentiation: 0.20
+    compensation: 0.16
+    competition: 0.15
+    recency: 0.10
+    reachability: 0.05
+  # Company-size proxy for competition. Smaller => less competition => better.
+  # These are matched against detected company signals; unknown => neutral.
+  competition:
+    big_tech_penalty: 25
+    unknown_company_neutral: 55
+    small_company_bonus: 20
+
+report:
+  # Cap the actionable list so the daily briefing stays usable.
+  max_priority_a: 3
+  max_priority_b: 7
+  max_priority_c: 5
+  max_total: 12

@@ -1,0 +1,87 @@
+# Job Radar - source configuration
+#
+# Only public, documented job-board endpoints are used. No authentication is
+# bypassed, no CAPTCHAs are solved, no anti-bot controls are touched. If a
+# company is not reachable through a public ATS endpoint or feed, it does not
+# belong in this file - add it to `watchlist` and research it by hand instead.
+#
+# Every board token below was verified live (HTTP 200 with a non-empty job
+# list) at the time this file was written. Boards go away; `job-radar sources`
+# re-checks them and reports which are dead.
+
+# Global politeness settings applied to every outbound request.
+http:
+  # Milliseconds to wait between requests to the same host.
+  delay_ms: 1200
+  timeout_ms: 20000
+  max_retries: 2
+  user_agent: "job-radar/0.1 (personal job search; +https://github.com/JoshShearer)"
+
+sources:
+  # ---- Greenhouse -------------------------------------------------------
+  # Public board API: https://boards-api.greenhouse.io/v1/boards/<token>/jobs
+  greenhouse:
+    enabled: true
+    boards:
+      - { token: vercel, company: Vercel }
+      - { token: webflow, company: Webflow }
+      - { token: squarespace, company: Squarespace }
+      - { token: faire, company: Faire }
+      - { token: instacart, company: Instacart }
+      - { token: reddit, company: Reddit }
+      - { token: pinterest, company: Pinterest }
+      - { token: duolingo, company: Duolingo }
+      - { token: upwork, company: Upwork }
+      - { token: life360, company: Life360 }
+      - { token: samsara, company: Samsara }
+      - { token: cloudflare, company: Cloudflare }
+      - { token: gitlab, company: GitLab }
+      - { token: dropbox, company: Dropbox }
+      - { token: discord, company: Discord }
+      - { token: twilio, company: Twilio }
+      - { token: asana, company: Asana }
+      - { token: lyft, company: Lyft }
+      - { token: affirm, company: Affirm }
+      - { token: coinbase, company: Coinbase }
+      - { token: robinhood, company: Robinhood }
+      - { token: stripe, company: Stripe }
+      - { token: databricks, company: Databricks }
+
+  # ---- Lever ------------------------------------------------------------
+  # Public postings API: https://api.lever.co/v0/postings/<token>?mode=json
+  lever:
+    enabled: true
+    boards:
+      - { token: ro, company: Ro }
+      - { token: tala, company: Tala }
+
+  # ---- Ashby ------------------------------------------------------------
+  # Public posting API: https://api.ashbyhq.com/posting-api/job-board/<token>
+  ashby:
+    enabled: true
+    boards:
+      - { token: ramp, company: Ramp }
+      - { token: linear, company: Linear }
+      - { token: vanta, company: Vanta }
+      - { token: replit, company: Replit }
+      - { token: posthog, company: PostHog }
+      - { token: cursor, company: Cursor }
+      - { token: sierra, company: Sierra }
+      - { token: openai, company: OpenAI }
+
+  # ---- RemoteOK ---------------------------------------------------------
+  # Public JSON feed: https://remoteok.com/api
+  # ATTRIBUTION REQUIRED by their API terms: any surface that displays these
+  # listings must link back to https://remoteok.com with a followed link and
+  # name Remote OK as the source. The generated report does this automatically
+  # (src/report/daily.ts). If you remove that attribution, disable this source.
+  remoteok:
+    enabled: true
+
+# Companies worth watching that have no public feed, or that you want to reach
+# through a human rather than an application form. `job-radar top` surfaces
+# these as Priority C reminders; nothing is scraped for them.
+watchlist:
+  - { company: Payload, why: "Payload CMS core team - exact stack match" }
+  - { company: Shopify, why: "Marketplace + technical SEO at scale" }
+  - { company: Matterport, why: "3D/spatial + proptech, direct prior experience" }
