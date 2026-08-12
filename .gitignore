@@ -26,3 +26,6 @@ resumes/*
 .DS_Store
 .vscode/
 .idea/
+
+# Generated application packages (personal material)
+applications/

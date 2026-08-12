@@ -209,6 +209,7 @@ npm run cli -- daily --analyze             # full pass including the LLM stage
 npm run cli -- top --limit 20              # ranked table
 npm run cli -- top --all --lane growth_seo # include reviewed jobs, filter by lane
 npm run cli -- show <job-id>               # full detail (id or unique prefix)
+npm run cli -- apply <job-id> --open       # prepare an application pack (never submits)
 npm run cli -- status <job-id> APPLIED     # move a job through the funnel
 npm run cli -- stats                       # conversion rates + bottleneck diagnosis
 npm run cli -- sources                     # health-check every board
@@ -359,6 +360,25 @@ Three deliberate constraints:
 - **A projected job can never reach Priority A.** "Apply and contact a human today" should rest on an actual analysis, not on a statistical correction of a keyword count.
 
 Eligibility for analysis is gated on the **raw** score, not the projected one — otherwise a stronger correction would shrink the candidate pool every time it improved. The two numbers answer different questions: raw asks *"worth an API call?"*, projected asks *"where does this belong in the ranking?"*
+
+---
+
+## Preparing an application
+
+```bash
+npm run cli -- apply b5b545ce17f3 --open
+```
+
+Generates a complete package into `applications/<job-id>-<company>/` as Markdown and HTML: the positioning frame, which resume variant to start from and 3-5 strategic edits, a suggested summary rewrite, a cover note, draft answers to the form questions that role is likely to ask, outreach drafts, a compensation strategy (target / anchor / walk-away, and whether to ask for their range first), and interview prep built only from real history.
+
+Two sections make it worth reading before anything else:
+
+- **Decide these first** — the genuine tradeoffs only you can resolve. On the Vercel forward-deployed role that was travel (25-40% is a week a month, and it is a requirement rather than a preference), Professional Services versus product engineering, and whether a 216-day-old req is even live.
+- **Do NOT claim** — requirements in the posting you cannot evidence, stated explicitly so the boundary is not left implicit. Claiming one of these is the single unrecoverable mistake in a job search.
+
+**It prepares and never submits.** No form is filled, no message is sent, no request goes anywhere except to the model. Status is set to `SAVED`, not `APPLIED` — recording an application that has not been submitted would put a phantom data point into the funnel, and the funnel is the thing that tells you what to fix. Move it to `APPLIED` yourself once you have actually submitted.
+
+`applications/` is gitignored.
 
 ---
 
