@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
@@ -12,7 +12,9 @@ import { runScoring } from "./pipeline/rescore.js";
 import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL } from "./analysis/analyzer.js";
 import { buildDailyReport, writeReport } from "./report/daily.js";
 import { writeHtmlReport } from "./report/html.js";
-import { prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
+import { loadPack, packDir, prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
+import { loadPersonal } from "./config/personal.js";
+import { autofillApplication, findResume, renderOutcomes } from "./apply/autofill.js";
 import { computeCalibration, describeCalibration, loadCalibration } from "./pipeline/calibration.js";
 import { buildFunnel, renderFunnel } from "./stats/funnel.js";
 import { listBoardEndpoints } from "./sources/registry.js";
@@ -171,7 +173,7 @@ program
       });
 
       const markdown = renderPack(job, pack, profile);
-      const { dir, md, html } = writePack(job, markdown);
+      const { dir, md, html } = writePack(job, markdown, pack);
 
       // SAVED, not APPLIED. Recording an application that has not been
       // submitted would corrupt the funnel metrics with a phantom data point,
@@ -188,6 +190,7 @@ program
         `  tokens   : ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`,
       );
       log.info(`Status set to SAVED. After you actually submit: job-radar status ${job.id} APPLIED`);
+      log.info(`To fill the real form in a browser: job-radar autofill ${job.id}`);
 
       if (opts.open) {
         const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
@@ -197,6 +200,72 @@ program
       }
 
       return { ok: true, dir };
+    });
+  });
+
+// ---- autofill -------------------------------------------------------------
+
+program
+  .command("autofill <jobId>")
+  .description("Open the application form in a browser and fill it. Never submits.")
+  .option("--no-screenshot", "skip saving a screenshot of the filled form")
+  .option("--headless", "dry run: verify what would be filled without opening a window", false)
+  .action(async (jobId: string, opts: { screenshot: boolean; headless: boolean }) => {
+    // Loaded before opening a browser so a missing/invalid config fails fast.
+    const personal = loadPersonal();
+
+    await withRepo("autofill", async (repo) => {
+      const job = repo.get(jobId);
+      if (!job) {
+        console.error(`No job matches "${jobId}". Use \`job-radar top\` to list ids.`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+
+      const pack = loadPack(job);
+      if (!pack) {
+        log.warn(`No prepared pack for this job. Run \`job-radar apply ${job.id}\` first for drafted answers.`);
+      }
+      if (!findResume()) {
+        log.warn("No resume file in resumes/ - everything else will be filled, but you must attach it yourself.");
+      }
+
+      const dir = packDir(job);
+      mkdirSync(dir, { recursive: true });
+
+      const result = await autofillApplication(job, personal, pack, {
+        screenshotDir: opts.screenshot ? dir : undefined,
+        headless: opts.headless,
+      });
+
+      const report = renderOutcomes(job, result);
+      writeFileSync(resolve(dir, "autofill-report.md"), report, "utf8");
+
+      console.log("");
+      console.log(report);
+      console.log("");
+
+      if (opts.headless) {
+        // A dry run proves the classification against the live form. It cannot
+        // be used to apply: the filled page is discarded when the browser exits.
+        log.info("Dry run complete. Nothing was submitted and the filled form was discarded.");
+        log.info(`To actually fill it in a real browser: job-radar autofill ${job.id}`);
+        await result.context.close();
+      } else {
+        log.info("The browser is open and the form is filled. Nothing has been submitted.");
+        log.info("Review every field, attach anything missing, then press the button yourself.");
+        log.info(`Afterwards: job-radar status ${job.id} APPLIED`);
+        log.info("Close the browser window when you are done (or press Ctrl+C here).");
+
+        // Hold the process open so the browser stays up for review. The context
+        // is never closed by us on the happy path - the human closes the window.
+        await new Promise<void>((done) => {
+          result.context.on("close", () => done());
+          process.once("SIGINT", () => done());
+        });
+      }
+
+      return { ok: true, filled: result.outcomes.filter((o) => o.status === "filled").length };
     });
   });
 

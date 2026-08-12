@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CareerProfile } from "../config/schema.js";
 import type { EnrichedJob } from "../model/job.js";
@@ -256,9 +256,22 @@ export function renderPack(job: EnrichedJob, pack: ApplicationPack, profile: Car
   return L.join("\n");
 }
 
-/** Write the pack to applications/<job-id>/ as Markdown + HTML. */
-export function writePack(job: EnrichedJob, markdown: string): { dir: string; md: string; html: string } {
-  const dir = resolve(APPLICATIONS_DIR, `${job.id}-${slug(job.company)}`);
+/** Directory holding the prepared material for one job. */
+export function packDir(job: EnrichedJob): string {
+  return resolve(APPLICATIONS_DIR, `${job.id}-${slug(job.company)}`);
+}
+
+/**
+ * Write the pack to applications/<job-id>/ as Markdown + HTML, plus the raw
+ * JSON. The JSON is what `autofill` reads to type drafted answers into the
+ * real form, so it is written even though a human never opens it.
+ */
+export function writePack(
+  job: EnrichedJob,
+  markdown: string,
+  pack?: ApplicationPack,
+): { dir: string; md: string; html: string; json: string | null } {
+  const dir = packDir(job);
   mkdirSync(dir, { recursive: true });
 
   const md = resolve(dir, "application-pack.md");
@@ -266,8 +279,22 @@ export function writePack(job: EnrichedJob, markdown: string): { dir: string; md
   writeFileSync(md, markdown, "utf8");
   writeFileSync(html, markdownToHtml(markdown, `${job.title} - ${job.company}`), "utf8");
 
+  let json: string | null = null;
+  if (pack) {
+    json = resolve(dir, "pack.json");
+    writeFileSync(json, JSON.stringify(pack, null, 2), "utf8");
+  }
+
   log.debug(`wrote application pack to ${dir}`);
-  return { dir, md, html };
+  return { dir, md, html, json };
+}
+
+/** Load a previously prepared pack, or null if this job has not been prepared. */
+export function loadPack(job: EnrichedJob): ApplicationPack | null {
+  const file = resolve(packDir(job), "pack.json");
+  if (!existsSync(file)) return null;
+  const parsed = ApplicationPackSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
+  return parsed.success ? parsed.data : null;
 }
 
 function slug(s: string): string {
