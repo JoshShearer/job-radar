@@ -98,9 +98,16 @@ Phase 1 is complete and running. This is what comes next, roughly in value order
   next run retries it because nothing was cached.
 - **Lever `salaryRange` is mapped but was null on every board tested**, so that
   path is implemented against the documented shape rather than an observed one.
-- **The analysis stage has not been executed against the live API** in this
-  environment (no credentials present). The dry-run path, schema validation,
-  caching, and error handling are verified; the live call is not.
+- **The deterministic engine systematically over-scores.** Measured across 28
+  live analyses, it cannot read level or scale: it rated a Sr. Staff role
+  demanding org-wide technical leadership at 96 where the analysis said 33.
+  `reconcileWithAnalysis` corrects this after the fact, but the *ordering of
+  what gets analyzed* is still driven by the inflated number, so a genuinely
+  good role sitting below `analysis_threshold` never gets a second look. Worth
+  feeding observed analysis scores back into the signal weights.
+- **Unanalyzed jobs can outrank analyzed ones** in the ranking, because their
+  optimistic deterministic ROI has not been corrected yet. Running
+  `daily --analyze` regularly keeps this from mattering.
 
 ---
 
