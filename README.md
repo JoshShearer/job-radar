@@ -18,7 +18,9 @@ DISCOVER → NORMALIZE → DEDUPE → FILTER → SCORE → RESEARCH → RANK →
                                         LEARN FROM RESULTS
 ```
 
-On a current run against the shipped config: **5,548 postings fetched → 539 duplicates collapsed → 800 pass hard filters → ~15 actionable roles → a capped daily briefing of 12.**
+On a real run against the shipped config: **5,548 postings fetched → 539 duplicates collapsed → 638 pass hard filters → 28 analyzed → 1 Priority A and 3 Priority B.**
+
+A single-digit actionable slate out of five and a half thousand postings is the intended output. If the briefing is long, the filters are too loose.
 
 ---
 
