@@ -253,11 +253,19 @@ export class JobRepo {
       .run(jobId, type, detail === undefined ? null : JSON.stringify(detail), nowIso());
   }
 
-  saveScore(jobId: string, score: ScoreResult, filter: FilterResult, comp: { band: string; note: string }): void {
+  saveScore(
+    jobId: string,
+    score: ScoreResult,
+    filter: FilterResult,
+    comp: { band: string; note: string },
+    meta: { confidence: string; rawFit: number },
+  ): void {
     this.db
       .prepare(
         `UPDATE jobs SET
           fit_score = @fit_score,
+          raw_fit_score = @raw_fit_score,
+          score_confidence = @score_confidence,
           compensation_score = @compensation_score,
           compensation_band = @compensation_band,
           compensation_note = @compensation_note,
@@ -277,6 +285,8 @@ export class JobRepo {
       .run({
         id: jobId,
         fit_score: score.fitScore,
+        raw_fit_score: meta.rawFit,
+        score_confidence: meta.confidence,
         compensation_score: score.compensationScore,
         compensation_band: comp.band,
         compensation_note: comp.note,
@@ -340,21 +350,61 @@ export class JobRepo {
     return rows.map(toEnriched);
   }
 
-  /** Jobs eligible for the (paid) LLM analysis stage. */
-  needingAnalysis(minFit: number, limit: number): EnrichedJob[] {
+  /**
+   * Jobs eligible for the (paid) LLM analysis stage.
+   *
+   * Selection is capped per company. Without that, a single employer with many
+   * open roles consumes the entire analysis budget on near-identical postings -
+   * observed in practice, where five Samsara reqs took half a pass and returned
+   * five variations of the same verdict. Spending the budget across more
+   * companies is strictly more informative for the same money.
+   */
+  needingAnalysis(minFit: number, limit: number, perCompanyCap = 2): EnrichedJob[] {
+    // Eligibility is gated on the RAW deterministic score, not the calibrated
+    // one. Calibration deliberately scales scores down, so gating on the
+    // projected value would shrink the candidate pool every time the
+    // correction got stronger - the pool collapsed from 20 candidates to 2 the
+    // first time this was wired the other way round.
+    //
+    // The two numbers answer different questions: the raw score asks "is this
+    // worth spending an API call on?", the projected score asks "where does it
+    // belong in the ranking?". Ordering still uses the projected value.
     const rows = this.db
       .prepare(
         `SELECT * FROM jobs
          WHERE analysis_json IS NULL
            AND filter_passed = 1
            AND fit_score IS NOT NULL
-           AND fit_score >= ?
+           AND COALESCE(raw_fit_score, fit_score) >= ?
            AND status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')
          ORDER BY application_roi DESC, fit_score DESC
          LIMIT ?`,
       )
-      .all(minFit, limit) as JobRow[];
-    return rows.map(toEnriched);
+      .all(minFit, limit * 8) as JobRow[];
+
+    const perCompany = new Map<string, number>();
+    const picked: JobRow[] = [];
+    const overflow: JobRow[] = [];
+
+    for (const row of rows) {
+      if (picked.length >= limit) break;
+      const seen = perCompany.get(row.company_normalized) ?? 0;
+      if (seen < perCompanyCap) {
+        perCompany.set(row.company_normalized, seen + 1);
+        picked.push(row);
+      } else {
+        overflow.push(row);
+      }
+    }
+
+    // If the cap left budget unspent (few distinct companies clear the bar),
+    // fill from the overflow rather than wasting the pass.
+    for (const row of overflow) {
+      if (picked.length >= limit) break;
+      picked.push(row);
+    }
+
+    return picked.map(toEnriched);
   }
 
   /** Top actionable jobs for the daily report. */
