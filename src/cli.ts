@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { copyFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
+import { loadEnvFile } from "./config/env.js";
 import { closeDb, openDb } from "./db/index.js";
 import { JobRepo } from "./db/repo.js";
 import { runIngest } from "./pipeline/ingest.js";
@@ -15,6 +16,9 @@ import { PoliteFetcher } from "./lib/http.js";
 import { log, setVerbose } from "./lib/log.js";
 import { isStatus, STATUSES, INTERVIEW_STAGES } from "./model/status.js";
 import { formatSalary } from "./lib/salary.js";
+
+// Must run before any command reads process.env for credentials or overrides.
+loadEnvFile();
 
 const program = new Command();
 
@@ -114,8 +118,15 @@ program
         `Considered ${summary.considered} | analyzed ${summary.analyzed} | from cache ${summary.fromCache} | failed ${summary.failed}`,
       );
       if (summary.analyzed > 0) {
+        const cacheTotal = summary.cacheReadTokens + summary.cacheCreationTokens;
+        const hitRate = cacheTotal > 0 ? Math.round((summary.cacheReadTokens / cacheTotal) * 100) : 0;
         console.log(
-          `Tokens: ${summary.inputTokens} in / ${summary.outputTokens} out  ~$${summary.estimatedCostUsd.toFixed(3)}`,
+          `Tokens: ${summary.inputTokens} uncached in / ${summary.cacheCreationTokens} cache-write / ` +
+            `${summary.cacheReadTokens} cache-read / ${summary.outputTokens} out`,
+        );
+        console.log(
+          `Prompt cache hit rate: ${hitRate}%   Estimated cost: $${summary.estimatedCostUsd.toFixed(4)} ` +
+            `($${(summary.estimatedCostUsd / summary.analyzed).toFixed(4)}/job)`,
         );
       }
       return summary;
