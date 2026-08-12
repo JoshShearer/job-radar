@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023"],
+    // DOM is here only for the `page.evaluate` body in src/apply/autofill.ts,
+    // which runs inside the browser and needs real DOM types to be checked.
+    // Nothing else in this Node-only codebase should touch a DOM global.
+    "lib": ["ES2023", "DOM"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "types": ["node"],

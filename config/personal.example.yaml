@@ -1,0 +1,61 @@
+# Personal details used to fill application forms.
+#
+# Copy this to config/personal.yaml and fill it in. That file is gitignored and
+# never leaves this machine.
+#
+# Every value here is a factual claim about you that will be typed into a real
+# employer's form. Nothing in this file is generated or inferred by a model, and
+# nothing in it should be aspirational. If a value is wrong here, it is wrong in
+# the application.
+
+identity:
+  first_name: Ada
+  last_name: Lovelace
+  email: ada@example.com
+  phone: "+1 512 555 0100"
+  city: Austin
+  state: Texas
+  country: United States
+
+links:
+  linkedin: https://www.linkedin.com/in/example
+  github: https://github.com/example
+  website: https://example.com
+  twitter: ""
+
+work_eligibility:
+  # Leave these as `null` and the questions are left blank and flagged for you.
+  # There is deliberately no default: answering "authorized" for someone who is
+  # not, or "no sponsorship needed" for someone who needs it, is a false
+  # statement on a job application. Set them once, yourself.
+  authorized_to_work_us: null
+  requires_sponsorship: null
+  # Some forms ask work authorization as a sentence-style dropdown instead of
+  # yes/no. This phrase is scored against the options the form actually offers.
+  # If nothing matches confidently the field is left blank and reported to you
+  # rather than guessed - a wrong answer here is a misrepresentation.
+  #
+  # Real forms word these very differently. Vercel, for instance, offers five
+  # sentences where two differ only in whether sponsorship is needed, so no
+  # generic phrase can pick between them. When the report says it could not
+  # match, it prints the exact options it saw: paste the correct one here and
+  # the question answers itself from then on.
+  authorization_option_hint: "authorized to work in this country"
+
+preferences:
+  referral_source: "Company job board"
+
+  # Deliberately empty. A desired-salary box is the first number in the
+  # negotiation, and the prepared pack's advice is nearly always to ask for
+  # their range first. Empty means "leave it blank and tell me about it".
+  # Put a string here only if you want it typed in automatically.
+  desired_salary: ""
+
+  notice_period: "2 weeks"
+
+# Escape hatch for company-specific questions. `match` is a case-insensitive
+# substring of the question label. Checked before any built-in rule, so this
+# always wins.
+answers:
+  - match: "how did you hear"
+    answer: "Company job board"

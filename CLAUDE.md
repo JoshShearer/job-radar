@@ -8,7 +8,15 @@ Local-first job intelligence pipeline. Read `README.md` for architecture and `TO
 
 **Never auto-send anything.** No application, no email, no LinkedIn message. The system prepares; a human sends. This is the whole point of the design.
 
-**Only public, documented endpoints.** No bypassing authentication, CAPTCHAs, rate limits, robots protections, anti-bot systems, or paywalls. If a company has no public feed, it goes in `watchlist` and gets researched by hand. Rate limiting in `PoliteFetcher` is load-bearing — do not remove it or configure it to zero.
+**`autofill` fills, and stops.** It may type into an employer's form; it must never submit one. Three refusals are load-bearing and must not be "improved" into answers:
+
+1. Demographic self-identification is the candidate's to disclose or withhold.
+2. Attestations ("I acknowledge I have read…") are a human certifying something.
+3. An unset value in `personal.yaml` is unknown, never a default. `work_eligibility` is nullable for this reason — answering "no sponsorship needed" for someone who needs it is a false statement on a job application, not a mis-ranking.
+
+Checkboxes are never ticked. When a dropdown match is not confident, leave it blank and report the options that were offered. `chooseOption` reserves a score of 1.0 for exact string equality precisely so full-token-coverage ties (`"…for any employer"` vs `"…for my current employer only"`) are refused instead of guessed.
+
+**Only public, documented endpoints.** No bypassing authentication, CAPTCHAs, rate limits, robots protections, anti-bot systems, or paywalls. `autofill` drives an ordinary browser and does not disguise itself: no stealth plugins, no automation-flag masking, no fingerprint spoofing, no CAPTCHA solving. An active challenge stops the run. If bot scoring rejects a legitimate human-reviewed submission, the fix is to fill that form by hand. If a company has no public feed, it goes in `watchlist` and gets researched by hand. Rate limiting in `PoliteFetcher` is load-bearing — do not remove it or configure it to zero.
 
 **Remote OK attribution is a condition of use.** Their API terms require a followed link back and naming them as the source. `src/report/daily.ts` emits it. If that attribution is removed, disable the source rather than violating the terms.
 
@@ -55,4 +63,4 @@ Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds`
 
 ## Verification
 
-Before claiming anything works: `npm test` (200 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+Before claiming anything works: `npm test` (260 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.

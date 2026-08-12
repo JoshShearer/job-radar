@@ -29,3 +29,9 @@ resumes/*
 
 # Generated application packages (personal material)
 applications/
+
+# Real contact details, work-authorization answers, links
+config/personal.yaml
+
+# Persistent browser profile used by `autofill` (holds cookies/sessions)
+.browser-profile/
