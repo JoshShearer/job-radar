@@ -209,6 +209,11 @@ npm run cli -- daily --analyze             # full pass including the LLM stage
 npm run cli -- top --limit 20              # ranked table
 npm run cli -- top --all --lane growth_seo # include reviewed jobs, filter by lane
 npm run cli -- show <job-id>               # full detail (id or unique prefix)
+npm run cli -- resume import cv.txt        # structure an existing resume into the master
+npm run cli -- resume init                 # scaffold a master from career-profile
+npm run cli -- resume lint                 # check the master before trusting it
+npm run cli -- resume match <job-id>       # deterministic requirement overlap, no API call
+npm run cli -- resume tailor <job-id>      # job-specific resume + PDF, selected from the master
 npm run cli -- apply <job-id> --open       # prepare an application pack (never submits)
 npm run cli -- autofill <job-id>           # fill the real form in a browser (never submits)
 npm run cli -- autofill <job-id> --headless # dry run: report what it would fill, no window
@@ -222,7 +227,7 @@ npm run cli -- calibrate                   # how far the keyword engine drifts f
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 260 tests
+npm test                                   # 302 tests
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -362,6 +367,56 @@ Three deliberate constraints:
 - **A projected job can never reach Priority A.** "Apply and contact a human today" should rest on an actual analysis, not on a statistical correction of a keyword count.
 
 Eligibility for analysis is gated on the **raw** score, not the projected one — otherwise a stronger correction would shrink the candidate pool every time it improved. The two numbers answer different questions: raw asks *"worth an API call?"*, projected asks *"where does this belong in the ranking?"*
+
+---
+
+## The resume pipeline
+
+Nothing downstream is worth running without this. `apply` writes about your background and `autofill` uploads a file; both are only as good as the master resume they draw on.
+
+```bash
+npm run cli -- resume import ~/my-resume.txt    # or: resume init
+npm run cli -- resume lint
+npm run cli -- resume match b5b545ce17f3        # free, deterministic, no API call
+npm run cli -- resume tailor b5b545ce17f3
+```
+
+### The master resume
+
+`config/resume.yaml` (gitignored) holds every real bullet, each with a stable id, the skills it is **evidence for**, and a `verified` flag. `resume import` structures an existing resume into it: the model may split prose into bullets and tag skills, but may not add an employer, date, metric, or technology, and marks anything it had to guess as `verified: false`.
+
+Two fields carry the weight:
+
+- **`skills: [...]`** on a bullet means "this bullet proves I can do these things". An untagged bullet is invisible to tailoring, because nothing can match it to a requirement.
+- **`verified: false`** excludes a bullet from every generated resume, permanently, until you confirm it.
+
+### Provenance is enforced, not requested
+
+A tailored resume is a **selection**, not a composition. The model returns bullet ids and replacement strings; the document is assembled from master data here. Every plan is then checked:
+
+| Check | On failure |
+|---|---|
+| Cited bullet id exists in the master | citation dropped |
+| Cited bullet is `verified: true` | citation dropped |
+| Rewrite introduces no new technology | **reverted to your original wording** |
+| Rewrite introduces no new or inflated number | **reverted to your original wording** |
+| Skill group names only declared skills | undeclared skills dropped |
+
+Reverting is always available and always correct, so overreaching can only ever produce a *worse* resume, never a false one. "200+ experiments" cannot become "500+", and a bullet with no metric cannot acquire one.
+
+### Right technology, wrong scope
+
+`resume match` is deterministic and free, and it separates three states rather than two:
+
+- **covered** — a verified bullet evidences it
+- **partial** — you have the technology but not the scope being asked for
+- **gap** — nothing
+
+That middle state is the whole point. On the Vercel role, *"Have contributed to the Next.js or React open-source projects"* names two technologies you genuinely use, so naive keyword matching calls it covered. It is not: using a library is not contributing to it, and OSS contribution is on your do-not-claim list. Requirements asking for **leadership**, **open-source contribution**, **enterprise scale**, **migration work**, or **public speaking** must evidence that scope separately, and a stated years threshold is checked against your career span rather than against any single bullet.
+
+Applied to the Vercel posting, this moved required coverage from a flattering number to an honest **24%**, and reproduced the same do-not-claim list the paid analysis produced, for free.
+
+`resume tailor` writes `resume.md`, `resume.html`, `resume.pdf`, and `resume-match.md` into the job's folder. **`autofill` attaches that PDF automatically**, preferring it over anything generic in `resumes/`.
 
 ---
 
@@ -505,7 +560,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 260 tests
+npm test          # 302 tests
 npm run typecheck
 ```
 
@@ -528,7 +583,7 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, 260 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, 302 tests.
 
 A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 

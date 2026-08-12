@@ -328,7 +328,7 @@ export async function autofillApplication(
   job: EnrichedJob,
   personal: Personal,
   pack: ApplicationPack | null,
-  opts: { screenshotDir?: string; headless?: boolean } = {},
+  opts: { screenshotDir?: string; headless?: boolean; resumeFile?: string } = {},
 ): Promise<AutofillResult> {
   const url = job.applicationUrl ?? job.sourceUrl;
   if (!url) throw new Error("This job has no application URL.");
@@ -415,7 +415,9 @@ export async function autofillApplication(
               label,
               intent,
               status: "needs-you",
-              detail: "no resume file found in resumes/ - attach it yourself",
+              detail:
+              "no resume file found. Generate one with `resume tailor <job-id>`, " +
+              "or drop a PDF in resumes/, or attach it yourself",
             });
             continue;
           }

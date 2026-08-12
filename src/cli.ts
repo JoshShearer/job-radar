@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
@@ -15,6 +15,19 @@ import { writeHtmlReport } from "./report/html.js";
 import { loadPack, packDir, prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
 import { loadPersonal } from "./config/personal.js";
 import { autofillApplication, findResume, renderOutcomes } from "./apply/autofill.js";
+import { loadResume, resumeExists, resumePath, saveResume } from "./resume/load.js";
+import { allBullets, lintResume } from "./resume/schema.js";
+import { scaffoldResume } from "./resume/init.js";
+import { importResume } from "./resume/import.js";
+import { matchResumeToJob } from "./resume/requirements.js";
+import { tailorResume } from "./resume/tailor.js";
+import {
+  composeResume,
+  renderMatchReport,
+  renderResumeHtml,
+  renderResumeMarkdown,
+  writeResumePdf,
+} from "./resume/render.js";
 import { computeCalibration, describeCalibration, loadCalibration } from "./pipeline/calibration.js";
 import { buildFunnel, renderFunnel } from "./stats/funnel.js";
 import { listBoardEndpoints } from "./sources/registry.js";
@@ -203,6 +216,235 @@ program
     });
   });
 
+// ---- resume ---------------------------------------------------------------
+
+const resumeCmd = program
+  .command("resume")
+  .description("Master resume: the source of truth every tailored resume selects from");
+
+resumeCmd
+  .command("init")
+  .description("Scaffold config/resume.yaml from what this repo already knows")
+  .option("--force", "overwrite an existing master resume", false)
+  .action((opts: { force: boolean }) => {
+    const file = resumePath();
+    if (resumeExists(file) && !opts.force) {
+      console.error(`${file} already exists. Use --force to overwrite it (this destroys your history).`);
+      process.exitCode = 1;
+      return;
+    }
+    const profile = loadProfile();
+    let location = "";
+    try {
+      const p = loadPersonal();
+      location = [p.identity.city, p.identity.state].filter(Boolean).join(", ");
+    } catch {
+      // personal.yaml is optional here; the location is a nicety.
+    }
+    saveResume(scaffoldResume(profile, location), file);
+    log.info(`Wrote ${file}`);
+    log.info("Seeded: skills from career-profile signals, and the projects you stated when specifying this system.");
+    log.info("NOT seeded: employment history. Nothing here knows it.");
+    log.info(`Next:  npm run cli -- resume lint`);
+  });
+
+resumeCmd
+  .command("import <file>")
+  .description("Structure an existing resume (txt/md) into the master format")
+  .option("--force", "overwrite an existing master resume", false)
+  .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
+  .option("--effort <level>", "reasoning effort (default high)")
+  .action(async (file: string, opts: { force: boolean; model?: string; effort?: string }) => {
+    const target = resumePath();
+    if (resumeExists(target) && !opts.force) {
+      console.error(`${target} already exists. Use --force to overwrite it.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!existsSync(file)) {
+      console.error(`No such file: ${file}`);
+      process.exitCode = 1;
+      return;
+    }
+    const source = readFileSync(file, "utf8");
+    if (source.trim().length < 100) {
+      console.error("That file is nearly empty. Export your resume to text first.");
+      process.exitCode = 1;
+      return;
+    }
+
+    log.info(`Structuring ${file} (${source.length} chars)`);
+    const { resume, uncertain, usage } = await importResume(source, {
+      model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+      effort: opts.effort ?? "high",
+    });
+    saveResume(resume, target);
+
+    log.info(`Wrote ${target}`);
+    log.info(`  ${resume.experience.length} roles, ${resume.projects.length} projects, ${resume.skills.length} skills`);
+    log.info(`  tokens: ${usage.input} in / ${usage.output} out`);
+    if (uncertain.length) {
+      console.log("");
+      console.log("The importer was unsure about these. Check them in the file:");
+      for (const u of uncertain) console.log(`  - ${u}`);
+    }
+    console.log("");
+    log.info("Nothing was added that was not in your source. Bullets it could not verify are `verified: false`.");
+    log.info(`Next:  npm run cli -- resume lint`);
+  });
+
+resumeCmd
+  .command("lint")
+  .description("Check the master resume for problems that would corrupt a tailored resume")
+  .action(() => {
+    const resume = loadResume();
+    const issues = lintResume(resume);
+    const errors = issues.filter((i) => i.level === "error");
+    const warnings = issues.filter((i) => i.level === "warning");
+
+    const bullets = allBullets(resume);
+    const usable = bullets.filter((b) => b.bullet.verified && b.bullet.skills.length > 0);
+    console.log("");
+    console.log(`Roles     : ${resume.experience.length}`);
+    console.log(`Projects  : ${resume.projects.length}`);
+    console.log(`Skills    : ${resume.skills.length}`);
+    console.log(`Bullets   : ${bullets.length} total, ${usable.length} usable (verified and skill-tagged)`);
+    console.log("");
+
+    for (const e of errors) console.log(`ERROR   ${e.where}: ${e.message}`);
+    for (const w of warnings) console.log(`warning ${w.where}: ${w.message}`);
+    console.log("");
+
+    if (errors.length) {
+      console.log(`${errors.length} error(s). Tailoring is unsafe until these are fixed.`);
+      process.exitCode = 1;
+    } else if (usable.length < 8) {
+      console.log(`Only ${usable.length} usable bullets. Tailoring works but has little to choose from.`);
+    } else {
+      console.log("Ready to tailor.");
+    }
+  });
+
+resumeCmd
+  .command("match <jobId>")
+  .description("Deterministic overlap between your resume and a posting's requirements. No API calls.")
+  .action(async (jobId: string) => {
+    const resume = loadResume();
+    await withRepo("resume-match", async (repo) => {
+      const job = repo.get(jobId);
+      if (!job) {
+        console.error(`No job matches "${jobId}".`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+      const bullets = allBullets(resume).map((b) => ({ bullet: b.bullet, sourceLabel: b.sourceLabel }));
+      const report = matchResumeToJob(resume, job.descriptionClean, bullets);
+      console.log("");
+      console.log(renderMatchReport(job, report));
+      return { ok: true, coverage: report.requiredCoverage };
+    });
+  });
+
+resumeCmd
+  .command("tailor <jobId>")
+  .description("Generate a job-specific resume by selecting from the master. Never invents.")
+  .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
+  .option("--effort <level>", "reasoning effort (default high)")
+  .option("--no-pdf", "skip PDF generation")
+  .action(async (jobId: string, opts: { model?: string; effort?: string; pdf: boolean }) => {
+    const resume = loadResume();
+    const errors = lintResume(resume).filter((i) => i.level === "error");
+    if (errors.length) {
+      console.error("The master resume has errors. Fix them first: npm run cli -- resume lint");
+      for (const e of errors.slice(0, 5)) console.error(`  ${e.where}: ${e.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    await withRepo("resume-tailor", async (repo) => {
+      const job = repo.get(jobId);
+      if (!job) {
+        console.error(`No job matches "${jobId}".`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+
+      const bullets = allBullets(resume).map((b) => ({ bullet: b.bullet, sourceLabel: b.sourceLabel }));
+      const match = matchResumeToJob(resume, job.descriptionClean, bullets);
+      log.info(`Requirement coverage: ${match.requiredCoverage}% required, ${match.preferredCoverage}% preferred`);
+
+      const { plan, violations, reverted, usage } = await tailorResume(resume, job, match, {
+        model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+        effort: opts.effort ?? "high",
+      });
+
+      const composed = composeResume(resume, plan);
+      const contact = buildContactLine();
+      const md = renderResumeMarkdown(resume, composed, contact);
+      const html = renderResumeHtml(resume, composed, contact);
+
+      const dir = packDir(job);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(resolve(dir, "resume.md"), md, "utf8");
+      writeFileSync(resolve(dir, "resume.html"), html, "utf8");
+      writeFileSync(resolve(dir, "resume-match.md"), renderMatchReport(job, match), "utf8");
+
+      let pdf: string | null = null;
+      if (opts.pdf) {
+        pdf = resolve(dir, "resume.pdf");
+        await writeResumePdf(html, pdf);
+      }
+
+      console.log("");
+      console.log(md);
+      console.log("");
+      log.info(`Positioning: ${plan.positioning}`);
+      console.log("");
+      log.info(`Written to ${dir}`);
+      if (pdf) log.info(`  resume.pdf  <- autofill attaches this automatically`);
+      log.info(`  tokens: ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`);
+
+      if (violations.length) {
+        console.log("");
+        console.log("Provenance violations caught and repaired:");
+        for (const v of violations) console.log(`  [${v.kind}] ${v.bulletId}: ${v.detail}`);
+        if (reverted.length) {
+          console.log(`  ${reverted.length} rewrite(s) reverted to your original wording.`);
+        }
+      }
+
+      if (plan.gapsToExpect.length) {
+        console.log("");
+        console.log("Gaps this resume does not cover (expect these in a screen):");
+        for (const g of plan.gapsToExpect) console.log(`  - ${g}`);
+      }
+      if (plan.doNotClaim.length) {
+        console.log("");
+        console.log("Do NOT claim anywhere in this application:");
+        for (const d of plan.doNotClaim) console.log(`  - ${d}`);
+      }
+
+      return { ok: true, dir };
+    });
+  });
+
+/** Contact line for the resume header, from personal.yaml when available. */
+function buildContactLine(): string[] {
+  try {
+    const p = loadPersonal();
+    return [
+      p.identity.email,
+      p.identity.phone,
+      [p.identity.city, p.identity.state].filter(Boolean).join(", "),
+      p.links.linkedin,
+      p.links.github,
+      p.links.website,
+    ].filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 // ---- autofill -------------------------------------------------------------
 
 program
@@ -226,16 +468,23 @@ program
       if (!pack) {
         log.warn(`No prepared pack for this job. Run \`job-radar apply ${job.id}\` first for drafted answers.`);
       }
-      if (!findResume()) {
-        log.warn("No resume file in resumes/ - everything else will be filled, but you must attach it yourself.");
-      }
 
       const dir = packDir(job);
       mkdirSync(dir, { recursive: true });
 
+      // Prefer the resume tailored to this posting over any generic one.
+      const tailored = resolve(dir, "resume.pdf");
+      const resumeFile = existsSync(tailored) ? tailored : findResume();
+      if (!resumeFile) {
+        log.warn(`No resume to attach. Generate one: npm run cli -- resume tailor ${job.id}`);
+      } else if (resumeFile === tailored) {
+        log.info("Attaching the resume tailored to this posting.");
+      }
+
       const result = await autofillApplication(job, personal, pack, {
         screenshotDir: opts.screenshot ? dir : undefined,
         headless: opts.headless,
+        ...(resumeFile ? { resumeFile } : {}),
       });
 
       const report = renderOutcomes(job, result);
