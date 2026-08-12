@@ -1,7 +1,7 @@
 import type { CareerProfile } from "../config/schema.js";
 import type { JobRepo } from "../db/repo.js";
 import { applyFilters } from "./filters.js";
-import { buildCompanyCounts, scoreJob } from "./score.js";
+import { buildCompanyCounts, reconcileWithAnalysis, scoreJob } from "./score.js";
 import { log } from "../lib/log.js";
 
 export interface ScoreSummary {
@@ -10,6 +10,8 @@ export interface ScoreSummary {
   rejected: number;
   byPriority: Record<string, number>;
   topScore: number;
+  /** Jobs whose stored analysis overrode the deterministic priority. */
+  reconciled: number;
 }
 
 /**
@@ -26,13 +28,23 @@ export function runScoring(repo: JobRepo, profile: CareerProfile): ScoreSummary 
   let passed = 0;
   let rejected = 0;
   let topScore = 0;
+  let reconciled = 0;
   const byPriority: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
 
   for (const job of jobs) {
     const filter = applyFilters(job, profile);
-    const { score, comp } = scoreJob(job, profile, filter, { companyJobCounts });
+    const base = scoreJob(job, profile, filter, { companyJobCounts });
 
-    repo.saveScore(job.id, score, filter, { band: comp.band, note: comp.reason });
+    // A hard filter rejection stands regardless of what the analysis said -
+    // the analysis cannot make an onsite-in-Seattle role workable.
+    let score = base.score;
+    if (job.analysis && filter.passed) {
+      const merged = reconcileWithAnalysis(score, job.analysis);
+      if (merged.priority !== score.priority) reconciled++;
+      score = merged;
+    }
+
+    repo.saveScore(job.id, score, filter, { band: base.comp.band, note: base.comp.reason });
 
     if (filter.passed) passed++;
     else rejected++;
@@ -42,8 +54,9 @@ export function runScoring(repo: JobRepo, profile: CareerProfile): ScoreSummary 
 
   log.info(
     `Scored ${jobs.length} jobs: ${passed} passed filters, ${rejected} rejected, ` +
-      `A=${byPriority.A} B=${byPriority.B} C=${byPriority.C} D=${byPriority.D}`,
+      `A=${byPriority.A} B=${byPriority.B} C=${byPriority.C} D=${byPriority.D}` +
+      (reconciled > 0 ? ` (${reconciled} priorities overridden by analysis)` : ""),
   );
 
-  return { scored: jobs.length, passed, rejected, byPriority, topScore };
+  return { scored: jobs.length, passed, rejected, byPriority, topScore, reconciled };
 }

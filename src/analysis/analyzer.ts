@@ -24,10 +24,19 @@ export interface AnalyzeSummary {
   analyzed: number;
   fromCache: number;
   failed: number;
+  /** Uncached input tokens, billed at full rate. */
   inputTokens: number;
+  /** Tokens written to the prompt cache, billed at 1.25x. */
+  cacheCreationTokens: number;
+  /** Tokens served from the prompt cache, billed at 0.1x. */
+  cacheReadTokens: number;
   outputTokens: number;
   estimatedCostUsd: number;
 }
+
+/** Anthropic prompt-cache multipliers relative to the base input rate. */
+const CACHE_WRITE_MULTIPLIER = 1.25;
+const CACHE_READ_MULTIPLIER = 0.1;
 
 /**
  * Published per-million-token rates, used only to print a running cost
@@ -66,6 +75,8 @@ export async function runAnalysis(
     fromCache: 0,
     failed: 0,
     inputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
     outputTokens: 0,
     estimatedCostUsd: 0,
   };
@@ -126,6 +137,8 @@ export async function runAnalysis(
 
       summary.analyzed++;
       summary.inputTokens += result.inputTokens;
+      summary.cacheCreationTokens += result.cacheCreationTokens;
+      summary.cacheReadTokens += result.cacheReadTokens;
       summary.outputTokens += result.outputTokens;
 
       log.info(
@@ -140,7 +153,19 @@ export async function runAnalysis(
 
   const price = PRICING[opts.model] ?? PRICING["claude-opus-5"]!;
   summary.estimatedCostUsd =
-    (summary.inputTokens / 1_000_000) * price.input + (summary.outputTokens / 1_000_000) * price.output;
+    (summary.inputTokens / 1_000_000) * price.input +
+    (summary.cacheCreationTokens / 1_000_000) * price.input * CACHE_WRITE_MULTIPLIER +
+    (summary.cacheReadTokens / 1_000_000) * price.input * CACHE_READ_MULTIPLIER +
+    (summary.outputTokens / 1_000_000) * price.output;
+
+  if (summary.analyzed > 1 && summary.cacheReadTokens === 0) {
+    // Caching is the mechanism that makes analysing a large slate affordable.
+    // Silence here would hide a regression, so say it out loud.
+    log.warn(
+      "Prompt cache was never read across multiple calls. The system prefix may have become " +
+        "non-deterministic - check that nothing job-specific leaked into buildSystemPrompt().",
+    );
+  }
 
   return summary;
 }
@@ -148,6 +173,8 @@ export async function runAnalysis(
 interface OneResult {
   analysis: Analysis;
   inputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
   outputTokens: number;
 }
 
@@ -214,7 +241,9 @@ async function analyzeOne(
 
   return {
     analysis: parsed.data,
-    inputTokens: response.usage.input_tokens + (response.usage.cache_creation_input_tokens ?? 0),
+    inputTokens: response.usage.input_tokens,
+    cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
+    cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
     outputTokens: response.usage.output_tokens,
   };
 }

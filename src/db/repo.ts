@@ -331,9 +331,13 @@ export class JobRepo {
     return rows.map(toNormalized);
   }
 
-  allForScoring(): NormalizedJob[] {
+  /**
+   * Every job, with any stored analysis attached. Scoring needs the analysis
+   * so it can reconcile the two layers - see reconcileWithAnalysis.
+   */
+  allForScoring(): EnrichedJob[] {
     const rows = this.db.prepare("SELECT * FROM jobs").all() as JobRow[];
-    return rows.map(toNormalized);
+    return rows.map(toEnriched);
   }
 
   /** Jobs eligible for the (paid) LLM analysis stage. */

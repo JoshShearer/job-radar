@@ -1,5 +1,5 @@
 import type { CareerProfile } from "../config/schema.js";
-import type { FilterResult, NormalizedJob, ScoreResult } from "../model/job.js";
+import type { Analysis, FilterResult, NormalizedJob, ScoreResult } from "../model/job.js";
 import type { Priority } from "../model/status.js";
 import { assessCompensation, formatSalary, type CompAssessment } from "../lib/salary.js";
 import { searchable } from "../lib/html.js";
@@ -382,6 +382,51 @@ function buildExplanation(args: {
     }).`,
   );
   return lines.join("\n");
+}
+
+/**
+ * Reconcile the deterministic score with an LLM analysis, when one exists.
+ *
+ * Where the two disagree, the analysis wins. Keyword matching structurally
+ * cannot read level or scale: a posting demanding "10+ years of large-scale
+ * distributed systems and 3+ years as an org-wide technical lead" contains all
+ * the right technology words and is still a two-level mismatch. Observed in
+ * practice - the keyword engine scored exactly that role 96 while the analysis
+ * scored it 33 and recommended skipping it.
+ *
+ * Leaving the deterministic priority in place would put a role the analyst
+ * explicitly rejected at the top of the daily briefing, which is the single
+ * worst failure this system can have.
+ */
+export function reconcileWithAnalysis(score: ScoreResult, analysis: Analysis): ScoreResult {
+  const priority: Priority =
+    analysis.recommendation === "apply_and_outreach"
+      ? "A"
+      : analysis.recommendation === "apply"
+        ? "B"
+        : analysis.recommendation === "network_or_watch"
+          ? "C"
+          : "D";
+
+  // Average the two ROI estimates, weighted toward the analysis. The
+  // deterministic number still carries real information about competition and
+  // recency that the model does not see.
+  const blendedRoi = Math.round(analysis.applicationRoi * 0.7 + score.applicationRoi * 0.3);
+
+  const disagreement = Math.abs(analysis.fitScore - score.fitScore);
+  const note =
+    disagreement >= 20
+      ? `\nAnalysis overrode the keyword engine: fit ${score.fitScore} -> ${analysis.fitScore}, ` +
+        `recommendation ${analysis.recommendation.replace(/_/g, " ")}. ${analysis.reasoningSummary}`
+      : `\nAnalysis agrees with the keyword engine (fit ${analysis.fitScore}). ${analysis.reasoningSummary}`;
+
+  return {
+    ...score,
+    fitScore: analysis.fitScore,
+    applicationRoi: blendedRoi,
+    priority,
+    explanation: score.explanation + note,
+  };
 }
 
 /** Build the company-openings map used as the competition proxy. */

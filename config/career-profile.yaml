@@ -397,6 +397,16 @@ hard_exclude_titles:
   - business analyst
   - marketing analyst
   - financial analyst
+  # People-management and data-science functions. "manager" is safe as a bare
+  # substring: no title in target_titles contains it, and no senior IC title
+  # does either - it only ever matches management roles. Remove this line if
+  # you decide you want Engineering Manager roles in the slate.
+  - manager
+  - decision scientist
+  - data analyst
+  - analytics engineer
+  - research engineer
+  - applied scientist
 
 # Description phrases indicating a mandatory domain we cannot claim.
 # These reject rather than down-rank.
