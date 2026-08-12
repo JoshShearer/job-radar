@@ -12,14 +12,14 @@ Phase 1 is complete and running. This is what comes next, roughly in value order
 - [ ] Recruitee, Personio, Teamtailor public endpoints
 - [ ] YC Work at a Startup (check terms before implementing)
 - [ ] We Work Remotely RSS (verified reachable; RSS parser needed)
-- [ ] **`job-radar discover <company>`** — probe all three ATS platforms for a
-      company token and print the config line to paste. This was done by hand
-      with a throwaway script to build the current 104-board list; it should be
-      a command, since adding companies is the highest-leverage tuning move
-      available and it is currently the most manual step in the whole system.
+- [x] **`job-radar discover <company>`** — done. Probes all three ATS platforms,
+      dedupes against existing config, prints a pasteable line.
+- [ ] Have `discover --add` write straight into `config/sources.yaml` under the
+      right ATS group, instead of printing a line to paste by hand.
 - [ ] Several on-lane companies have no public ATS at all (Ahrefs, Semrush,
-      Botify, Payload, Framer, Statsig). They sit in `watchlist` and need a
-      research path rather than an ingestion one.
+      Botify, Payload, Framer, Statsig, Clerk, Deel, Whatnot, Rippling —
+      confirmed by `discover`). They sit in `watchlist` and need a research
+      path rather than an ingestion one.
 
 ### Company research (`job-radar research <job-id>`)
 - [ ] Pull public signals: funding announcements, headcount trend, tech stack
@@ -83,8 +83,12 @@ Phase 1 is complete and running. This is what comes next, roughly in value order
 - [ ] Report on `job_events` history: roles whose salary or description moved
 
 ### Web dashboard
+`job-radar serve` currently provides a read-only static server over the
+generated briefings (loopback-only, path-contained). That is a viewer, not an
+application. A real dashboard would add:
 - [ ] Next.js app over the same SQLite database
 - [ ] Kanban by status; scoring explainability visible per job
+- [ ] Status changes and notes from the browser instead of the CLI
 - [ ] Read-only first; no action taken without an explicit click
 
 ---

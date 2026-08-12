@@ -49,6 +49,10 @@ Search strategy lives in `config/career-profile.yaml`. Scoring weights, filters,
 
 Config is validated on load with cross-field coherence checks (lane weights sum to 1, compensation bands ordered, signals reference real lanes). Keep those checks; a typo that silently disables a filter is worse than a crash.
 
+## Toolchain
+
+Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds` set to `true` for **better-sqlite3** (native SQLite binding) and **esbuild** (backs tsx and vitest). pnpm blocks build scripts by default, and without those approvals `pnpm install` succeeds while leaving the project broken — every command then fails with `Could not locate the bindings file`.
+
 ## Verification
 
-Before claiming anything works: `npm test` (173 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+Before claiming anything works: `npm test` (200 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.

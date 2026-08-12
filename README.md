@@ -53,7 +53,10 @@ Each run writes four files into `reports/` and prints the briefing to your termi
 ```bash
 npm run cli -- open        # opens latest.html in your browser
 npm run cli -- open --md   # prints the Markdown path instead
+npm run serve              # local server + browsable archive of past briefings
 ```
+
+**There is no web application.** `serve` is a read-only static server over `reports/` with an index of past briefings — useful for comparing this week to last week. It binds to **127.0.0.1 only**, never `0.0.0.0`, so nothing on your network can reach it, and it refuses to serve anything outside the reports directory (the SQLite database is not reachable at any path). A real dashboard is a Phase 3 item; see `TODO.md`.
 
 The HTML is **fully self-contained** — no CDN, no remote fonts, no JavaScript, no network requests of any kind. It works offline, and opening it tells nobody what you are looking at. It respects your system light/dark setting and reads fine on a phone. Application links are clickable; compensation bands are colour-coded.
 
@@ -104,16 +107,26 @@ src/
 
 ## Installation
 
-Requires Node 20+ (developed on 24).
+Requires Node 20+ (developed on 24). Works with npm or pnpm.
 
 ```bash
 git clone <your-fork> job-radar
 cd job-radar
-npm install
+npm install          # or: pnpm install
 cp .env.example .env
 ```
 
 `better-sqlite3` compiles a native module on install; if that fails you need build tools (`build-essential` on Debian/Ubuntu).
+
+> **pnpm users:** pnpm blocks dependency build scripts by default, so `pnpm install` will appear to succeed while leaving the project broken — every command then dies with `Could not locate the bindings file`. `pnpm-workspace.yaml` is committed with the two approvals that matter:
+>
+> ```yaml
+> allowBuilds:
+>   better-sqlite3: true   # compiles the native SQLite binding
+>   esbuild: true          # backs tsx and vitest
+> ```
+>
+> If you hit that error anyway, check those are still `true` and re-run `pnpm install`.
 
 ---
 
@@ -149,6 +162,25 @@ So the list now leads with headless CMS vendors (Sanity, Storyblok, Contentful, 
 
 Companies with no public ATS endpoint go in `watchlist` — Payload, Ahrefs, Semrush, Botify, Statsig — surfaced as research reminders rather than scraped.
 
+**Adding companies is the highest-leverage tuning move in the system**, so it has a command:
+
+```bash
+$ npm run cli -- discover "Back Market" Gusto Ahrefs
+
+  HAVE  Back Market              ashby:backmarket (16 jobs)
+  NEW   Gusto                    greenhouse:gusto (91 jobs)
+  --    Ahrefs                   no public board (tried: ahrefs)
+
+Add these to config/sources.yaml under the matching ATS, then run `ingest`:
+
+  # -- greenhouse --
+      - { token: gusto, company: Gusto }
+
+No public ATS endpoint for: Ahrefs. Add them to `watchlist` and approach a human instead.
+```
+
+It derives plausible board tokens from the name (handling multi-word names, domains, and corporate suffixes), probes the three public APIs, skips companies already in your config, and prints a pasteable line. A board that exists but lists no jobs counts as *not found* — it is useless as a source.
+
 ### Environment variables
 
 | Variable | Purpose |
@@ -181,11 +213,13 @@ npm run cli -- status <job-id> APPLIED     # move a job through the funnel
 npm run cli -- stats                       # conversion rates + bottleneck diagnosis
 npm run cli -- sources                     # health-check every board
 npm run cli -- open                        # open the latest HTML briefing
+npm run serve                              # local briefing archive (127.0.0.1 only)
+npm run cli -- discover "Back Market" Ramp # find a company's ATS board, print the config line
 npm run cli -- calibrate                   # how far the keyword engine drifts from the analysis
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 173 tests
+npm test                                   # 200 tests
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -408,7 +442,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 173 tests
+npm test          # 200 tests
 npm run typecheck
 ```
 
@@ -431,7 +465,7 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, manual status tracking, funnel metrics, interview database, 173 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, manual status tracking, funnel metrics, interview database, 200 tests.
 
 A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 
