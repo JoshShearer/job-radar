@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { CareerProfile, SourcesConfig } from "../config/schema.js";
 import type { EnrichedJob } from "../model/job.js";
 import type { JobRepo } from "../db/repo.js";
-import { PRIORITY_LABELS, type Priority } from "../model/status.js";
+import { PRIORITY_LABELS, nextAction, STALE_AFTER_DAYS, type Priority } from "../model/status.js";
 import { formatSalary } from "../lib/salary.js";
 import { paths } from "../config/load.js";
 
@@ -22,6 +22,56 @@ export interface ReportInput {
  * and ordered by Application ROI, because the scarce resource is attention,
  * not listings.
  */
+function daysSince(iso: string | null, now: Date): number {
+  if (!iso) return 0;
+  return Math.max(0, Math.floor((now.getTime() - new Date(iso).getTime()) / 86400000));
+}
+
+/**
+ * The pipeline view: everything submitted, waiting, or scheduled.
+ *
+ * Without this an application vanishes from the briefing the moment it is
+ * submitted, which reads as the tool forgetting about it - the opposite of
+ * what a job search needs from a daily report.
+ */
+function renderInFlight(jobs: EnrichedJob[], now: Date): string[] {
+  const L: string[] = [];
+  L.push("## In flight");
+  L.push("");
+
+  if (jobs.length === 0) {
+    L.push("_Nothing submitted or in progress. Everything below is still just a candidate._");
+    L.push("");
+    return L;
+  }
+
+  const needsAttention = jobs.filter(
+    (j) => daysSince(j.statusChangedAt, now) >= (STALE_AFTER_DAYS[j.status] ?? 7),
+  );
+
+  L.push(
+    `${jobs.length} role${jobs.length === 1 ? "" : "s"} live` +
+      (needsAttention.length ? `, **${needsAttention.length} needing attention**` : ""),
+  );
+  L.push("");
+  L.push("| Status | Role | Days | What now |");
+  L.push("|---|---|---|---|");
+  for (const j of jobs) {
+    const days = daysSince(j.statusChangedAt, now);
+    const stale = days >= (STALE_AFTER_DAYS[j.status] ?? 7);
+    const flag = stale ? "**" : "";
+    L.push(
+      `| ${flag}${j.status}${flag} | ${j.company} - ${j.title} | ${days}d | ${nextAction(j.status, days)} |`,
+    );
+  }
+  L.push("");
+  L.push("_Move these along: `npm run cli -- status <job-id> SCREEN` (or REJECTED / GHOSTED). " +
+    "Recording a rejection matters as much as recording a win - the funnel can only diagnose " +
+    "targeting versus closing if the failures are in it too._");
+  L.push("");
+  return L;
+}
+
 export function buildDailyReport(input: ReportInput): { markdown: string; jobCount: number } {
   const { repo, profile, sources } = input;
   const now = new Date();
@@ -69,8 +119,13 @@ export function buildDailyReport(input: ReportInput): { markdown: string; jobCou
   L.push(`Priority A               : ${counts.priorityA}`);
   L.push(`Priority B               : ${counts.priorityB}`);
   L.push(`LLM-analyzed             : ${counts.analyzed}`);
+  L.push(`Generated                : ${now.toISOString()}`);
   L.push("```");
   L.push("");
+
+  // In flight goes FIRST. The slate is a list of work not yet started; this is
+  // work already committed to, and it is what actually needs chasing.
+  L.push(...renderInFlight(repo.inFlight(), now));
 
   if (slate.length === 0) {
     L.push("## NOTHING ACTIONABLE TODAY");
