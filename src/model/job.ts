@@ -137,6 +137,8 @@ export type Analysis = z.infer<typeof AnalysisSchema>;
 /** A job joined with its scoring and (optional) LLM analysis. */
 export interface EnrichedJob extends NormalizedJob {
   status: Status;
+  /** When the status last moved. Drives "days in status" in the briefing. */
+  statusChangedAt: string | null;
   fitScore: number | null;
   applicationRoi: number | null;
   lane: string | null;

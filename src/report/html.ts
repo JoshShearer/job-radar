@@ -61,6 +61,11 @@ export function markdownToHtml(markdown: string, title: string): string {
   td { padding: .4rem .6rem .4rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   td:first-child { color: var(--muted); width: 12rem; white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
+  th { padding: .35rem .6rem .35rem 0; border-bottom: 2px solid var(--line); text-align: left;
+       font-size: .74rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  /* Label/value tables mute and fix their first column. A table with a real
+     header row is a data grid, so that styling has to be undone for it. */
+  table:has(th) td:first-child { color: inherit; width: auto; white-space: nowrap; font-weight: 600; }
   ul { margin: .4rem 0 1.1rem; padding-left: 1.15rem; }
   li { margin: .3rem 0; }
   p { margin: 0 0 1rem; }
@@ -161,8 +166,9 @@ function renderBlocks(markdown: string): string {
       continue;
     }
 
-    // Markdown table. The generator only ever emits two-column key/value
-    // tables, and the separator/empty-header rows are dropped.
+    // Markdown table. Two shapes reach here: label/value tables with no header
+    // row (job details), and real data grids with one (the in-flight table).
+    // Separator and empty-header rows are dropped either way.
     if (line.startsWith("|")) {
       closeList();
       const cells = line.split("|").slice(1, -1).map((c) => c.trim());
@@ -170,6 +176,20 @@ function renderBlocks(markdown: string): string {
       if (!tableOpen) {
         out.push("<table>");
         tableOpen = true;
+        // A row followed by a `|---|` separator is a header row. NOTE: the
+        // loop increments `i` immediately after reading, so `lines[i]` is
+        // already the NEXT line - `lines[i + 1]` would skip one.
+        const next = lines[i] ?? "";
+        const isHeader =
+          next.trim().startsWith("|") &&
+          next
+            .split("|")
+            .slice(1, -1)
+            .every((c) => /^\s*:?-+:?\s*$/.test(c));
+        if (isHeader) {
+          out.push(`<tr>${cells.map((c) => `<th>${inline(c)}</th>`).join("")}</tr>`);
+          continue;
+        }
       }
       out.push(`<tr>${cells.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`);
       continue;

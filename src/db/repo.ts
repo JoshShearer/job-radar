@@ -5,7 +5,7 @@ import type { Analysis, EnrichedJob, FilterResult, NormalizedJob, ScoreResult } 
 import type { Period } from "../lib/salary.js";
 import type { RemoteStatus } from "../lib/location.js";
 import type { EmploymentType, SeniorityLevel } from "../lib/seniority.js";
-import type { Priority, Status } from "../model/status.js";
+import { IN_FLIGHT_STATUSES, type Priority, type Status } from "../model/status.js";
 
 export interface UpsertOutcome {
   jobId: string;
@@ -427,6 +427,26 @@ export class JobRepo {
     return rows.map(toEnriched);
   }
 
+  /**
+   * Everything live and waiting on someone, most recently moved first.
+   *
+   * The daily slate deliberately shows only NEW jobs, so an application
+   * disappears from the briefing the moment its status changes. That is
+   * correct for the slate and wrong for the report as a whole: what is in
+   * flight is the part of a job search that actually needs attention.
+   */
+  inFlight(): EnrichedJob[] {
+    const placeholders = IN_FLIGHT_STATUSES.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM jobs
+         WHERE status IN (${placeholders})
+         ORDER BY status_changed_at DESC, application_roi DESC`,
+      )
+      .all(...IN_FLIGHT_STATUSES) as JobRow[];
+    return rows.map(toEnriched);
+  }
+
   counts(): Record<string, number> {
     const out: Record<string, number> = {};
     out.total = (this.db.prepare("SELECT COUNT(*) c FROM jobs").get() as { c: number }).c;
@@ -642,6 +662,7 @@ function toEnriched(r: JobRow): EnrichedJob {
   return {
     ...toNormalized(r),
     status: r.status as Status,
+    statusChangedAt: r.status_changed_at,
     fitScore: r.fit_score,
     applicationRoi: r.application_roi,
     lane: r.lane,

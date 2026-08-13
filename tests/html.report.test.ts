@@ -92,3 +92,34 @@ describe("markdownToHtml", () => {
     expect(close).toBe(2);
   });
 });
+
+describe("data tables versus label/value tables", () => {
+  it("renders a row followed by a separator as a header row", () => {
+    const html = markdownToHtml("| Status | Role |\n|---|---|\n| APPLIED | Vercel |\n", "t");
+    expect(html).toContain("<th>Status</th>");
+    expect(html).toContain("<th>Role</th>");
+    expect(html).toContain("<td>APPLIED</td>");
+  });
+
+  it("leaves label/value tables as plain cells", () => {
+    // Job-detail tables have no separator row and must not gain a header,
+    // or every job block sprouts a bogus "Job ID / value" heading.
+    const html = markdownToHtml("| **Job ID** | `abc123` |\n| **Fit** | 84 |\n", "t");
+    expect(html).not.toContain("<th>");
+    expect(html).toContain("<td><strong>Job ID</strong></td>");
+  });
+
+  it("looks at the immediately following line, not the one after it", () => {
+    // The loop increments its index right after reading, so an off-by-one here
+    // silently produced <td> for every header and was invisible in tests that
+    // only checked the table rendered at all.
+    const html = markdownToHtml("| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n", "t");
+    expect((html.match(/<th>/g) ?? []).length).toBe(2);
+    expect((html.match(/<td>/g) ?? []).length).toBe(4);
+  });
+
+  it("accepts aligned separators", () => {
+    const html = markdownToHtml("| A | B |\n|:---|---:|\n| 1 | 2 |\n", "t");
+    expect(html).toContain("<th>A</th>");
+  });
+});

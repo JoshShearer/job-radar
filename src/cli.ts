@@ -781,6 +781,20 @@ program
       }
       repo.setStatus(job.id, upper, opts.note);
       console.log(`${job.company} - ${job.title}: ${job.status} -> ${upper}`);
+
+      // Regenerate the briefing immediately. Without this the report on disk
+      // still shows the job in the slate as if nothing happened, and there is
+      // no way to tell a stale page from a live one by looking at it. This is
+      // a pure database read, so it costs nothing and touches no network.
+      try {
+        const { markdown } = buildDailyReport({ repo, profile: loadProfile(), sources: loadSources() });
+        writeReport(markdown);
+        const html = writeHtmlReport(markdown);
+        console.log(`Briefing updated: ${html}`);
+      } catch (err) {
+        // A stale report is not worth failing a status change over.
+        log.warn(`Status saved, but the briefing could not be regenerated: ${(err as Error).message}`);
+      }
       return { ok: true };
     });
   });
