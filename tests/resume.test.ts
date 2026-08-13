@@ -365,6 +365,35 @@ describe("lintResume", () => {
     expect(lintResume(bad).some((i) => i.message.includes("placeholder"))).toBe(true);
   });
 
+  it("does not mistake a component or type name for a placeholder", () => {
+    // Real bullets contain JSX and generics. An earlier case-insensitive rule
+    // flagged "<ComparisonPage>" and blocked a valid resume.
+    const ok = ResumeSchema.parse({
+      basics: { name: "A" },
+      skills: [{ name: "React" }],
+      experience: [
+        {
+          id: "r1", company: "A", title: "E", start: "2020-01",
+          bullets: [
+            { id: "b1", text: "Built 35+ landing pages from shared <ComparisonPage> scaffolding.", skills: ["React"] },
+            { id: "b2", text: "Typed the payloads as Array<string> end to end.", skills: ["React"] },
+            { id: "b3", text: "Rendered a <div> per row without a key warning.", skills: ["React"] },
+          ],
+        },
+      ],
+    });
+    expect(lintResume(ok).filter((i) => i.level === "error")).toHaveLength(0);
+  });
+
+  it("still catches a real angle-bracket placeholder", () => {
+    const bad = ResumeSchema.parse({
+      basics: { name: "A" },
+      skills: [{ name: "React" }],
+      experience: [{ id: "r1", company: "A", title: "E", start: "2020-01", bullets: [{ id: "b1", text: "Worked at <company name> doing things.", skills: ["React"] }] }],
+    });
+    expect(bad && lintResume(bad).some((i) => i.message.includes("placeholder"))).toBe(true);
+  });
+
   it("errors when there is no employment history at all", () => {
     const empty = ResumeSchema.parse({ basics: { name: "A" }, skills: [], experience: [] });
     expect(lintResume(empty).some((i) => i.level === "error" && i.where === "experience")).toBe(true);

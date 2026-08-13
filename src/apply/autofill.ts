@@ -371,7 +371,8 @@ export async function autofillApplication(
         "there is a CAPTCHA widget here. It is not touched. If it shows a checkbox, tick it yourself before submitting",
     });
   }
-  const resume = findResume();
+  // A resume tailored to THIS posting wins over anything generic in resumes/.
+  const resume = opts.resumeFile ?? findResume();
 
   for (const c of controls) {
     // File inputs are usually labelled by their styled button ("Attach"), which
