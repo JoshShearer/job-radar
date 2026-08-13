@@ -3,6 +3,9 @@ import { resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { PROJECT_ROOT } from "./load.js";
+import { checkTopLevelKeys } from "./unknown-keys.js";
+
+const PERSONAL_KEYS = ["identity", "links", "work_eligibility", "preferences", "answers"] as const;
 
 /**
  * Personal details used to fill application forms.
@@ -94,6 +97,8 @@ export function loadPersonal(file = personalPath()): Personal {
   } catch (err) {
     throw new Error(`${file} is not valid YAML: ${(err as Error).message}`);
   }
+  checkTopLevelKeys(raw, PERSONAL_KEYS, "config/personal.yaml");
+
   const parsed = PersonalSchema.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues

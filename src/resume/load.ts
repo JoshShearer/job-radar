@@ -3,6 +3,9 @@ import { resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { PROJECT_ROOT } from "../config/load.js";
 import { ResumeSchema, type Resume } from "./schema.js";
+import { checkTopLevelKeys } from "../config/unknown-keys.js";
+
+const RESUME_KEYS = ["basics", "skills", "experience", "projects", "education", "certifications"] as const;
 
 export function resumePath(): string {
   return process.env.JOB_RADAR_RESUME ?? resolve(PROJECT_ROOT, "config", "resume.yaml");
@@ -26,6 +29,10 @@ export function loadResume(file = resumePath()): Resume {
   } catch (err) {
     throw new Error(`${file} is not valid YAML: ${(err as Error).message}`);
   }
+  // Before schema validation, so a misplaced key is reported as itself rather
+  // than as a downstream "missing field" error.
+  checkTopLevelKeys(raw, RESUME_KEYS, "config/resume.yaml");
+
   const parsed = ResumeSchema.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues
