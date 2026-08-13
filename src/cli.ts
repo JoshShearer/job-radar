@@ -20,7 +20,7 @@ import { allBullets, lintResume } from "./resume/schema.js";
 import { scaffoldResume } from "./resume/init.js";
 import { importResume } from "./resume/import.js";
 import { matchResumeToJob } from "./resume/requirements.js";
-import { tailorResume } from "./resume/tailor.js";
+import { enforceProvenance, tailorResume, TailorSchema } from "./resume/tailor.js";
 import {
   composeResume,
   renderMatchReport,
@@ -388,6 +388,10 @@ resumeCmd
       writeFileSync(resolve(dir, "resume.md"), md, "utf8");
       writeFileSync(resolve(dir, "resume.html"), html, "utf8");
       writeFileSync(resolve(dir, "resume-match.md"), renderMatchReport(job, match), "utf8");
+      // Persisted so layout can be iterated on with `resume render`, which
+      // costs nothing. Without it, fixing a margin means paying for the whole
+      // selection again and risking a different resume.
+      writeFileSync(resolve(dir, "resume-plan.json"), JSON.stringify(plan, null, 2), "utf8");
 
       let pdf: string | null = null;
       if (opts.pdf) {
@@ -425,6 +429,56 @@ resumeCmd
       }
 
       return { ok: true, dir };
+    });
+  });
+
+resumeCmd
+  .command("render <jobId>")
+  .description("Re-render an already-tailored resume from its saved plan. No API call.")
+  .action(async (jobId: string) => {
+    const resume = loadResume();
+    await withRepo("resume-render", async (repo) => {
+      const job = repo.get(jobId);
+      if (!job) {
+        console.error(`No job matches "${jobId}".`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+      const dir = packDir(job);
+      const planFile = resolve(dir, "resume-plan.json");
+      if (!existsSync(planFile)) {
+        console.error(`No saved plan at ${planFile}. Run \`resume tailor ${job.id}\` first.`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+
+      const parsed = TailorSchema.safeParse(JSON.parse(readFileSync(planFile, "utf8")));
+      if (!parsed.success) {
+        console.error("Saved plan failed validation; re-run `resume tailor`.");
+        process.exitCode = 1;
+        return { ok: false };
+      }
+
+      // Re-check provenance on every render. The master resume may have been
+      // edited since the plan was made, and a citation that was valid then
+      // could name a bullet that has since changed or been removed.
+      const plan = parsed.data;
+      const { violations, reverted } = enforceProvenance(resume, plan);
+
+      const composed = composeResume(resume, plan);
+      const contact = buildContactLine();
+      writeFileSync(resolve(dir, "resume.md"), renderResumeMarkdown(resume, composed, contact), "utf8");
+      const html = renderResumeHtml(resume, composed, contact);
+      writeFileSync(resolve(dir, "resume.html"), html, "utf8");
+      await writeResumePdf(html, resolve(dir, "resume.pdf"));
+
+      log.info(`Re-rendered ${dir}/resume.{md,html,pdf}`);
+      if (violations.length) {
+        console.log("Provenance re-check caught changes since the plan was made:");
+        for (const v of violations) console.log(`  [${v.kind}] ${v.bulletId}: ${v.detail}`);
+        if (reverted.length) console.log(`  ${reverted.length} rewrite(s) reverted.`);
+      }
+      return { ok: true };
     });
   });
 

@@ -194,24 +194,28 @@ export function renderResumeHtml(resume: Resume, c: ComposedResume, contact: str
 <html lang="en"><head><meta charset="utf-8">
 <title>${esc(resume.basics.name)} - Resume</title>
 <style>
-  @page { size: letter; margin: 0.55in 0.6in; }
+  @page { size: letter; margin: 0.5in 0.55in; }
   * { box-sizing: border-box; }
   body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 10.5pt;
-         line-height: 1.38; color: #111; margin: 0; }
+         line-height: 1.32; color: #111; margin: 0; }
   h1 { font-size: 20pt; margin: 0 0 2px; letter-spacing: -0.01em; }
   .headline { margin: 0 0 4px; font-size: 11pt; color: #333; }
   .contact { margin: 0 0 14px; font-size: 9.5pt; color: #444; }
   h2 { font-size: 10.5pt; text-transform: uppercase; letter-spacing: 0.08em;
-       border-bottom: 1px solid #bbb; padding-bottom: 3px; margin: 15px 0 8px; }
+       border-bottom: 1px solid #bbb; padding-bottom: 3px; margin: 12px 0 7px; }
   h3 { font-size: 11pt; margin: 0 0 1px; }
   .company { font-weight: 400; color: #333; }
   .meta { margin: 0 0 3px; font-size: 9.5pt; color: #555; }
   .context { margin: 0 0 4px; font-size: 9.5pt; color: #444; font-style: italic; }
   .skills { margin: 0 0 3px; }
   ul { margin: 0 0 10px; padding-left: 17px; }
-  li { margin-bottom: 3px; }
+  li { margin-bottom: 2px; break-inside: avoid; page-break-inside: avoid; }
   p { margin: 0 0 8px; }
-  section.role { margin-bottom: 11px; page-break-inside: avoid; }
+  section.role { margin-bottom: 9px; }
+  /* Keep a heading with its first lines, but let a long role flow across a
+     page break. Forcing whole sections to stay together leaves half-empty
+     pages and pushes a two-page resume to three. */
+  h2, h3, .meta, .context { break-after: avoid; page-break-after: avoid; }
 </style></head>
 <body>
 ${parts.join("\n")}

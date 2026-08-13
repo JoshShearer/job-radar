@@ -167,16 +167,18 @@ ${truncateWords(job.descriptionClean, 6000)}
 
 Return only the structured object.`;
 
-  const response = await client.messages.create({
-    model: opts.model,
-    max_tokens: 16000,
-    system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-    output_config: {
-      effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
-      format: { type: "json_schema", schema: TAILOR_JSON_SCHEMA as unknown as Record<string, unknown> },
-    },
-    messages: [{ role: "user", content: user }],
-  });
+  const response = await client.messages
+    .stream({
+      model: opts.model,
+      max_tokens: 16000,
+      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+      output_config: {
+        effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
+        format: { type: "json_schema", schema: TAILOR_JSON_SCHEMA as unknown as Record<string, unknown> },
+      },
+      messages: [{ role: "user", content: user }],
+    })
+    .finalMessage();
 
   if (response.stop_reason === "refusal") throw new Error("Model declined to tailor this resume.");
   const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;

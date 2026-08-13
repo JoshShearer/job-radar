@@ -146,16 +146,20 @@ WHAT YOU MAY DO:
 VERIFIED FLAG:
 Set verified: true only for concrete things the candidate did that they could defend in an interview. Set verified: false for vague duty statements, anything you had to guess at, and anything that reads like it was copied from a job description. Unverified bullets are excluded from every generated resume until a human confirms them, so err toward false.`;
 
-  const response = await client.messages.create({
-    model: opts.model,
-    max_tokens: 32000,
-    system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-    output_config: {
-      effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
-      format: { type: "json_schema", schema: RESUME_JSON_SCHEMA as unknown as Record<string, unknown> },
-    },
-    messages: [{ role: "user", content: `Convert this resume into the structured format.\n\n---\n\n${sourceText}` }],
-  });
+  // Streamed: a full resume at this token budget can exceed the 10-minute
+  // non-streaming request ceiling, and the SDK rejects the call outright.
+  const response = await client.messages
+    .stream({
+      model: opts.model,
+      max_tokens: 32000,
+      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+      output_config: {
+        effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
+        format: { type: "json_schema", schema: RESUME_JSON_SCHEMA as unknown as Record<string, unknown> },
+      },
+      messages: [{ role: "user", content: `Convert this resume into the structured format.\n\n---\n\n${sourceText}` }],
+    })
+    .finalMessage();
 
   if (response.stop_reason === "refusal") throw new Error("Model declined to parse this resume.");
   const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;

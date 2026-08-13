@@ -154,7 +154,11 @@ export function lintResume(r: Resume): LintIssue[] {
         push("error", where, `tagged skill "${s}" is not declared in skills`);
       }
     }
-    if (/\bTODO\b|\bFIXME\b|<[a-z ]+>/i.test(b.text)) {
+    // Placeholders look like "<company name>": lowercase words with a space.
+    // Deliberately NOT case-insensitive and NOT single-word, because real
+    // bullets contain component and type names - "<ComparisonPage>", "<div>",
+    // "Array<string>" - and flagging those blocks a perfectly good resume.
+    if (/\bTODO\b|\bFIXME\b|<[a-z]+(?: [a-z]+)+>/.test(b.text)) {
       push("error", where, "bullet still contains placeholder text");
     }
   }
