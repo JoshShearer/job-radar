@@ -73,6 +73,11 @@ describe("report server", () => {
     expect(await res.text()).toContain("Dashboard");
   });
 
+  it("sends no refresh header outside watch mode", async () => {
+    expect((await get("/")).headers.get("refresh")).toBeNull();
+    expect((await get("/latest.html")).headers.get("refresh")).toBeNull();
+  });
+
   it("serves a briefing", async () => {
     const res = await get("/2026-08-12.html");
     expect(res.status).toBe(200);
@@ -124,3 +129,56 @@ describe("report server", () => {
     expect(boundAddress).toBe("127.0.0.1");
   });
 });
+
+describe("watch mode auto-refresh", () => {
+  let wDir: string;
+  let wPort: number;
+  let wClose: () => void;
+
+  beforeAll(async () => {
+    wDir = mkdtempSync(join(tmpdir(), "job-radar-watch-"));
+    writeFileSync(join(wDir, "latest.html"), DASHBOARD_FIXTURE, "utf8");
+    writeFileSync(join(wDir, "2026-08-12.md"), "# Aug 12", "utf8");
+    const started = await startReportServer({ dir: wDir, port: 45881, refreshSeconds: 2 });
+    wPort = started.port;
+    wClose = started.close;
+  });
+
+  afterAll(() => {
+    wClose?.();
+    rmSync(wDir, { recursive: true, force: true });
+  });
+
+  const wget = (path: string) => fetch(`http://127.0.0.1:${wPort}${path}`);
+
+  it("asks the browser to re-request the page", async () => {
+    expect((await wget("/latest.html")).headers.get("refresh")).toBe("2");
+    expect((await wget("/")).headers.get("refresh")).toBe("2");
+  });
+
+  it("leaves the served bytes byte-identical to the file on disk", async () => {
+    // The reason this is a header and not an injected <meta> tag. The generated
+    // pages promise to be self-contained and script-free, and a development
+    // convenience must not be able to alter the artifact even by accident.
+    const served = await (await wget("/latest.html")).text();
+    expect(served).toBe(DASHBOARD_FIXTURE);
+    expect(served).not.toMatch(/http-equiv/i);
+    expect(served).not.toContain("<script");
+  });
+
+  it("does not reload a Markdown file out from under a reader", async () => {
+    expect((await wget("/2026-08-12.md")).headers.get("refresh")).toBeNull();
+  });
+
+  it("sends nothing when the interval is zero", async () => {
+    const off = await startReportServer({ dir: wDir, port: 45891, refreshSeconds: 0 });
+    try {
+      const res = await fetch(`http://127.0.0.1:${off.port}/latest.html`);
+      expect(res.headers.get("refresh")).toBeNull();
+    } finally {
+      off.close();
+    }
+  });
+});
+
+const DASHBOARD_FIXTURE = "<!doctype html>\n<html><head><title>Dashboard</title></head><body>ok</body></html>";
