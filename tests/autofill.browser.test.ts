@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
-import { mkdtempSync, rmSync, writeFileSync, utimesSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { capturableAnswers, saveAnswers } from "../src/apply/learn.js";
 import {
   fillForm,
+  snapshotFields,
   waitForControls,
   settlePage,
   CONTROL_SETTLE_MS,
@@ -427,6 +429,69 @@ describe("waiting for a client-rendered form", () => {
       const n = await waitForControls(page, { settleMs: 300 });
       expect(n).toBeGreaterThan(20);
       expect(Date.now() - started).toBeLessThan(3000);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+});
+
+describe("learning an answer from what the human typed", () => {
+  // The whole point of the tool: answer a question once, never again. The
+  // `answers` list in personal.yaml has always been checked before every
+  // built-in rule, and nothing ever wrote to it.
+  it("captures a hand-typed answer, saves it, and fills it on the next run", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "job-radar-learn-e2e-"));
+    const configFile = resolve(dir, "personal.yaml");
+    writeFileSync(configFile, readFileSync(PERSONAL_STUB, "utf8"), "utf8");
+
+    const first = await openFixture();
+    try {
+      const outcomes = await fillForm(first, personal, null, resume, MASTER_RESUME);
+      // Nothing matched this question, so the tool leaves it alone...
+      expect(find(outcomes, L.whyHere)!.status).not.toBe("filled");
+
+      // ...who types an answer into the browser.
+      await first.locator("#why_vercel").fill("Because I use the product every day.");
+
+      const snapshot = await snapshotFields(first);
+      const learned = capturableAnswers(snapshot, outcomes, loadPersonal(configFile).answers);
+      expect(learned).toContainEqual({
+        match: L.whyHere,
+        answer: "Because I use the product every day.",
+      });
+
+      saveAnswers(configFile, learned);
+    } finally {
+      await first.close();
+    }
+
+    // Next application: the same question now answers itself.
+    const second = await openFixture();
+    try {
+      const outcomes = await fillForm(second, loadPersonal(configFile), null, resume, MASTER_RESUME);
+      expect(find(outcomes, L.whyHere)).toMatchObject({ status: "filled" });
+      expect(await second.locator("#why_vercel").inputValue()).toBe(
+        "Because I use the product every day.",
+      );
+    } finally {
+      await second.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("never learns a demographic answer, even when the human typed one", async () => {
+    // A human may choose to disclose on one form. Storing that choice would
+    // make the tool disclose it on every later form without being asked.
+    const page = await openFixture();
+    try {
+      const outcomes = await fillForm(page, personal, null, resume, MASTER_RESUME);
+      await page.locator('[id="4015790004"]').fill("Man");
+      await page.locator("#attest_text").fill("I agree to all of it");
+
+      const learned = capturableAnswers(await snapshotFields(page), outcomes, []);
+      expect(learned.map((l) => l.match)).not.toContain(EEO_LABELS[0]);
+      expect(learned.map((l) => l.answer)).not.toContain("Man");
+      expect(learned.map((l) => l.answer)).not.toContain("I agree to all of it");
     } finally {
       await page.close();
     }

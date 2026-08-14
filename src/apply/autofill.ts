@@ -2,6 +2,7 @@ import { chromium, type BrowserContext, type Locator, type Page } from "playwrig
 import { resolve } from "node:path";
 import { PROJECT_ROOT } from "../config/load.js";
 import { chooseResume, describeResumeChoice, type ResumeChoice } from "./resume-file.js";
+import type { FieldSnapshot } from "./learn.js";
 import type { Resume } from "../resume/schema.js";
 import type { Personal } from "../config/personal.js";
 import type { ApplicationPack } from "../analysis/application.js";
@@ -273,6 +274,62 @@ export async function waitForControls(
   }
 
   return Math.max(last, 0);
+}
+
+/**
+ * Read back what is currently in the form.
+ *
+ * Called repeatedly while the human has the browser open, so that what they
+ * type by hand can be offered back to `personal.yaml` and reused next time.
+ * Read-only: it inspects values and touches nothing.
+ *
+ * Polling rather than reading once at the end is deliberate. If they submit the
+ * form, the page navigates and the answers are gone; the last good read taken
+ * before that is exactly the snapshot worth keeping.
+ */
+export async function snapshotFields(page: Page): Promise<FieldSnapshot[]> {
+  const raw = await page.evaluate(() => {
+    const out: Array<{ label: string; kind: string; value: string }> = [];
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-jr-idx]"))) {
+      const input = el as HTMLInputElement | HTMLTextAreaElement;
+      const tag = el.tagName.toLowerCase();
+      const type = (el.getAttribute("type") || "").toLowerCase();
+      const kind =
+        el.getAttribute("role") === "combobox"
+          ? "combobox"
+          : tag === "textarea"
+            ? "textarea"
+            : tag === "select"
+              ? "select"
+              : type === "file"
+                ? "file"
+                : type === "radio" || type === "checkbox"
+                  ? type
+                  : "text";
+
+      let label = el.getAttribute("aria-label") || "";
+      if (!label) {
+        const lb = el.getAttribute("aria-labelledby");
+        if (lb) {
+          label = lb
+            .split(/\s+/)
+            .map((id) => document.getElementById(id)?.textContent || "")
+            .join(" ")
+            .trim();
+        }
+      }
+      if (!label && el.id) {
+        label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() || "";
+      }
+      if (!label) label = el.closest("label")?.textContent?.trim() || "";
+      if (!label) label = el.getAttribute("placeholder") || el.getAttribute("name") || "";
+
+      out.push({ label: label.replace(/\s+/g, " ").slice(0, 400), kind, value: input.value || "" });
+    }
+    return out;
+  });
+
+  return raw.map((r) => ({ ...r, intent: classifyLabel(r.label) }));
 }
 
 /**

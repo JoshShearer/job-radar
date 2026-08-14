@@ -247,7 +247,7 @@ npm run cli -- calibrate                   # how far the keyword engine drifts f
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 452 tests (launches Chromium)
+npm test                                   # 489 tests (launches Chromium)
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -472,6 +472,10 @@ A real Chromium window opens on the posting, the form fills in front of you, and
 
 Every run writes `applications/<job-id>-<company>/autofill-report.md` plus a full-page screenshot, split into what was filled, what needs you, and what was deliberately left alone.
 
+**It learns the answers you type.** While the window is open the form is read back every couple of seconds. When you close it, anything you answered by hand that no rule could answer is offered for `personal.yaml`, and once saved, `decide()` checks that list before every built-in rule — so the same question fills itself on every application after this one. That is the whole economics of the tool: a free-text question should cost you one answer, not one per company.
+
+Nothing is written without your say-so, the file is copied aside first, and its comments survive. **Demographic questions and attestations are never captured**, whatever you typed into them: storing a disclosure you chose to make on one form would have the tool make it silently on the next, which is the refusal below turned inside out.
+
 **After you close the browser it asks one question:** whether you submitted the form yourself. Answering `y` records `APPLIED`; anything else records nothing: `n`, a blank line, walking away, a piped run with no terminal. It asks *after* the window closes because that is when you know the answer, and it never looks at the page to work it out: whether a form went through is a fact you own, and inferring it from a URL or a success-looking screen would be guessing at it. Nothing about this touches the submit button.
 
 ### What it will not answer
@@ -594,7 +598,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 452 tests (launches Chromium; npm run test:unit for the fast loop)
+npm test          # 489 tests (launches Chromium; npm run test:unit for the fast loop)
 npm run typecheck
 ```
 
@@ -617,7 +621,7 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, a fixture-driven regression harness for the autofill browser layer, 452 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, a fixture-driven regression harness for the autofill browser layer, answers learned from the browser and reused, 489 tests.
 
 A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 
