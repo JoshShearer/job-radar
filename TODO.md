@@ -83,13 +83,24 @@ Phase 1 is complete and running. This is what comes next, roughly in value order
 - [ ] Report on `job_events` history: roles whose salary or description moved
 
 ### Web dashboard
-`job-radar serve` currently provides a read-only static server over the
-generated briefings (loopback-only, path-contained). That is a viewer, not an
-application. A real dashboard would add:
+Staged deliberately, rather than one jump to a framework.
+
+**Shipped (JOB-7).** `reports/latest.html` is a generated dashboard: top-line
+tiles, the funnel with per-stage conversion and its sample size, the tool's own
+diagnosis of its data quality, what is in flight with age, and applications and
+replies per week from `job_events`. No framework, no build step, no new runtime,
+served by the existing loopback-only viewer. Read-only.
+
+**Still open: the interactive version.** Everything below needs a server that
+can accept a write, which is a different architecture and a different security
+conversation than a generated file:
 - [ ] Next.js app over the same SQLite database
 - [ ] Kanban by status; scoring explainability visible per job
 - [ ] Status changes and notes from the browser instead of the CLI
 - [ ] Read-only first; no action taken without an explicit click
+
+Worth revisiting once the funnel has enough volume that the static page stops
+answering the question. Below ~15 applications it says so itself.
 
 ---
 
