@@ -1,0 +1,35 @@
+# Stub personal details for tests/autofill.browser.test.ts.
+#
+# Invented, obviously. Nothing here belongs to a real person, and the harness
+# points `loadPersonal` at this file so a test run never reads the real
+# config/personal.yaml.
+#
+# `work_eligibility.requires_sponsorship` is OMITTED on purpose. The schema
+# defaults it to null, and null means unstated: the form's sponsorship question
+# must come back unanswered and flagged, because answering "no sponsorship
+# needed" for someone who needs it is a false statement on a job application.
+# A fixture that filled in every field would never exercise that refusal.
+identity:
+  first_name: Ada
+  last_name: Lovelace
+  email: ada@example.invalid
+  phone: "+1 512 555 0100"
+  city: Austin
+  state: Texas
+  country: United States
+
+links:
+  linkedin: https://www.linkedin.com/in/ada-example
+  github: https://github.com/ada-example
+  website: https://ada.example.invalid
+  # twitter omitted: exercises the "no twitter set" skip
+
+work_eligibility:
+  authorized_to_work_us: true
+  # requires_sponsorship omitted - see the note above
+  authorization_option_hint: authorized to work in the country due to my nationality
+
+preferences:
+  # Deliberately a phrase this form does not offer, so the referral dropdown has
+  # no confident match and has to report the options instead of guessing.
+  referral_source: Company job board

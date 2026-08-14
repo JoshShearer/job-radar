@@ -1,0 +1,574 @@
+<!doctype html>
+<!--
+  Fixture: a Greenhouse application form, for tests/autofill.browser.test.ts.
+
+  PROVENANCE
+  Structure, question labels and option lists were captured from the live
+  posting at https://job-boards.greenhouse.io/vercel/jobs/5732855004 on
+  2026-08-14 and copied verbatim. Nothing else from that page survives: no
+  markup, no scripts, no ids carrying tokens, no analytics, no session state.
+  The page is standalone and makes no network request of any kind - the test
+  asserts that.
+
+  Two controls are ADDED rather than captured, each marked at its definition:
+  a consent CHECKBOX (this posting asks with a combobox, but Greenhouse forms
+  commonly use a checkbox and the driver has a branch that must never tick one)
+  and two TEXTAREAS (to exercise the prepared-pack second pass and its refusal
+  to answer an attestation).
+
+  The combobox behaviour is a shim, not react-select. It reproduces the part of
+  react-select's contract the driver depends on, verified against the real form:
+  aria-controls appears on the input only while the menu is open and points at
+  that menu. A shim cannot notice react-select changing that contract, so the
+  live headless run stays part of the ship gate. This fixture supplements it.
+
+  TO REFRESH, when a provider changes its form: open a posting, enumerate the
+  controls the same way src/apply/autofill.ts does (labels, kinds, names,
+  required flags, and each combobox's option list), and rewrite this file from
+  that. There is no committed generator - a script that fetches a live posting
+  is not something this repo should carry. Read the result in full before
+  committing it; that is the step that keeps tokens out of it.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Site Engineer - Application</title>
+  <style>
+    body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; }
+    .field { margin: 1rem 0; display: flex; flex-direction: column; gap: .25rem; }
+    label { font-weight: 600; }
+    input[type=text], input[type=tel], textarea { padding: .4rem; width: 100%; }
+    .menu { border: 1px solid #ccc; max-height: 240px; overflow: auto; }
+    .menu[hidden] { display: none; }
+    .select__option { padding: .35rem .5rem; cursor: pointer; }
+    .iti__country-list { max-height: 200px; overflow: auto; display: none; }
+  </style>
+</head>
+<body>
+
+  <form id="application-form">
+    <h1>Site Engineer</h1>
+
+    
+    <div class="field">
+      <label for="first_name">First Name</label>
+      <input type="text" id="first_name" name="first_name" required>
+    </div>
+    
+    <div class="field">
+      <label for="last_name">Last Name</label>
+      <input type="text" id="last_name" name="last_name" required>
+    </div>
+    
+    <div class="field">
+      <label for="email">Email</label>
+      <input type="text" id="email" name="email" required>
+    </div>
+
+    
+    <div class="field">
+      <label for="country" id="country-label">Country*</label>
+      <input type="text" role="combobox" id="country" name="country"
+             aria-labelledby="country-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;United States +1&quot;,&quot;Afghanistan +93&quot;,&quot;Åland Islands +358&quot;,&quot;Albania +355&quot;,&quot;Algeria +213&quot;,&quot;American Samoa +1&quot;,&quot;Andorra +376&quot;,&quot;Angola +244&quot;,&quot;Anguilla +1&quot;,&quot;Antigua &amp; Barbuda +1&quot;,&quot;Argentina +54&quot;,&quot;Armenia +374&quot;,&quot;Aruba +297&quot;,&quot;Ascension Island +247&quot;,&quot;Australia +61&quot;,&quot;Austria +43&quot;,&quot;Azerbaijan +994&quot;,&quot;Bahamas +1&quot;,&quot;Bahrain +973&quot;,&quot;Bangladesh +880&quot;,&quot;Barbados +1&quot;,&quot;Belarus +375&quot;,&quot;Belgium +32&quot;,&quot;Belize +501&quot;,&quot;Benin +229&quot;,&quot;Bermuda +1&quot;,&quot;Bhutan +975&quot;,&quot;Bolivia +591&quot;,&quot;Bosnia &amp; Herzegovina +387&quot;,&quot;Botswana +267&quot;,&quot;Brazil +55&quot;,&quot;British Indian Ocean Territory +246&quot;,&quot;British Virgin Islands +1&quot;,&quot;Brunei +673&quot;,&quot;Bulgaria +359&quot;,&quot;Burkina Faso +226&quot;,&quot;Burundi +257&quot;,&quot;Cambodia +855&quot;,&quot;Cameroon +237&quot;,&quot;Canada +1&quot;,&quot;Cape Verde +238&quot;,&quot;Caribbean Netherlands +599&quot;,&quot;Cayman Islands +1&quot;,&quot;Central African Republic +236&quot;,&quot;Chad +235&quot;,&quot;Chile +56&quot;,&quot;China +86&quot;,&quot;Christmas Island +61&quot;,&quot;Cocos (Keeling) Islands +61&quot;,&quot;Colombia +57&quot;,&quot;Comoros +269&quot;,&quot;Congo - Brazzaville +242&quot;,&quot;Congo - Kinshasa +243&quot;,&quot;Cook Islands +682&quot;,&quot;Costa Rica +506&quot;,&quot;Côte d’Ivoire +225&quot;,&quot;Croatia +385&quot;,&quot;Cuba +53&quot;,&quot;Curaçao +599&quot;,&quot;Cyprus +357&quot;,&quot;Czechia +420&quot;,&quot;Denmark +45&quot;,&quot;Djibouti +253&quot;,&quot;Dominica +1&quot;,&quot;Dominican Republic +1&quot;,&quot;Ecuador +593&quot;,&quot;Egypt +20&quot;,&quot;El Salvador +503&quot;,&quot;Equatorial Guinea +240&quot;,&quot;Eritrea +291&quot;,&quot;Estonia +372&quot;,&quot;Eswatini +268&quot;,&quot;Ethiopia +251&quot;,&quot;Falkland Islands +500&quot;,&quot;Faroe Islands +298&quot;,&quot;Fiji +679&quot;,&quot;Finland +358&quot;,&quot;France +33&quot;,&quot;French Guiana +594&quot;,&quot;French Polynesia +689&quot;,&quot;Gabon +241&quot;,&quot;Gambia +220&quot;,&quot;Georgia +995&quot;,&quot;Germany +49&quot;,&quot;Ghana +233&quot;,&quot;Gibraltar +350&quot;,&quot;Greece +30&quot;,&quot;Greenland +299&quot;,&quot;Grenada +1&quot;,&quot;Guadeloupe +590&quot;,&quot;Guam +1&quot;,&quot;Guatemala +502&quot;,&quot;Guernsey +44&quot;,&quot;Guinea +224&quot;,&quot;Guinea-Bissau +245&quot;,&quot;Guyana +592&quot;,&quot;Haiti +509&quot;,&quot;Honduras +504&quot;,&quot;Hong Kong SAR China +852&quot;,&quot;Hungary +36&quot;,&quot;Iceland +354&quot;,&quot;India +91&quot;,&quot;Indonesia +62&quot;,&quot;Iran +98&quot;,&quot;Iraq +964&quot;,&quot;Ireland +353&quot;,&quot;Isle of Man +44&quot;,&quot;Israel +972&quot;,&quot;Italy +39&quot;,&quot;Jamaica +1&quot;,&quot;Japan +81&quot;,&quot;Jersey +44&quot;,&quot;Jordan +962&quot;,&quot;Kazakhstan +7&quot;,&quot;Kenya +254&quot;,&quot;Kiribati +686&quot;,&quot;Kosovo +383&quot;,&quot;Kuwait +965&quot;,&quot;Kyrgyzstan +996&quot;,&quot;Laos +856&quot;,&quot;Latvia +371&quot;,&quot;Lebanon +961&quot;,&quot;Lesotho +266&quot;,&quot;Liberia +231&quot;,&quot;Libya +218&quot;,&quot;Liechtenstein +423&quot;,&quot;Lithuania +370&quot;,&quot;Luxembourg +352&quot;,&quot;Macao SAR China +853&quot;,&quot;Madagascar +261&quot;,&quot;Malawi +265&quot;,&quot;Malaysia +60&quot;,&quot;Maldives +960&quot;,&quot;Mali +223&quot;,&quot;Malta +356&quot;,&quot;Marshall Islands +692&quot;,&quot;Martinique +596&quot;,&quot;Mauritania +222&quot;,&quot;Mauritius +230&quot;,&quot;Mayotte +262&quot;,&quot;Mexico +52&quot;,&quot;Micronesia +691&quot;,&quot;Moldova +373&quot;,&quot;Monaco +377&quot;,&quot;Mongolia +976&quot;,&quot;Montenegro +382&quot;,&quot;Montserrat +1&quot;,&quot;Morocco +212&quot;,&quot;Mozambique +258&quot;,&quot;Myanmar (Burma) +95&quot;,&quot;Namibia +264&quot;,&quot;Nauru +674&quot;,&quot;Nepal +977&quot;,&quot;Netherlands +31&quot;,&quot;New Caledonia +687&quot;,&quot;New Zealand +64&quot;,&quot;Nicaragua +505&quot;,&quot;Niger +227&quot;,&quot;Nigeria +234&quot;,&quot;Niue +683&quot;,&quot;Norfolk Island +672&quot;,&quot;North Korea +850&quot;,&quot;North Macedonia +389&quot;,&quot;Northern Mariana Islands +1&quot;,&quot;Norway +47&quot;,&quot;Oman +968&quot;,&quot;Pakistan +92&quot;,&quot;Palau +680&quot;,&quot;Palestinian Territories +970&quot;,&quot;Panama +507&quot;,&quot;Papua New Guinea +675&quot;,&quot;Paraguay +595&quot;,&quot;Peru +51&quot;,&quot;Philippines +63&quot;,&quot;Poland +48&quot;,&quot;Portugal +351&quot;,&quot;Puerto Rico +1&quot;,&quot;Qatar +974&quot;,&quot;Réunion +262&quot;,&quot;Romania +40&quot;,&quot;Russia +7&quot;,&quot;Rwanda +250&quot;,&quot;Samoa +685&quot;,&quot;San Marino +378&quot;,&quot;São Tomé &amp; Príncipe +239&quot;,&quot;Saudi Arabia +966&quot;,&quot;Senegal +221&quot;,&quot;Serbia +381&quot;,&quot;Seychelles +248&quot;,&quot;Sierra Leone +232&quot;,&quot;Singapore +65&quot;,&quot;Sint Maarten +1&quot;,&quot;Slovakia +421&quot;,&quot;Slovenia +386&quot;,&quot;Solomon Islands +677&quot;,&quot;Somalia +252&quot;,&quot;South Africa +27&quot;,&quot;South Korea +82&quot;,&quot;South Sudan +211&quot;,&quot;Spain +34&quot;,&quot;Sri Lanka +94&quot;,&quot;St. Barthélemy +590&quot;,&quot;St. Helena +290&quot;,&quot;St. Kitts &amp; Nevis +1&quot;,&quot;St. Lucia +1&quot;,&quot;St. Martin +590&quot;,&quot;St. Pierre &amp; Miquelon +508&quot;,&quot;St. Vincent &amp; Grenadines +1&quot;,&quot;Sudan +249&quot;,&quot;Suriname +597&quot;,&quot;Svalbard &amp; Jan Mayen +47&quot;,&quot;Sweden +46&quot;,&quot;Switzerland +41&quot;,&quot;Syria +963&quot;,&quot;Taiwan +886&quot;,&quot;Tajikistan +992&quot;,&quot;Tanzania +255&quot;,&quot;Thailand +66&quot;,&quot;Timor-Leste +670&quot;,&quot;Togo +228&quot;,&quot;Tokelau +690&quot;,&quot;Tonga +676&quot;,&quot;Trinidad &amp; Tobago +1&quot;,&quot;Tunisia +216&quot;,&quot;Turkey +90&quot;,&quot;Turkmenistan +993&quot;,&quot;Turks &amp; Caicos Islands +1&quot;,&quot;Tuvalu +688&quot;,&quot;U.S. Virgin Islands +1&quot;,&quot;Uganda +256&quot;,&quot;Ukraine +380&quot;,&quot;United Arab Emirates +971&quot;,&quot;United Kingdom +44&quot;,&quot;Uruguay +598&quot;,&quot;Uzbekistan +998&quot;,&quot;Vanuatu +678&quot;,&quot;Vatican City +39&quot;,&quot;Venezuela +58&quot;,&quot;Vietnam +84&quot;,&quot;Wallis &amp; Futuna +681&quot;,&quot;Western Sahara +212&quot;,&quot;Yemen +967&quot;,&quot;Zambia +260&quot;,&quot;Zimbabwe +263&quot;]">
+      <div class="menu" id="react-select-country-listbox" hidden></div>
+    </div>
+
+    <!-- The phone widget keeps its entire dial-code list mounted in the DOM at
+         all times, before anything is clicked. This is GitHub #6 in fixture
+         form: a global [role=option] query returns these no matter which
+         dropdown was opened. -->
+    <div class="field">
+      <label for="phone">Phone</label>
+      <div class="iti">
+        <button type="button" class="iti__selected-flag" aria-haspopup="listbox">+1</button>
+        <ul class="iti__country-list" id="iti-0__country-listbox" role="listbox">
+          <li class="iti__country" role="option">Afghanistan+93</li>
+          <li class="iti__country" role="option">Åland Islands+358</li>
+          <li class="iti__country" role="option">Albania+355</li>
+          <li class="iti__country" role="option">Algeria+213</li>
+          <li class="iti__country" role="option">American Samoa+1</li>
+          <li class="iti__country" role="option">Andorra+376</li>
+          <li class="iti__country" role="option">Angola+244</li>
+          <li class="iti__country" role="option">Anguilla+1</li>
+          <li class="iti__country" role="option">Antigua &amp; Barbuda+1</li>
+          <li class="iti__country" role="option">Argentina+54</li>
+          <li class="iti__country" role="option">Armenia+374</li>
+          <li class="iti__country" role="option">Aruba+297</li>
+          <li class="iti__country" role="option">Ascension Island+247</li>
+          <li class="iti__country" role="option">Australia+61</li>
+          <li class="iti__country" role="option">Austria+43</li>
+          <li class="iti__country" role="option">Azerbaijan+994</li>
+          <li class="iti__country" role="option">Bahamas+1</li>
+          <li class="iti__country" role="option">Bahrain+973</li>
+          <li class="iti__country" role="option">Bangladesh+880</li>
+          <li class="iti__country" role="option">Barbados+1</li>
+          <li class="iti__country" role="option">Belarus+375</li>
+          <li class="iti__country" role="option">Belgium+32</li>
+          <li class="iti__country" role="option">Belize+501</li>
+          <li class="iti__country" role="option">Benin+229</li>
+          <li class="iti__country" role="option">Bermuda+1</li>
+          <li class="iti__country" role="option">Bhutan+975</li>
+          <li class="iti__country" role="option">Bolivia+591</li>
+          <li class="iti__country" role="option">Bosnia &amp; Herzegovina+387</li>
+          <li class="iti__country" role="option">Botswana+267</li>
+          <li class="iti__country" role="option">Brazil+55</li>
+          <li class="iti__country" role="option">British Indian Ocean Territory+246</li>
+          <li class="iti__country" role="option">British Virgin Islands+1</li>
+          <li class="iti__country" role="option">Brunei+673</li>
+          <li class="iti__country" role="option">Bulgaria+359</li>
+          <li class="iti__country" role="option">Burkina Faso+226</li>
+          <li class="iti__country" role="option">Burundi+257</li>
+          <li class="iti__country" role="option">Cambodia+855</li>
+          <li class="iti__country" role="option">Cameroon+237</li>
+          <li class="iti__country" role="option">Canada+1</li>
+          <li class="iti__country" role="option">Cape Verde+238</li>
+          <li class="iti__country" role="option">Caribbean Netherlands+599</li>
+          <li class="iti__country" role="option">Cayman Islands+1</li>
+          <li class="iti__country" role="option">Central African Republic+236</li>
+          <li class="iti__country" role="option">Chad+235</li>
+          <li class="iti__country" role="option">Chile+56</li>
+          <li class="iti__country" role="option">China+86</li>
+          <li class="iti__country" role="option">Christmas Island+61</li>
+          <li class="iti__country" role="option">Cocos (Keeling) Islands+61</li>
+          <li class="iti__country" role="option">Colombia+57</li>
+          <li class="iti__country" role="option">Comoros+269</li>
+          <li class="iti__country" role="option">Congo - Brazzaville+242</li>
+          <li class="iti__country" role="option">Congo - Kinshasa+243</li>
+          <li class="iti__country" role="option">Cook Islands+682</li>
+          <li class="iti__country" role="option">Costa Rica+506</li>
+          <li class="iti__country" role="option">Côte d’Ivoire+225</li>
+          <li class="iti__country" role="option">Croatia+385</li>
+          <li class="iti__country" role="option">Cuba+53</li>
+          <li class="iti__country" role="option">Curaçao+599</li>
+          <li class="iti__country" role="option">Cyprus+357</li>
+          <li class="iti__country" role="option">Czechia+420</li>
+          <li class="iti__country" role="option">Denmark+45</li>
+          <li class="iti__country" role="option">Djibouti+253</li>
+          <li class="iti__country" role="option">Dominica+1</li>
+          <li class="iti__country" role="option">Dominican Republic+1</li>
+          <li class="iti__country" role="option">Ecuador+593</li>
+          <li class="iti__country" role="option">Egypt+20</li>
+          <li class="iti__country" role="option">El Salvador+503</li>
+          <li class="iti__country" role="option">Equatorial Guinea+240</li>
+          <li class="iti__country" role="option">Eritrea+291</li>
+          <li class="iti__country" role="option">Estonia+372</li>
+          <li class="iti__country" role="option">Eswatini+268</li>
+          <li class="iti__country" role="option">Ethiopia+251</li>
+          <li class="iti__country" role="option">Falkland Islands+500</li>
+          <li class="iti__country" role="option">Faroe Islands+298</li>
+          <li class="iti__country" role="option">Fiji+679</li>
+          <li class="iti__country" role="option">Finland+358</li>
+          <li class="iti__country" role="option">France+33</li>
+          <li class="iti__country" role="option">French Guiana+594</li>
+          <li class="iti__country" role="option">French Polynesia+689</li>
+          <li class="iti__country" role="option">Gabon+241</li>
+          <li class="iti__country" role="option">Gambia+220</li>
+          <li class="iti__country" role="option">Georgia+995</li>
+          <li class="iti__country" role="option">Germany+49</li>
+          <li class="iti__country" role="option">Ghana+233</li>
+          <li class="iti__country" role="option">Gibraltar+350</li>
+          <li class="iti__country" role="option">Greece+30</li>
+          <li class="iti__country" role="option">Greenland+299</li>
+          <li class="iti__country" role="option">Grenada+1</li>
+          <li class="iti__country" role="option">Guadeloupe+590</li>
+          <li class="iti__country" role="option">Guam+1</li>
+          <li class="iti__country" role="option">Guatemala+502</li>
+          <li class="iti__country" role="option">Guernsey+44</li>
+          <li class="iti__country" role="option">Guinea+224</li>
+          <li class="iti__country" role="option">Guinea-Bissau+245</li>
+          <li class="iti__country" role="option">Guyana+592</li>
+          <li class="iti__country" role="option">Haiti+509</li>
+          <li class="iti__country" role="option">Honduras+504</li>
+          <li class="iti__country" role="option">Hong Kong SAR China+852</li>
+          <li class="iti__country" role="option">Hungary+36</li>
+          <li class="iti__country" role="option">Iceland+354</li>
+          <li class="iti__country" role="option">India+91</li>
+          <li class="iti__country" role="option">Indonesia+62</li>
+          <li class="iti__country" role="option">Iran+98</li>
+          <li class="iti__country" role="option">Iraq+964</li>
+          <li class="iti__country" role="option">Ireland+353</li>
+          <li class="iti__country" role="option">Isle of Man+44</li>
+          <li class="iti__country" role="option">Israel+972</li>
+          <li class="iti__country" role="option">Italy+39</li>
+          <li class="iti__country" role="option">Jamaica+1</li>
+          <li class="iti__country" role="option">Japan+81</li>
+          <li class="iti__country" role="option">Jersey+44</li>
+          <li class="iti__country" role="option">Jordan+962</li>
+          <li class="iti__country" role="option">Kazakhstan+7</li>
+          <li class="iti__country" role="option">Kenya+254</li>
+          <li class="iti__country" role="option">Kiribati+686</li>
+          <li class="iti__country" role="option">Kosovo+383</li>
+          <li class="iti__country" role="option">Kuwait+965</li>
+          <li class="iti__country" role="option">Kyrgyzstan+996</li>
+          <li class="iti__country" role="option">Laos+856</li>
+          <li class="iti__country" role="option">Latvia+371</li>
+          <li class="iti__country" role="option">Lebanon+961</li>
+          <li class="iti__country" role="option">Lesotho+266</li>
+          <li class="iti__country" role="option">Liberia+231</li>
+          <li class="iti__country" role="option">Libya+218</li>
+          <li class="iti__country" role="option">Liechtenstein+423</li>
+          <li class="iti__country" role="option">Lithuania+370</li>
+          <li class="iti__country" role="option">Luxembourg+352</li>
+          <li class="iti__country" role="option">Macao SAR China+853</li>
+          <li class="iti__country" role="option">Madagascar+261</li>
+          <li class="iti__country" role="option">Malawi+265</li>
+          <li class="iti__country" role="option">Malaysia+60</li>
+          <li class="iti__country" role="option">Maldives+960</li>
+          <li class="iti__country" role="option">Mali+223</li>
+          <li class="iti__country" role="option">Malta+356</li>
+          <li class="iti__country" role="option">Marshall Islands+692</li>
+          <li class="iti__country" role="option">Martinique+596</li>
+          <li class="iti__country" role="option">Mauritania+222</li>
+          <li class="iti__country" role="option">Mauritius+230</li>
+          <li class="iti__country" role="option">Mayotte+262</li>
+          <li class="iti__country" role="option">Mexico+52</li>
+          <li class="iti__country" role="option">Micronesia+691</li>
+          <li class="iti__country" role="option">Moldova+373</li>
+          <li class="iti__country" role="option">Monaco+377</li>
+          <li class="iti__country" role="option">Mongolia+976</li>
+          <li class="iti__country" role="option">Montenegro+382</li>
+          <li class="iti__country" role="option">Montserrat+1</li>
+          <li class="iti__country" role="option">Morocco+212</li>
+          <li class="iti__country" role="option">Mozambique+258</li>
+          <li class="iti__country" role="option">Myanmar (Burma)+95</li>
+          <li class="iti__country" role="option">Namibia+264</li>
+          <li class="iti__country" role="option">Nauru+674</li>
+          <li class="iti__country" role="option">Nepal+977</li>
+          <li class="iti__country" role="option">Netherlands+31</li>
+          <li class="iti__country" role="option">New Caledonia+687</li>
+          <li class="iti__country" role="option">New Zealand+64</li>
+          <li class="iti__country" role="option">Nicaragua+505</li>
+          <li class="iti__country" role="option">Niger+227</li>
+          <li class="iti__country" role="option">Nigeria+234</li>
+          <li class="iti__country" role="option">Niue+683</li>
+          <li class="iti__country" role="option">Norfolk Island+672</li>
+          <li class="iti__country" role="option">North Korea+850</li>
+          <li class="iti__country" role="option">North Macedonia+389</li>
+          <li class="iti__country" role="option">Northern Mariana Islands+1</li>
+          <li class="iti__country" role="option">Norway+47</li>
+          <li class="iti__country" role="option">Oman+968</li>
+          <li class="iti__country" role="option">Pakistan+92</li>
+          <li class="iti__country" role="option">Palau+680</li>
+          <li class="iti__country" role="option">Palestinian Territories+970</li>
+          <li class="iti__country" role="option">Panama+507</li>
+          <li class="iti__country" role="option">Papua New Guinea+675</li>
+          <li class="iti__country" role="option">Paraguay+595</li>
+          <li class="iti__country" role="option">Peru+51</li>
+          <li class="iti__country" role="option">Philippines+63</li>
+          <li class="iti__country" role="option">Poland+48</li>
+          <li class="iti__country" role="option">Portugal+351</li>
+          <li class="iti__country" role="option">Puerto Rico+1</li>
+          <li class="iti__country" role="option">Qatar+974</li>
+          <li class="iti__country" role="option">Réunion+262</li>
+          <li class="iti__country" role="option">Romania+40</li>
+          <li class="iti__country" role="option">Russia+7</li>
+          <li class="iti__country" role="option">Rwanda+250</li>
+          <li class="iti__country" role="option">Samoa+685</li>
+          <li class="iti__country" role="option">San Marino+378</li>
+          <li class="iti__country" role="option">São Tomé &amp; Príncipe+239</li>
+          <li class="iti__country" role="option">Saudi Arabia+966</li>
+          <li class="iti__country" role="option">Senegal+221</li>
+          <li class="iti__country" role="option">Serbia+381</li>
+          <li class="iti__country" role="option">Seychelles+248</li>
+          <li class="iti__country" role="option">Sierra Leone+232</li>
+          <li class="iti__country" role="option">Singapore+65</li>
+          <li class="iti__country" role="option">Sint Maarten+1</li>
+          <li class="iti__country" role="option">Slovakia+421</li>
+          <li class="iti__country" role="option">Slovenia+386</li>
+          <li class="iti__country" role="option">Solomon Islands+677</li>
+          <li class="iti__country" role="option">Somalia+252</li>
+          <li class="iti__country" role="option">South Africa+27</li>
+          <li class="iti__country" role="option">South Korea+82</li>
+          <li class="iti__country" role="option">South Sudan+211</li>
+          <li class="iti__country" role="option">Spain+34</li>
+          <li class="iti__country" role="option">Sri Lanka+94</li>
+          <li class="iti__country" role="option">St. Barthélemy+590</li>
+          <li class="iti__country" role="option">St. Helena+290</li>
+          <li class="iti__country" role="option">St. Kitts &amp; Nevis+1</li>
+          <li class="iti__country" role="option">St. Lucia+1</li>
+          <li class="iti__country" role="option">St. Martin+590</li>
+          <li class="iti__country" role="option">St. Pierre &amp; Miquelon+508</li>
+          <li class="iti__country" role="option">St. Vincent &amp; Grenadines+1</li>
+          <li class="iti__country" role="option">Sudan+249</li>
+          <li class="iti__country" role="option">Suriname+597</li>
+          <li class="iti__country" role="option">Svalbard &amp; Jan Mayen+47</li>
+          <li class="iti__country" role="option">Sweden+46</li>
+          <li class="iti__country" role="option">Switzerland+41</li>
+          <li class="iti__country" role="option">Syria+963</li>
+          <li class="iti__country" role="option">Taiwan+886</li>
+          <li class="iti__country" role="option">Tajikistan+992</li>
+          <li class="iti__country" role="option">Tanzania+255</li>
+          <li class="iti__country" role="option">Thailand+66</li>
+          <li class="iti__country" role="option">Timor-Leste+670</li>
+          <li class="iti__country" role="option">Togo+228</li>
+          <li class="iti__country" role="option">Tokelau+690</li>
+          <li class="iti__country" role="option">Tonga+676</li>
+          <li class="iti__country" role="option">Trinidad &amp; Tobago+1</li>
+          <li class="iti__country" role="option">Tunisia+216</li>
+          <li class="iti__country" role="option">Turkey+90</li>
+          <li class="iti__country" role="option">Turkmenistan+993</li>
+          <li class="iti__country" role="option">Turks &amp; Caicos Islands+1</li>
+          <li class="iti__country" role="option">Tuvalu+688</li>
+          <li class="iti__country" role="option">U.S. Virgin Islands+1</li>
+          <li class="iti__country" role="option">Uganda+256</li>
+          <li class="iti__country" role="option">Ukraine+380</li>
+          <li class="iti__country" role="option">United Arab Emirates+971</li>
+          <li class="iti__country" role="option">United Kingdom+44</li>
+          <li class="iti__country" role="option">United States+1</li>
+          <li class="iti__country" role="option">Uruguay+598</li>
+          <li class="iti__country" role="option">Uzbekistan+998</li>
+          <li class="iti__country" role="option">Vanuatu+678</li>
+          <li class="iti__country" role="option">Vatican City+39</li>
+          <li class="iti__country" role="option">Venezuela+58</li>
+          <li class="iti__country" role="option">Vietnam+84</li>
+          <li class="iti__country" role="option">Wallis &amp; Futuna+681</li>
+          <li class="iti__country" role="option">Western Sahara+212</li>
+          <li class="iti__country" role="option">Yemen+967</li>
+          <li class="iti__country" role="option">Zambia+260</li>
+          <li class="iti__country" role="option">Zimbabwe+263</li>
+        </ul>
+        <input type="tel" id="phone" name="phone" required>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="resume">Attach</label>
+      <input type="file" id="resume" name="resume">
+    </div>
+    <div class="field">
+      <label for="cover_letter">Attach cover letter</label>
+      <input type="file" id="cover_letter" name="cover_letter">
+    </div>
+
+    
+    <div class="field">
+      <label for="question_14827944004" id="question_14827944004-label">Are you currently based in any of these countries? Please note these are the only countries where we are accepting applications*</label>
+      <input type="text" role="combobox" id="question_14827944004" name="question_14827944004"
+             aria-labelledby="question_14827944004-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;United States&quot;,&quot;Germany&quot;,&quot;United Kingdom&quot;,&quot;Argentina&quot;,&quot;Australia&quot;,&quot;Canada&quot;,&quot;India&quot;,&quot;Japan&quot;,&quot;Other&quot;]">
+      <div class="menu" id="react-select-question_14827944004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="question_14827945004" id="question_14827945004-label">Will you require Visa Sponsorship now, or in the future?*</label>
+      <input type="text" role="combobox" id="question_14827945004" name="question_14827945004"
+             aria-labelledby="question_14827945004-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;Yes&quot;,&quot;No&quot;]">
+      <div class="menu" id="react-select-question_14827945004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="question_14827946004" id="question_14827946004-label">Your authorization to work in the country where you live. Please choose the option that describes your work authorization. *</label>
+      <input type="text" role="combobox" id="question_14827946004" name="question_14827946004"
+             aria-labelledby="question_14827946004-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;I am authorized to work in the country due to my nationality&quot;,&quot;I am authorized to work in the country based on a valid work permit and do not need a company to sponsor my visa&quot;,&quot;I am authorized to work in the country based on a valid work permit which needs to be sponsored by the company I work for&quot;,&quot;I am not authorized to work in the country and need visa support&quot;,&quot;Other&quot;]">
+      <div class="menu" id="react-select-question_14827946004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="question_14827947004" id="question_14827947004-label">Do you live in one of the following states? Alabama, Alaska, Delaware, Kansas, Maine, Mississippi, Montana, Nebraska, New Mexico, North Dakota, South Dakota, West Virginia, or Wyoming.*</label>
+      <input type="text" role="combobox" id="question_14827947004" name="question_14827947004"
+             aria-labelledby="question_14827947004-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;Yes&quot;,&quot;No&quot;]">
+      <div class="menu" id="react-select-question_14827947004-listbox" hidden></div>
+    </div>
+
+    
+    <div class="field">
+      <label for="question_14827948004">LinkedIn Profile</label>
+      <input type="text" id="question_14827948004" name="question_14827948004" >
+    </div>
+    
+    <div class="field">
+      <label for="question_14827949004">Twitter</label>
+      <input type="text" id="question_14827949004" name="question_14827949004" >
+    </div>
+    
+    <div class="field">
+      <label for="question_14827950004">Github</label>
+      <input type="text" id="question_14827950004" name="question_14827950004" >
+    </div>
+    
+    <div class="field">
+      <label for="question_14827951004">Website</label>
+      <input type="text" id="question_14827951004" name="question_14827951004" >
+    </div>
+
+    
+    <div class="field">
+      <label for="question_14827952004" id="question_14827952004-label">By submitting my application, I acknowledge that I have read and understand Vercel’s Job Applicant Privacy Notice - https://vercel.com/legal/job-applicant-privacy-notice *</label>
+      <input type="text" role="combobox" id="question_14827952004" name="question_14827952004"
+             aria-labelledby="question_14827952004-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;Acknowledge/Confirm&quot;]">
+      <div class="menu" id="react-select-question_14827952004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="question_14827953004" id="question_14827953004-label">Please double-check all the information provided above. Ensuring accuracy is crucial, as any errors or omissions may impact the review of your application.*</label>
+      <input type="text" role="combobox" id="question_14827953004" name="question_14827953004"
+             aria-labelledby="question_14827953004-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;I have reviewed and confirmed that all the information provided is accurate and complete.&quot;]">
+      <div class="menu" id="react-select-question_14827953004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="question_17703233004" id="question_17703233004-label">Where did you first hear about this role?*</label>
+      <input type="text" role="combobox" id="question_17703233004" name="question_17703233004"
+             aria-labelledby="question_17703233004-label" aria-expanded="false" autocomplete="off"
+             aria-required="true"
+             data-options="[&quot;Events&quot;,&quot;Built In&quot;,&quot;LinkedIn&quot;,&quot;Google Search&quot;,&quot;Advertisements&quot;,&quot;Other job boards&quot;,&quot;LLMs (ChatGPT, etc.)&quot;,&quot;I'm a Vercel customer&quot;,&quot;Referral from a Vercel customer&quot;,&quot;Referral from a Vercel team member&quot;,&quot;Social media (X, Instagram, YouTube, etc.)&quot;,&quot;Other Content (news articles, podcasts, blogs)&quot;,&quot;Developer communities (GitHub, Hacker News, Reddit, etc.)&quot;,&quot;Other&quot;]">
+      <div class="menu" id="react-select-question_17703233004-listbox" hidden></div>
+    </div>
+
+    <!-- ADDED, not captured: this posting asks its consent question with a
+         combobox, but Greenhouse forms commonly use a checkbox and the driver
+         has a dedicated branch that must never tick one. -->
+    <div class="field">
+      <label><input type="checkbox" id="consent" name="consent"> I agree to the processing of my personal data as described in the privacy policy</label>
+    </div>
+
+    <!-- ADDED, not captured: a free-text question the prepared pack can answer,
+         and an attestation-shaped one it must refuse to answer. -->
+    <div class="field">
+      <label for="why_vercel">Why do you want to work here?</label>
+      <textarea id="why_vercel" name="why_vercel"></textarea>
+    </div>
+    <div class="field">
+      <label for="attest_text">I certify that the information above is true and complete</label>
+      <textarea id="attest_text" name="attest_text"></textarea>
+    </div>
+
+    <h2>Demographic questions</h2>
+    
+    <div class="field">
+      <label for="4015790004" id="4015790004-label">How would you describe your gender identity? (mark all that apply)</label>
+      <input type="text" role="combobox" id="4015790004" name="4015790004"
+             aria-labelledby="4015790004-label" aria-expanded="false" autocomplete="off"
+             
+             data-options="[&quot;Man&quot;,&quot;Non-binary&quot;,&quot;Woman&quot;,&quot;I prefer to self-describe&quot;,&quot;I don't wish to answer&quot;]">
+      <div class="menu" id="react-select-4015790004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="4015786004" id="4015786004-label">How would you describe your racial/ethnic background? (mark all that apply)</label>
+      <input type="text" role="combobox" id="4015786004" name="4015786004"
+             aria-labelledby="4015786004-label" aria-expanded="false" autocomplete="off"
+             
+             data-options="[&quot;Black or of African descent&quot;,&quot;East Asian&quot;,&quot;Hispanic, Latinx or of Spanish Origin&quot;,&quot;Indigenous, American Indian or Alaska Native&quot;,&quot;Middle Eastern or North African&quot;,&quot;Native Hawaiian or Pacific Islander&quot;,&quot;South Asian&quot;,&quot;Southeast Asian&quot;,&quot;White or European&quot;,&quot;I prefer to self-describe&quot;,&quot;I don't wish to answer&quot;]">
+      <div class="menu" id="react-select-4015786004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="4015785004" id="4015785004-label">How would you describe your sexual orientation? (mark all that apply)</label>
+      <input type="text" role="combobox" id="4015785004" name="4015785004"
+             aria-labelledby="4015785004-label" aria-expanded="false" autocomplete="off"
+             
+             data-options="[&quot;Asexual&quot;,&quot;Bisexual and/or pansexual&quot;,&quot;Gay&quot;,&quot;Heterosexual&quot;,&quot;Lesbian&quot;,&quot;Queer&quot;,&quot;I prefer to self-describe&quot;,&quot;I don't wish to answer&quot;]">
+      <div class="menu" id="react-select-4015785004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="4015783004" id="4015783004-label">Do you identify as transgender?</label>
+      <input type="text" role="combobox" id="4015783004" name="4015783004"
+             aria-labelledby="4015783004-label" aria-expanded="false" autocomplete="off"
+             
+             data-options="[&quot;Yes&quot;,&quot;No&quot;,&quot;I prefer to self-describe&quot;,&quot;I don't wish to answer&quot;]">
+      <div class="menu" id="react-select-4015783004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="4015781004" id="4015781004-label">Do you have a disability or chronic condition (physical, visual, auditory, cognitive, mental, emotional, or other) that substantially limits one or more of your major life activities, including mobility, communication (seeing, hearing, speaking), and learning?</label>
+      <input type="text" role="combobox" id="4015781004" name="4015781004"
+             aria-labelledby="4015781004-label" aria-expanded="false" autocomplete="off"
+             
+             data-options="[&quot;Yes&quot;,&quot;No&quot;,&quot;I prefer to self-describe&quot;,&quot;I don't wish to answer&quot;]">
+      <div class="menu" id="react-select-4015781004-listbox" hidden></div>
+    </div>
+    
+    <div class="field">
+      <label for="4015780004" id="4015780004-label">Are you a veteran or active member of the United States Armed Forces?</label>
+      <input type="text" role="combobox" id="4015780004" name="4015780004"
+             aria-labelledby="4015780004-label" aria-expanded="false" autocomplete="off"
+             
+             data-options="[&quot;Yes, I am a veteran or active member&quot;,&quot;No, I am not a veteran or active member&quot;,&quot;I prefer to self-describe&quot;,&quot;I don't wish to answer&quot;]">
+      <div class="menu" id="react-select-4015780004-listbox" hidden></div>
+    </div>
+
+    <!-- Both shapes on purpose. The <button> is never enumerated by
+         enumerateControls; the <input type="submit"> IS - type="submit" is not
+         excluded, so it falls through to kind "text" and enters the decision
+         loop. What keeps it safe is that no label rule matches it. -->
+    <input type="submit" id="submit_input" value="Submit application">
+    <button type="submit" id="submit_button">Submit application</button>
+  </form>
+
+  <script>
+
+    // Minimal stand-in for react-select. It implements only the parts of the
+    // contract the driver depends on, and that contract was OBSERVED on the
+    // live form rather than assumed: opening a menu sets aria-controls to
+    // "react-select-<id>-listbox", options are [role=option] inside it, and the
+    // attribute is absent while the menu is closed.
+    for (const input of document.querySelectorAll("[role=combobox]")) {
+      const menu = document.getElementById("react-select-" + input.id + "-listbox");
+      const all = JSON.parse(input.dataset.options || "[]");
+
+      const render = () => {
+        const typed = input.value.trim().toLowerCase();
+        const shown = typed ? all.filter((o) => o.toLowerCase().includes(typed)) : all;
+        menu.innerHTML = "";
+        for (const o of shown) {
+          const div = document.createElement("div");
+          div.setAttribute("role", "option");
+          div.className = "select__option";
+          div.textContent = o;
+          div.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            input.value = o;
+            input.dataset.chosen = o;
+            close();
+          });
+          menu.appendChild(div);
+        }
+      };
+
+      const open = () => {
+        menu.hidden = false;
+        input.setAttribute("aria-controls", menu.id);
+        input.setAttribute("aria-expanded", "true");
+        render();
+      };
+      const close = () => {
+        menu.hidden = true;
+        input.removeAttribute("aria-controls");
+        input.setAttribute("aria-expanded", "false");
+      };
+
+      input.addEventListener("click", () => (menu.hidden ? open() : render()));
+      input.addEventListener("input", () => { if (!menu.hidden) render(); });
+      input.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+    }
+
+    // Records any submission - a click on either control, or an implicit submit
+    // from Enter in a text input. Nothing here submits anywhere; the flag is
+    // what the test reads.
+    window.__submitted = false;
+    document.getElementById("application-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      window.__submitted = true;
+    });
+    for (const b of document.querySelectorAll("#submit_input, #submit_button")) {
+      b.addEventListener("click", () => { window.__submitted = true; });
+    }
+
+  </script>
+</body>
+</html>
