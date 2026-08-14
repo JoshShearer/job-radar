@@ -55,7 +55,8 @@ export function buildDashboard(input: DashboardInput): string {
 
   const body = [
     `<h1>Job Radar</h1>`,
-    `<p class="lede">Cumulative view. The daily slate is <a href="latest-briefing.html">the briefing</a>.</p>`,
+    `<p class="lede">Cumulative view. Today's slate is <a href="latest-briefing.html">the briefing</a>;`,
+    `past ones are in <a href="/archive">the archive</a>.</p>`,
     renderTiles(counts, funnel, inFlight),
     renderDiagnosis(funnel),
     renderFunnelSection(funnel),

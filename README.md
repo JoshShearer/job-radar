@@ -56,7 +56,7 @@ npm run cli -- open             # the dashboard
 npm run cli -- open --briefing  # today's slate instead
 npm run cli -- open --md        # prints the briefing Markdown path
 npm run cli -- dashboard        # rebuild just the dashboard (no network, no cost)
-npm run serve                   # local server + browsable archive
+npm run serve                   # local server; the dashboard is at /
 npm run dev                     # the same server, rebuilding as you edit
 ```
 
@@ -68,7 +68,7 @@ Watch mode rebuilds the **dashboard** only. The briefing goes through `daily`, w
 
 The two answer different questions, which is why they are two pages: the briefing says *what should I look at today*, the dashboard says *is this working, and where is it stalling*. `open` never falls back from one to the other, because silently answering the question you did not ask is worse than an error.
 
-**There is still no web application.** Both pages are generated files. `serve` is a read-only static server over `reports/` with an index of past briefings. It binds to **127.0.0.1 only**, never `0.0.0.0`, so nothing on your network can reach it, and it refuses to serve anything outside the reports directory (the SQLite database is not reachable at any path). Nothing on either page changes anything; the CLI does that. The interactive version, with status changes from the browser, is still a Phase 3 item; see `TODO.md`.
+**There is still no web application.** Both pages are generated files. `serve` is a read-only static server over `reports/`: the dashboard at `/`, today's slate at `/latest-briefing.html`, and past briefings at `/archive`. It binds to **127.0.0.1 only**, never `0.0.0.0`, so nothing on your network can reach it, and it refuses to serve anything outside the reports directory (the SQLite database is not reachable at any path). Nothing on either page changes anything; the CLI does that. The interactive version, with status changes from the browser, is still a Phase 3 item; see `TODO.md`.
 
 The HTML is **fully self-contained** — no CDN, no remote fonts, no JavaScript, no network requests of any kind. It works offline, and opening it tells nobody what you are looking at. It respects your system light/dark setting and reads fine on a phone. Application links are clickable; compensation bands are colour-coded.
 
@@ -247,7 +247,7 @@ npm run cli -- calibrate                   # how far the keyword engine drifts f
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 406 tests
+npm test                                   # 408 tests
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -594,7 +594,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 406 tests
+npm test          # 408 tests
 npm run typecheck
 ```
 
@@ -617,7 +617,7 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, 406 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, 408 tests.
 
 A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 

@@ -1036,7 +1036,7 @@ program
   .action(async (opts: { port: string; open: boolean; watch: boolean; reloadSeconds: string }) => {
     const dir = paths.reports();
     if (!existsSync(resolve(dir, "latest.html"))) {
-      console.log(`No dashboard in ${dir} yet - serving an empty index. Run \`npm run radar\` to generate one.`);
+      console.log(`No dashboard in ${dir} yet - the root will show the archive instead. Run \`npm run radar\`.`);
     }
 
     const reloadSeconds = opts.watch ? Math.max(0, Number(opts.reloadSeconds) || 0) : 0;
@@ -1050,7 +1050,9 @@ program
     const watcher = opts.watch ? startDashboardWatcher() : null;
 
     console.log("");
-    console.log(`  Job Radar briefings  ${url}`);
+    console.log(`  Job Radar dashboard  ${url}`);
+    console.log(`  today's briefing     ${url}latest-briefing.html`);
+    console.log(`  past briefings       ${url}archive`);
     console.log(`  serving              ${dir}`);
     console.log(`  bound to             127.0.0.1 only (not reachable from your network)`);
     if (watcher) {
