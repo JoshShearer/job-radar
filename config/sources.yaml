@@ -128,7 +128,6 @@ sources:
       # Headless CMS.
       - { token: prismic, company: Prismic }
       # Proptech / smart building.
-      - { token: belong, company: Belong }
       - { token: latch, company: Latch }
       # Marketplaces and commerce.
       - { token: vestiairecollective, company: "Vestiaire Collective" }
@@ -222,3 +221,4 @@ watchlist:
   - { company: Framer, why: "Design/web platform, no public ATS endpoint found" }
   - { company: Statsig, why: "Experimentation platform - matches the 200+ experiments story" }
   - { company: Clerk, why: "Dev platform, Next.js-native" }
+  - { company: Belong, why: "Proptech / smart building. Lever board 404'd on 2026-08-13; discover found nothing on Greenhouse/Lever/Ashby. Workable and SmartRecruiters not checked." }
