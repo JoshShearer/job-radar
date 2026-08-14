@@ -4,7 +4,13 @@ import { mkdtempSync, rmSync, writeFileSync, utimesSync, existsSync } from "node
 import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { fillForm, type FieldOutcome } from "../src/apply/autofill.js";
+import {
+  fillForm,
+  waitForControls,
+  settlePage,
+  CONTROL_SETTLE_MS,
+  type FieldOutcome,
+} from "../src/apply/autofill.js";
 import { chooseResume, type ResumeChoice } from "../src/apply/resume-file.js";
 import { loadPersonal, type Personal } from "../src/config/personal.js";
 import type { ApplicationPack } from "../src/analysis/application.js";
@@ -282,6 +288,101 @@ describe("autofill against a saved application form", () => {
   });
 });
 
+describe("waiting for a client-rendered form", () => {
+  // A flat post-navigation delay read the Vanta/Ashby form before it existed:
+  // 0 controls at 1.2s, 32 by 4s. `enumerateControls` then ran against an empty
+  // document and the report said "Filled: 0 / For you: 0", which is
+  // indistinguishable from a form that had nothing to fill.
+  const latePage = (delayMs: number, count = 3) => `
+    <!doctype html><html><body><form id="f"></form>
+    <script>
+      setTimeout(() => {
+        const f = document.getElementById("f");
+        for (let i = 0; i < ${count}; i++) {
+          const l = document.createElement("label");
+          l.setAttribute("for", "c" + i);
+          l.textContent = "Email";
+          const el = document.createElement("input");
+          el.type = "text"; el.id = "c" + i; el.name = "c" + i;
+          f.appendChild(l); f.appendChild(el);
+        }
+      }, ${delayMs});
+    </script></body></html>`;
+
+  it("finds controls that appear well after the page loads", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent(latePage(800), { waitUntil: "load" });
+      expect(await page.locator("input").count()).toBe(0); // not there yet
+
+      const found = await waitForControls(page, { settleMs: 300 });
+      expect(found).toBe(3);
+      expect(await page.locator("input").count()).toBe(3);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
+  it("waits for the count to settle rather than grabbing the first control", async () => {
+    // Controls arriving in two bursts 300ms apart. Returning as soon as
+    // something appeared would enumerate a partial form and silently skip the
+    // rest. Bursts further apart than the settle window cannot be caught by any
+    // finite wait, which is why that window is generous.
+    const page = await browser.newPage();
+    try {
+      await page.setContent(
+        `<!doctype html><html><body><form id="f"></form>
+        <script>
+          const add = (n) => { const f = document.getElementById("f");
+            for (let i = 0; i < n; i++) { const el = document.createElement("input");
+              el.type = "text"; el.name = "x" + f.children.length + "-" + i; f.appendChild(el); } };
+          setTimeout(() => add(2), 200);
+          setTimeout(() => add(4), 500);
+        </script></body></html>`,
+        { waitUntil: "load" },
+      );
+      expect(await waitForControls(page, { settleMs: 400 })).toBe(6);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
+  it("returns instead of hanging when a page never renders a control", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent("<!doctype html><html><body><p>No form here.</p></body></html>", {
+        waitUntil: "load",
+      });
+      const started = Date.now();
+      expect(await waitForControls(page, { timeoutMs: 1500 })).toBe(0);
+      // Bounded by the cap, not by the default.
+      expect(Date.now() - started).toBeLessThan(6000);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
+  it("defaults to a settle window at least as long as the fixed delay it replaced", () => {
+    // The behavioural tests above pass short windows to stay fast, so the
+    // default is pinned separately. It must stay generous: bursts further apart
+    // than this window return early, and shrinking it to speed up a run would
+    // reintroduce the partial-form read this whole function exists to prevent.
+    expect(CONTROL_SETTLE_MS).toBeGreaterThanOrEqual(1200);
+  });
+
+  it("returns immediately for a form that is already painted", async () => {
+    const page = await openFixture();
+    try {
+      const started = Date.now();
+      const n = await waitForControls(page, { settleMs: 300 });
+      expect(n).toBeGreaterThan(20);
+      expect(Date.now() - started).toBeLessThan(3000);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+});
+
 describe("bot protection", () => {
   // GitHub #8: nearly every Greenhouse form embeds an invisible reCAPTCHA
   // Enterprise badge that challenges nobody. Treating its presence as a block
@@ -303,6 +404,26 @@ describe("bot protection", () => {
       expect(widget!.detail).toContain("It is not touched");
       // The point of the fix: the rest of the form still got filled.
       expect(find(outcomes, L.firstName)).toMatchObject({ status: "filled" });
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
+  it("does not spend the control-wait on a page that is showing a challenge", async () => {
+    // A challenge page never paints an application form, so waiting the full
+    // 15s cap on one only delays the refusal. `fillForm` is still what stops
+    // the run; this just gets there promptly.
+    const page = await browser.newPage();
+    try {
+      await page.setContent(
+        `<!doctype html><html><body>
+         <iframe src="about:blank#recaptcha-bframe" style="width:300px;height:200px"></iframe>
+         </body></html>`,
+        { waitUntil: "load" },
+      );
+      const started = Date.now();
+      expect(await settlePage(page)).toBe(0);
+      expect(Date.now() - started).toBeLessThan(8000); // not the 15s cap
     } finally {
       await page.close();
     }
