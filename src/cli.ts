@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
 import { loadEnvFile } from "./config/env.js";
 import { closeDb, openDb } from "./db/index.js";
@@ -15,7 +15,8 @@ import { writeHtmlReport } from "./report/html.js";
 import { buildDashboard, writeDashboard } from "./report/dashboard.js";
 import { loadPack, packDir, prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
 import { loadPersonal } from "./config/personal.js";
-import { autofillApplication, findResume, renderOutcomes } from "./apply/autofill.js";
+import { autofillApplication, renderOutcomes } from "./apply/autofill.js";
+import { chooseResume } from "./apply/resume-file.js";
 import { loadResume, resumeExists, resumePath, saveResume } from "./resume/load.js";
 import { allBullets, lintResume } from "./resume/schema.js";
 import { scaffoldResume } from "./resume/init.js";
@@ -552,19 +553,24 @@ program
       const dir = packDir(job);
       mkdirSync(dir, { recursive: true });
 
-      // Prefer the resume tailored to this posting over any generic one.
+      // Prefer the resume tailored to this posting over any generic one. The
+      // choice is made once, here, and handed over whole: `autofill` reports
+      // which file it attached and what it passed over, and it cannot label a
+      // generic resume "tailored" from a bare path.
       const tailored = resolve(dir, "resume.pdf");
-      const resumeFile = existsSync(tailored) ? tailored : findResume();
-      if (!resumeFile) {
+      const resume = chooseResume(existsSync(tailored) ? tailored : undefined);
+      if (!resume) {
         log.warn(`No resume to attach. Generate one: npm run cli -- resume tailor ${job.id}`);
-      } else if (resumeFile === tailored) {
+      } else if (resume.source === "tailored") {
         log.info("Attaching the resume tailored to this posting.");
+      } else {
+        log.info(`Attaching the newest resume in resumes/: ${basename(resume.path)}`);
       }
 
       const result = await autofillApplication(job, personal, pack, {
         screenshotDir: opts.screenshot ? dir : undefined,
         headless: opts.headless,
-        ...(resumeFile ? { resumeFile } : {}),
+        ...(resume ? { resume } : {}),
       });
 
       const report = renderOutcomes(job, result);

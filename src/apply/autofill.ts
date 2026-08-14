@@ -1,7 +1,7 @@
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
-import { existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { PROJECT_ROOT } from "../config/load.js";
+import { chooseResume, describeResumeChoice, type ResumeChoice } from "./resume-file.js";
 import type { Personal } from "../config/personal.js";
 import type { ApplicationPack } from "../analysis/application.js";
 import type { EnrichedJob } from "../model/job.js";
@@ -315,20 +315,11 @@ function offered(options: string[], limit = 8): string {
   return ` Offered: ${shown.join(", ")}${more}`;
 }
 
-/** Newest resume-looking file in resumes/, or null. */
-export function findResume(dir = resolve(PROJECT_ROOT, "resumes")): string | null {
-  if (!existsSync(dir)) return null;
-  const files = readdirSync(dir).filter((f) => /\.(pdf|docx?|txt|rtf)$/i.test(f));
-  if (!files.length) return null;
-  files.sort();
-  return resolve(dir, files[files.length - 1] as string);
-}
-
 export async function autofillApplication(
   job: EnrichedJob,
   personal: Personal,
   pack: ApplicationPack | null,
-  opts: { screenshotDir?: string; headless?: boolean; resumeFile?: string } = {},
+  opts: { screenshotDir?: string; headless?: boolean; resume?: ResumeChoice } = {},
 ): Promise<AutofillResult> {
   const url = job.applicationUrl ?? job.sourceUrl;
   if (!url) throw new Error("This job has no application URL.");
@@ -372,7 +363,9 @@ export async function autofillApplication(
     });
   }
   // A resume tailored to THIS posting wins over anything generic in resumes/.
-  const resume = opts.resumeFile ?? findResume();
+  // The caller normally decides and hands over the whole choice; the fallback
+  // is for programmatic callers, never a re-derivation of one that was passed.
+  const resume = opts.resume ?? chooseResume();
 
   for (const c of controls) {
     // File inputs are usually labelled by their styled button ("Attach"), which
@@ -422,8 +415,8 @@ export async function autofillApplication(
             });
             continue;
           }
-          await el.setInputFiles(resume);
-          outcomes.push({ label, intent, status: "filled", detail: `attached ${resume.split("/").pop()}` });
+          await el.setInputFiles(resume.path);
+          outcomes.push({ label, intent, status: "filled", detail: describeResumeChoice(resume) });
         } else {
           // Cover letter: prefer typing the prepared note over uploading a file.
           outcomes.push({
