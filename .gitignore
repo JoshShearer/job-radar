@@ -38,3 +38,10 @@ config/personal.yaml
 
 # Master resume (real employment history)
 config/resume.yaml
+
+# Claude Code working notes: session handoffs, plans, last critique verdict.
+# The commands themselves (.claude/commands/, .claude/linear.md) ARE committed.
+.claude/scratch/*
+!.claude/scratch/.gitkeep
+.claude/last-critique.md
+.worktree-meta.json
