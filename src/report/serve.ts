@@ -31,10 +31,30 @@ export interface ServeOptions {
   dir: string;
   port: number;
   host?: string;
+  /**
+   * Watch mode only: tell the browser to re-request the page every N seconds.
+   *
+   * Sent as the HTTP `Refresh` response header rather than injected as a
+   * `<meta http-equiv>` into the document, and that choice is the whole point.
+   * The generated pages are self-contained and script-free by design, with
+   * tests asserting it. A header leaves the served bytes byte-identical to the
+   * file on disk, so a development convenience cannot alter the artifact even
+   * by accident. It also rules out the obvious alternative - a live-reload
+   * script - which would put JavaScript into a page that promises it has none.
+   *
+   * Unset or 0 sends nothing, which is every non-watch run.
+   */
+  refreshSeconds?: number;
 }
 
 export function createReportServer(opts: ServeOptions) {
   const root = resolve(opts.dir);
+  const refresh = opts.refreshSeconds && opts.refreshSeconds > 0 ? String(opts.refreshSeconds) : null;
+  const htmlHeaders = (contentType: string): Record<string, string> => ({
+    "content-type": contentType,
+    "cache-control": "no-store",
+    ...(refresh ? { refresh } : {}),
+  });
 
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     // Only reads. There is nothing here to write to.
@@ -53,7 +73,7 @@ export function createReportServer(opts: ServeOptions) {
 
     if (pathname === "/" || pathname === "/index.html") {
       const body = renderIndex(root);
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.writeHead(200, htmlHeaders("text/html; charset=utf-8"));
       res.end(req.method === "HEAD" ? undefined : body);
       return;
     }
@@ -78,7 +98,12 @@ export function createReportServer(opts: ServeOptions) {
     }
 
     const body = readFileSync(requested);
-    res.writeHead(200, { "content-type": MIME[ext]!, "cache-control": "no-store" });
+    // Only HTML gets the refresh header. Re-fetching a Markdown file on a timer
+    // reloads a text document out from under whoever is reading it.
+    res.writeHead(200, ext === ".html" ? htmlHeaders(MIME[ext]!) : {
+      "content-type": MIME[ext]!,
+      "cache-control": "no-store",
+    });
     res.end(req.method === "HEAD" ? undefined : body);
   });
 }
@@ -162,6 +187,7 @@ export function startReportServer(
   opts: ServeOptions,
   maxAttempts = 10,
 ): Promise<{ port: number; address: string; close: () => void }> {
+  // Bind host is not configurable from the CLI on purpose; see the note above.
   const host = opts.host ?? "127.0.0.1";
 
   return new Promise((resolvePromise, reject) => {

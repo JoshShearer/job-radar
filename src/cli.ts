@@ -34,6 +34,7 @@ import { buildFunnel, renderFunnel } from "./stats/funnel.js";
 import { listBoardEndpoints } from "./sources/registry.js";
 import { discoverCompany, type DiscoveryHit } from "./sources/discover.js";
 import { startReportServer } from "./report/serve.js";
+import { startDashboardWatcher, WATCHED_DIRS } from "./report/watch.js";
 import { PoliteFetcher } from "./lib/http.js";
 import { log, setVerbose } from "./lib/log.js";
 import {
@@ -1026,19 +1027,43 @@ program
   .description("Serve the briefing archive locally (read-only, 127.0.0.1 only)")
   .option("-p, --port <n>", "port to listen on", "4321")
   .option("--open", "open a browser once the server is up", false)
-  .action(async (opts: { port: string; open: boolean }) => {
+  .option("--watch", "rebuild the dashboard when the report sources change", false)
+  .option(
+    "--reload-seconds <n>",
+    "with --watch, how often the browser re-requests the page (0 to disable)",
+    "2",
+  )
+  .action(async (opts: { port: string; open: boolean; watch: boolean; reloadSeconds: string }) => {
     const dir = paths.reports();
     if (!existsSync(resolve(dir, "latest.html"))) {
-      console.log(`No briefing in ${dir} yet - serving an empty index. Run \`npm run radar\` to generate one.`);
+      console.log(`No dashboard in ${dir} yet - serving an empty index. Run \`npm run radar\` to generate one.`);
     }
 
-    const { port } = await startReportServer({ dir, port: Number(opts.port) || 4321 });
+    const reloadSeconds = opts.watch ? Math.max(0, Number(opts.reloadSeconds) || 0) : 0;
+    const { port } = await startReportServer({
+      dir,
+      port: Number(opts.port) || 4321,
+      refreshSeconds: reloadSeconds,
+    });
     const url = `http://127.0.0.1:${port}/`;
+
+    const watcher = opts.watch ? startDashboardWatcher() : null;
 
     console.log("");
     console.log(`  Job Radar briefings  ${url}`);
     console.log(`  serving              ${dir}`);
     console.log(`  bound to             127.0.0.1 only (not reachable from your network)`);
+    if (watcher) {
+      console.log(`  watching             ${WATCHED_DIRS.join(", ")}`);
+      console.log(
+        `  auto-refresh         ${reloadSeconds ? `every ${reloadSeconds}s` : "off (--reload-seconds 0)"}`,
+      );
+      // Said out loud because it is the one thing about this mode that will
+      // otherwise look broken: edit daily.ts, save, and the briefing does not
+      // change. `daily` re-scores the whole index, which is far too slow to run
+      // on every save.
+      console.log(`  note                 rebuilds the dashboard only; the briefing needs \`daily\``);
+    }
     console.log("");
     console.log("  Ctrl-C to stop.");
 
@@ -1052,6 +1077,7 @@ program
     // Hold the process open until interrupted.
     await new Promise<void>((resolvePromise) => {
       process.on("SIGINT", () => {
+        watcher?.close();
         console.log("\nstopped");
         resolvePromise();
       });
