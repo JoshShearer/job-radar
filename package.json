@@ -20,7 +20,7 @@
     "discover": "tsx src/cli.ts discover"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.116.0",
+    "@anthropic-ai/sdk": "^0.117.1",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "yaml": "^2.9.0",
