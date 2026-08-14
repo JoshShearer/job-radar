@@ -14,6 +14,39 @@ import {
 import { chooseResume, type ResumeChoice } from "../src/apply/resume-file.js";
 import { loadPersonal, type Personal } from "../src/config/personal.js";
 import type { ApplicationPack } from "../src/analysis/application.js";
+import type { Resume } from "../src/resume/schema.js";
+
+/**
+ * Stub employment history. Invented, and kept here rather than read from
+ * config/resume.yaml for the same reason as the personal stub: a test must not
+ * depend on the real person's data, and must not change when they edit it.
+ */
+const MASTER_RESUME = {
+  experience: [
+    {
+      id: "role-old",
+      company: "Analytical Engine Co",
+      title: "Engineer",
+      start: "2019-01",
+      end: "2022-06",
+      location: "",
+      context: "",
+      employment_type: "full_time",
+      bullets: [],
+    },
+    {
+      id: "role-current",
+      company: "Difference Engine Ltd",
+      title: "Head of Computation",
+      start: "2022-07",
+      end: null,
+      location: "",
+      context: "",
+      employment_type: "full_time",
+      bullets: [],
+    },
+  ],
+} as unknown as Resume;
 
 /**
  * Regression harness for the browser layer.
@@ -56,6 +89,10 @@ const L = {
     "I agree to the processing of my personal data as described in the privacy policy",
   whyHere: "Why do you want to work here?",
   attestText: "I certify that the information above is true and complete",
+  describeProduct: "Describe a product you built from the ground up",
+  attestInput: "I acknowledge that the information provided is accurate",
+  currentCompany: "Current/Most Recent Company Name",
+  currentTitle: "Current/Most Recent Job Title",
 } as const;
 
 const EEO_LABELS = [
@@ -117,7 +154,7 @@ async function openFixture(): Promise<Page> {
 
 async function run(pack: ApplicationPack | null = null): Promise<{ page: Page; outcomes: FieldOutcome[] }> {
   const page = await openFixture();
-  const outcomes = await fillForm(page, personal, pack, resume);
+  const outcomes = await fillForm(page, personal, pack, resume, MASTER_RESUME);
   return { page, outcomes };
 }
 
@@ -277,6 +314,19 @@ describe("autofill against a saved application form", () => {
     expect(o!.detail).toContain('no confident match for "Company job board"');
     for (const opt of ["Events", "Built In", "LinkedIn"]) expect(o!.detail).toContain(opt);
     expect(await page.locator("#question_17703233004").inputValue()).toBe("");
+  });
+
+  it("answers current company and title from the master resume", async () => {
+    // These sat blank on a real Ashby form while config/resume.yaml held both.
+    expect(find(outcomes, L.currentCompany)).toMatchObject({
+      intent: "current_company",
+      status: "filled",
+    });
+    expect(find(outcomes, L.currentTitle)).toMatchObject({ intent: "current_title", status: "filled" });
+    // The report names the role it used, so a wrong pick is visible.
+    expect(find(outcomes, L.currentCompany)!.detail).toContain("resume.yaml");
+    expect(await page.locator("#current_company").inputValue()).not.toBe("");
+    expect(await page.locator("#current_title").inputValue()).not.toBe("");
   });
 
   it("answers the embedded state-list question from the list inside it", () => {
@@ -485,6 +535,15 @@ describe("the prepared-pack second pass", () => {
         question: "I certify that the information above is true and complete",
         answer: "SHOULD NEVER BE TYPED INTO AN ATTESTATION",
       },
+      {
+        question: "Describe a product you built from the ground up",
+        answer: "Drafted answer about a product built from scratch.",
+      },
+      {
+        question: "I acknowledge that the information provided is accurate",
+        answer: "SHOULD NEVER BE TYPED INTO AN ATTESTATION",
+      },
+      { question: "Email", answer: "SHOULD NEVER OVERWRITE A RULE-FILLED FIELD" },
     ],
   } as unknown as ApplicationPack;
 
@@ -500,6 +559,27 @@ describe("the prepared-pack second pass", () => {
     expect(await page.locator("#why_vercel").inputValue()).toBe("Drafted answer about the product.");
     expect(find(outcomes, L.whyHere)).toMatchObject({ status: "filled" });
     expect(find(outcomes, L.whyHere)!.detail).toContain("READ IT");
+  });
+
+  it("fills a single-line text question from the pack, as Ashby renders them", async () => {
+    // The second pass used to consider <textarea> only, so on a board that
+    // renders long-form questions as <input type="text"> every drafted answer
+    // in the pack was unreachable - loaded, and never used.
+    expect(await page.locator("#describe_product").inputValue()).toBe(
+      "Drafted answer about a product built from scratch.",
+    );
+    expect(find(outcomes, L.describeProduct)).toMatchObject({ status: "filled" });
+    expect(find(outcomes, L.describeProduct)!.detail).toContain("READ IT");
+  });
+
+  it("refuses an attestation rendered as a text input, not just as a textarea", async () => {
+    expect(await page.locator("#attest_input").inputValue()).toBe("");
+    expect(find(outcomes, L.attestInput)).toMatchObject({ intent: "attestation", status: "needs-you" });
+  });
+
+  it("never lets a pack answer overwrite a field a rule already filled", async () => {
+    // The pack carries an answer whose question is literally "Email".
+    expect(await page.locator("#email").inputValue()).toBe("ada@example.invalid");
   });
 
   it("refuses to type a prepared answer into an attestation, even an exact match", async () => {

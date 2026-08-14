@@ -18,7 +18,7 @@ import { loadPersonal } from "./config/personal.js";
 import { autofillApplication, renderOutcomes } from "./apply/autofill.js";
 import { chooseResume } from "./apply/resume-file.js";
 import { loadResume, resumeExists, resumePath, saveResume } from "./resume/load.js";
-import { allBullets, lintResume } from "./resume/schema.js";
+import { allBullets, lintResume, type Resume } from "./resume/schema.js";
 import { scaffoldResume } from "./resume/init.js";
 import { importResume } from "./resume/import.js";
 import { matchResumeToJob } from "./resume/requirements.js";
@@ -567,10 +567,21 @@ program
         log.info(`Attaching the newest resume in resumes/: ${basename(resume.path)}`);
       }
 
+      // Employment-history fields are answered from the master resume, so there
+      // is one source of truth for where you work. Autofill still runs without
+      // it - those fields are reported instead of guessed.
+      let masterResume: Resume | undefined;
+      try {
+        masterResume = loadResume();
+      } catch {
+        log.warn("No master resume, so current employer/title will be left for you.");
+      }
+
       const result = await autofillApplication(job, personal, pack, {
         screenshotDir: opts.screenshot ? dir : undefined,
         headless: opts.headless,
         ...(resume ? { resume } : {}),
+        ...(masterResume ? { masterResume } : {}),
       });
 
       const report = renderOutcomes(job, result);

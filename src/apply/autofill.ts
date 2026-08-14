@@ -2,6 +2,7 @@ import { chromium, type BrowserContext, type Locator, type Page } from "playwrig
 import { resolve } from "node:path";
 import { PROJECT_ROOT } from "../config/load.js";
 import { chooseResume, describeResumeChoice, type ResumeChoice } from "./resume-file.js";
+import type { Resume } from "../resume/schema.js";
 import type { Personal } from "../config/personal.js";
 import type { ApplicationPack } from "../analysis/application.js";
 import type { EnrichedJob } from "../model/job.js";
@@ -411,6 +412,8 @@ export async function fillForm(
   personal: Personal,
   pack: ApplicationPack | null,
   resume: ResumeChoice | null,
+  /** Master resume, for the fields that are answered from employment history. */
+  masterResume?: Resume,
 ): Promise<FieldOutcome[]> {
   const { visible, present } = pageProbes(page);
   const challenge = await detectChallenge(visible, present);
@@ -457,7 +460,7 @@ export async function fillForm(
       continue;
     }
 
-    const decision = decide(c.label, intent, { personal, pack });
+    const decision = decide(c.label, intent, { personal, pack, resume: masterResume });
 
     if (decision.action === "skip") {
       outcomes.push({
@@ -573,9 +576,16 @@ export async function fillForm(
 
   // Second pass: free-text boxes that no rule claimed, matched against the
   // answers already drafted in the application pack.
+  //
+  // Single-line inputs count. Ashby renders "describe a product you built from
+  // the ground up" as an <input type="text">, so restricting this to <textarea>
+  // meant every drafted answer in the pack was unreachable on those forms -
+  // loaded, and never used. The guards below do the work of keeping this safe,
+  // not the element type: an EEO or attestation field is refused whatever tag
+  // it happens to be, and nothing a rule already filled is touched.
   if (pack?.formAnswers?.length) {
     for (const c of controls) {
-      if (c.kind !== "textarea") continue;
+      if (c.kind !== "textarea" && c.kind !== "text") continue;
       const already = outcomes.find((o) => o.label === (c.label || `(unlabelled ${c.kind})`));
       if (already && already.status === "filled") continue;
       const intent = classifyLabel(c.label);
@@ -606,7 +616,7 @@ export async function autofillApplication(
   job: EnrichedJob,
   personal: Personal,
   pack: ApplicationPack | null,
-  opts: { screenshotDir?: string; headless?: boolean; resume?: ResumeChoice } = {},
+  opts: { screenshotDir?: string; headless?: boolean; resume?: ResumeChoice; masterResume?: Resume } = {},
 ): Promise<AutofillResult> {
   const url = job.applicationUrl ?? job.sourceUrl;
   if (!url) throw new Error("This job has no application URL.");
@@ -639,7 +649,7 @@ export async function autofillApplication(
   // A resume tailored to THIS posting wins over anything generic in resumes/.
   // The caller normally decides and hands over the whole choice; the fallback
   // is for programmatic callers, never a re-derivation of one that was passed.
-  const outcomes = await fillForm(page, personal, pack, opts.resume ?? chooseResume());
+  const outcomes = await fillForm(page, personal, pack, opts.resume ?? chooseResume(), opts.masterResume);
 
   let screenshot: string | null = null;
   if (opts.screenshotDir) {

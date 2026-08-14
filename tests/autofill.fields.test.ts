@@ -409,3 +409,97 @@ describe("normalizeLabel", () => {
     expect(normalizeLabel("C++ / C#  and Node.js")).toBe("c++ c# and node.js");
   });
 });
+
+/**
+ * JOB-13. Two gaps found by running `autofill` against a live Ashby form: an
+ * application asks who you currently work for and what your title is, and the
+ * master resume has both, but nothing mapped them. Answering from
+ * `config/resume.yaml` keeps one source of truth rather than duplicating
+ * employer data into `personal.yaml`, where it would drift.
+ */
+describe("current employer and title", () => {
+  const role = (id: string, company: string, title: string, start: string, end: string | null) => ({
+    id,
+    company,
+    title,
+    start,
+    end,
+    location: "",
+    context: "",
+    employment_type: "full_time" as const,
+    bullets: [],
+  });
+
+  const withRoles = (roles: ReturnType<typeof role>[]): DecisionContext => ({
+    personal,
+    pack: null,
+    resume: { experience: roles } as never,
+  });
+
+  it("classifies the labels a real form uses", () => {
+    expect(classifyLabel("Current/Most Recent Company Name")).toBe("current_company");
+    expect(classifyLabel("Current Employer")).toBe("current_company");
+    expect(classifyLabel("Current/Most Recent Job Title")).toBe("current_title");
+    expect(classifyLabel("Current Title")).toBe("current_title");
+  });
+
+  it("does not mistake a company question for the employer question", () => {
+    // "Why do you want to work at this company" is not asking where you work.
+    expect(classifyLabel("Why do you want to work at this company?")).not.toBe("current_company");
+  });
+
+  it("prefers an ongoing role, latest start first", () => {
+    const ctx = withRoles([
+      role("r1", "BaseMyHome", "Lead Application Platform Developer", "2025-11", "2026-05"),
+      role("r2", "ShroomSpy", "Founder & Head of Technology", "2023-07", null),
+      role("r3", "LoopString", "Founder & Head of Technology", "2022-01", null),
+    ]);
+    const company = decide("Current/Most Recent Company Name", "current_company", ctx);
+    expect(company).toMatchObject({ action: "fill", value: "ShroomSpy" });
+    expect(decide("Current/Most Recent Job Title", "current_title", ctx)).toMatchObject({
+      action: "fill",
+      value: "Founder & Head of Technology",
+    });
+  });
+
+  it("names the role it used, so a wrong pick is visible in the report", () => {
+    const ctx = withRoles([role("r1", "ShroomSpy", "Founder", "2023-07", null)]);
+    const d = decide("Current Employer", "current_company", ctx);
+    expect(d.action).toBe("fill");
+    if (d.action === "fill") expect(d.why).toContain("ShroomSpy");
+  });
+
+  it("falls back to the most recently ended role when nothing is ongoing", () => {
+    const ctx = withRoles([
+      role("r1", "Older Co", "Engineer", "2019-01", "2021-06"),
+      role("r2", "Newer Co", "Senior Engineer", "2021-07", "2023-03"),
+    ]);
+    expect(decide("Current Employer", "current_company", ctx)).toMatchObject({
+      action: "fill",
+      value: "Newer Co",
+    });
+  });
+
+  it("breaks a same-start tie deterministically instead of picking arbitrarily", () => {
+    const a = withRoles([
+      role("r1", "Alpha Co", "Engineer", "2023-07", null),
+      role("r2", "Beta Co", "Engineer", "2023-07", null),
+    ]);
+    const b = withRoles([
+      role("r2", "Beta Co", "Engineer", "2023-07", null),
+      role("r1", "Alpha Co", "Engineer", "2023-07", null),
+    ]);
+    const first = decide("Current Employer", "current_company", a);
+    // Same roles, different array order, same answer.
+    expect(decide("Current Employer", "current_company", b)).toEqual(first);
+  });
+
+  it("skips rather than guessing when no resume is available", () => {
+    const d = decide("Current Employer", "current_company", { personal, pack: null });
+    expect(d.action).toBe("skip");
+  });
+
+  it("skips rather than guessing when the resume has no roles", () => {
+    expect(decide("Current Employer", "current_company", withRoles([])).action).toBe("skip");
+  });
+});
