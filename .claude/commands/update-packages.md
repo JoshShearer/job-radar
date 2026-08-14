@@ -108,15 +108,40 @@ Both must pass. On failure:
 
 ### Step 7b: Runtime check
 
-`tsc` and vitest do not catch everything that a dependency upgrade breaks here. Run:
+`tsc` and vitest do not catch everything that a dependency upgrade breaks here. But the
+runtime check has two tiers, and picking the wrong one is itself a violation.
+
+**Per package — offline smoke:**
+
+```bash
+npm run cli -- stats
+```
+
+That exercises `better-sqlite3` (opens the real database), `commander` (argument parsing),
+`yaml` (config load), and `zod` (config validation) in one command, and touches no network.
+Run this after every single package.
+
+**Once at the end of the session — the network sweep:**
 
 ```bash
 npm run cli -- sources
 ```
 
-That exercises `better-sqlite3` (database open), `commander` (argument parsing), `yaml`
-(config load), `zod` (config validation), and the HTTP path in one command. If it succeeds,
-the runtime surface is intact.
+> **Do not run the sweep after every package.** It requests ~105 third-party boards. A
+> ten-package session would hit every one of those companies ten times in a few minutes,
+> purely to check a lockfile. Rate limiting in `PoliteFetcher` is load-bearing precisely
+> because this project does not get to treat other people's endpoints as free. Run the
+> sweep once, after the last package, to confirm the HTTP path end to end.
+
+**When a package's specific failure mode is invisible to both tiers, test it directly.**
+A green suite proves nothing about a flag that parses and is then ignored:
+
+| Package | Direct check |
+|---|---|
+| `commander` | `cli -- top --limit 2` shows 2 rows, `-l 5` shows 5, bare `top` falls back to the declared default. Option parsing breaking silently is the whole risk. |
+| `zod` | Parse a config with an optional section **omitted** and assert the defaults that come back. zod 4 stopped parsing `.default()` values, so a partial default object drops fields while still typechecking. Check `http.delay_ms` specifically — that is the rate limit. |
+| `better-sqlite3` | Open the real database, not just `:memory:`. A native ABI mismatch surfaces on load, not at typecheck. |
+| `@anthropic-ai/sdk` | A negative type test: assign a bogus `cache_control` mode and confirm tsc rejects it. That proves the field is still strictly typed, so a rename would have failed the gate. |
 
 If `playwright` moved:
 
@@ -137,7 +162,7 @@ chore(deps): update dependencies
 
 <key version bumps, one per line>
 
-Gates: npm test (316 passed), npm run typecheck (clean), npm run cli -- sources (0 errors)
+Gates: npm test (316 passed), npm run typecheck (clean), cli -- stats (ok)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 ```
@@ -168,10 +193,15 @@ Conflicts → tell the user, leave the stash intact.
 | zod | 3.25.76 | 4.1.0 | Major — touches AnalysisSchema and config validation. Upgrade alone.
 
 ## Gates
-npm test          316 passed
-npm run typecheck clean
-cli -- sources    105 boards, 0 errors
+npm test          316 passed        (after every package)
+npm run typecheck clean             (after every package)
+cli -- stats      ok                (offline smoke, after every package)
+cli -- sources    104 live, 1 dead  (network sweep, once at the end)
 ```
+
+The final commit of a session carries the sweep result; the per-package commits carry the
+offline smoke. If the sweep reports a dead board, that is a `config/sources.yaml` issue, not
+a dependency one — file it with `/create-issue` rather than fixing it inside a deps commit.
 
 ## Examples
 
