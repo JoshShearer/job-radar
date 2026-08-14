@@ -18,7 +18,9 @@
     "typecheck": "tsc --noEmit",
     "serve": "tsx src/cli.ts serve --open",
     "dev": "tsx src/cli.ts serve --watch --open",
-    "discover": "tsx src/cli.ts discover"
+    "discover": "tsx src/cli.ts discover",
+    "test:unit": "vitest run --exclude tests/autofill.browser.test.ts",
+    "test:browser": "vitest run tests/autofill.browser.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
