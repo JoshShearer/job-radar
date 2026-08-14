@@ -14,8 +14,9 @@ import { buildDailyReport, writeReport } from "./report/daily.js";
 import { writeHtmlReport } from "./report/html.js";
 import { buildDashboard, writeDashboard } from "./report/dashboard.js";
 import { loadPack, packDir, prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
-import { loadPersonal } from "./config/personal.js";
-import { autofillApplication, renderOutcomes } from "./apply/autofill.js";
+import { loadPersonal, personalPath } from "./config/personal.js";
+import { autofillApplication, renderOutcomes, snapshotFields } from "./apply/autofill.js";
+import { capturableAnswers, saveAnswers, type FieldSnapshot } from "./apply/learn.js";
 import { chooseResume } from "./apply/resume-file.js";
 import { loadResume, resumeExists, resumePath, saveResume } from "./resume/load.js";
 import { allBullets, lintResume, type Resume } from "./resume/schema.js";
@@ -602,6 +603,22 @@ program
         log.info("Review every field, attach anything missing, then press the button yourself.");
         log.info("Close the browser window when you are done (or press Ctrl+C here).");
 
+        // Keep reading the form back while it is open, so anything typed by
+        // hand can be offered to personal.yaml and reused on the next
+        // application. Polling rather than reading once at the end: submitting
+        // navigates the page away, and the last good read before that is
+        // exactly the one worth keeping.
+        let snapshot: FieldSnapshot[] = [];
+        const watcher = setInterval(() => {
+          void snapshotFields(result.page)
+            .then((s) => {
+              if (s.length) snapshot = s;
+            })
+            .catch(() => {
+              /* navigating, or already gone - keep the last good read */
+            });
+        }, 2000);
+
         // Hold the process open so the browser stays up for review. The context
         // is never closed by us on the happy path - the human closes the window.
         const interrupted = await new Promise<boolean>((done) => {
@@ -625,6 +642,29 @@ program
         // work out what happened. Whether the form went through is a fact the
         // human owns, and inferring it from a URL or a success-looking screen
         // would be guessing at it.
+        clearInterval(watcher);
+
+        // Offer to keep what they answered by hand. Demographic questions and
+        // attestations are filtered out inside `capturableAnswers` - storing
+        // one would make the tool answer it automatically next time, which is
+        // the refusal turned inside out.
+        const learnable = capturableAnswers(snapshot, result.outcomes, personal.answers);
+        if (learnable.length) {
+          console.log("");
+          console.log(`You answered ${learnable.length} question(s) by hand:`);
+          for (const a of learnable) {
+            console.log(`  Q: ${a.match}`);
+            console.log(`  A: ${a.answer.length > 100 ? `${a.answer.slice(0, 99)}...` : a.answer}`);
+          }
+          const save = await confirmYesNo("Save these to personal.yaml so they fill themselves next time?");
+          if (save) {
+            const backup = saveAnswers(personalPath(), learnable);
+            log.info(`Saved ${learnable.length} answer(s). Backup: ${backup}`);
+          } else {
+            log.info("Not saved.");
+          }
+        }
+
         if (!interrupted) {
           console.log("");
           console.log("The form is filled and NOT submitted. Nothing was sent.");
