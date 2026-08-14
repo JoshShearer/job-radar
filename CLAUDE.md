@@ -69,7 +69,7 @@ Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds`
 
 ## Verification
 
-Before claiming anything works: `npm test` (452 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+Before claiming anything works: `npm test` (489 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
 
 `npm test` launches a real Chromium. `tests/autofill.browser.test.ts` drives a saved application form from `file://` and asserts the refusals in `src/apply/` — no checkbox ticked, no attestation affirmed, no demographic question answered, submit never clicked, each combobox reading only its own listbox. It needs `npx playwright install chromium`, and it **fails loudly** rather than skipping when the browser is missing: a refusal test that quietly disappears leaves the suite green on a machine where nothing was checked.
 
