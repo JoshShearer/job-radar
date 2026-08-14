@@ -89,6 +89,11 @@ Record what you ran and the outcome; it goes in the PR body under Testing.
 Run `/check-constraints`. Any **BLOCK** row stops the ship. This is not advisory — the
 constraints it checks are the ones `CLAUDE.md` calls non-negotiable.
 
+This gate works whether or not the diff is committed yet: it diffs against
+`$(git merge-base origin/main HEAD)`, which covers committed, staged, and unstaged changes.
+If it reports every constraint as PASS on a diff you know touches `src/`, treat that as the
+gate being broken rather than the code being clean, and check the range first.
+
 ## Step 6: Critic gate
 
 **Skip**: `--skip-critique` → log it and note it in the PR body.
@@ -106,7 +111,16 @@ matches `HEAD`, reuse it. Otherwise run `/critique`.
 
 ## Step 7: Stage and commit
 
+**If the work is already committed** (you committed while implementing, or `/ship` is being
+re-run), skip to Step 8. Do not create an empty commit and do not amend a commit that has
+already been pushed. Confirm with `git log origin/main..HEAD --oneline` that the commits
+exist and their messages are right; amend only if nothing has been pushed yet.
+
 Footer: no Linear issue → no footer. Issue found → `Resolves JOB-XX`.
+
+> `Resolves JOB-XX` is for humans reading git history and for cross-referencing in
+> `/update-docs`. It does **not** close the Linear issue — that is a GitHub keyword, and
+> Linear's GitHub integration is not connected here. `/finish` Step 10 does the closing.
 
 ```bash
 git add -A
@@ -209,7 +223,7 @@ Commit: abc1234 - feat(sources): add Workable adapter
 PR: <url from gh>
 
 Linear JOB-12:
-- Status: In Review
+- Status: In Progress (no In Review status on this team — the open PR is the signal)
 - PR linked, implementation notes added
 
 No CI configured — the gates that ran are the ones above.
