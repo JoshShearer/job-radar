@@ -3,7 +3,13 @@ import { resolve } from "node:path";
 import type { CareerProfile, SourcesConfig } from "../config/schema.js";
 import type { EnrichedJob } from "../model/job.js";
 import type { JobRepo } from "../db/repo.js";
-import { PRIORITY_LABELS, nextAction, STALE_AFTER_DAYS, type Priority } from "../model/status.js";
+import {
+  GHOSTED_AFTER_DAYS,
+  PRIORITY_LABELS,
+  nextAction,
+  STALE_AFTER_DAYS,
+  type Priority,
+} from "../model/status.js";
 import { formatSalary } from "../lib/salary.js";
 import { paths } from "../config/load.js";
 
@@ -68,6 +74,53 @@ function renderInFlight(jobs: EnrichedJob[], now: Date): string[] {
   L.push("_Move these along: `npm run cli -- status <job-id> SCREEN` (or REJECTED / GHOSTED). " +
     "Recording a rejection matters as much as recording a win - the funnel can only diagnose " +
     "targeting versus closing if the failures are in it too._");
+  L.push("");
+
+  L.push(...renderOutcomeAsks(needsAttention, now));
+  return L;
+}
+
+/**
+ * The explicit ask, for roles that have gone quiet.
+ *
+ * The table above reports state. This asks a question, because state is not
+ * what is missing - an outcome is. Nothing here decides anything: a status past
+ * GHOSTED_AFTER_DAYS is called out as *probably* dead and still requires the
+ * human to say so. Whether an employer stopped replying is a fact about them,
+ * and a clock is not evidence of it.
+ */
+function renderOutcomeAsks(stale: EnrichedJob[], now: Date): string[] {
+  if (stale.length === 0) return [];
+
+  const L: string[] = [];
+  L.push("### Needs an outcome");
+  L.push("");
+  L.push(
+    `${stale.length} role${stale.length === 1 ? " has" : "s have"} gone quiet. ` +
+      "Every rate on `stats` is computed from these answers, so an unrecorded outcome is not a " +
+      "neutral gap - it is a number the funnel gets wrong.",
+  );
+  L.push("");
+  L.push("| Role | Status | Quiet for | Record it |");
+  L.push("|---|---|---|---|");
+  for (const j of stale) {
+    const days = daysSince(j.statusChangedAt, now);
+    const likelyGhosted = days >= GHOSTED_AFTER_DAYS;
+    const outcomes = likelyGhosted ? "GHOSTED / REJECTED / SCREEN" : "SCREEN / REJECTED / GHOSTED";
+    // The threshold is interpolated rather than spelled out, so moving
+    // GHOSTED_AFTER_DAYS cannot leave the briefing quoting a number that is no
+    // longer the one being applied.
+    const note = likelyGhosted ? ` - no reply in ${GHOSTED_AFTER_DAYS}+ days, probably ghosted` : "";
+    L.push(
+      `| ${j.company} - ${j.title} | ${j.status} | ${days}d | ` +
+        `\`npm run cli -- status ${j.id} <${outcomes}>\`${note} |`,
+    );
+  }
+  L.push("");
+  L.push(
+    "_`npm run cli -- inflight` lists these with the same commands, " +
+      "and accepts a company name in place of the id._",
+  );
   L.push("");
   return L;
 }
@@ -176,7 +229,9 @@ export function buildDailyReport(input: ReportInput): { markdown: string; jobCou
   L.push("```bash");
   L.push("npm run cli -- show <job-id>          # full analysis for one job");
   L.push("npm run cli -- status <job-id> APPLY  # mark it for application");
-  L.push("npm run cli -- status <job-id> SKIP   # get it out of the slate");
+  L.push("npm run cli -- status <job-id> SKIPPED # get it out of the slate");
+  L.push("npm run cli -- inflight               # everything live, with the command to move each one");
+  L.push("npm run cli -- status <company> SCREEN # a company name works too, when it is unambiguous");
   L.push("npm run cli -- stats                  # funnel conversion + bottleneck");
   L.push("```");
   L.push("");

@@ -218,6 +218,9 @@ npm run cli -- apply <job-id> --open       # prepare an application pack (never 
 npm run cli -- autofill <job-id>           # fill the real form in a browser (never submits)
 npm run cli -- autofill <job-id> --headless # dry run: report what it would fill, no window
 npm run cli -- status <job-id> APPLIED     # move a job through the funnel
+npm run cli -- status "Acme" SCREEN        # a company name works when it is unambiguous
+npm run cli -- inflight                    # everything live, with the command to move each one
+npm run cli -- inflight --stale            # only the ones that have gone quiet
 npm run cli -- stats                       # conversion rates + bottleneck diagnosis
 npm run cli -- sources                     # health-check every board
 npm run cli -- open                        # open the latest HTML briefing
@@ -227,7 +230,7 @@ npm run cli -- calibrate                   # how far the keyword engine drifts f
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 316 tests
+npm test                                   # 355 tests
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -433,7 +436,7 @@ Two sections make it worth reading before anything else:
 - **Decide these first** — the genuine tradeoffs only you can resolve. On the Vercel forward-deployed role that was travel (25-40% is a week a month, and it is a requirement rather than a preference), Professional Services versus product engineering, and whether a 216-day-old req is even live.
 - **Do NOT claim** — requirements in the posting you cannot evidence, stated explicitly so the boundary is not left implicit. Claiming one of these is the single unrecoverable mistake in a job search.
 
-**It prepares and never submits.** No form is filled, no message is sent, no request goes anywhere except to the model. Status is set to `SAVED`, not `APPLIED` — recording an application that has not been submitted would put a phantom data point into the funnel, and the funnel is the thing that tells you what to fix. Move it to `APPLIED` yourself once you have actually submitted.
+**It prepares and never submits.** No form is filled, no message is sent, no request goes anywhere except to the model. Status advances to `APPLY`, the intent half of the pair, and never to `APPLIED`: recording an application that has not been submitted would put a phantom data point into the funnel, and the funnel is the thing that tells you what to fix. It advances only from `NEW`, `REVIEWED`, or `SAVED`, so preparing a fresh pack for a role already at `SCREEN` leaves it at `SCREEN`.
 
 `applications/` is gitignored.
 
@@ -451,6 +454,8 @@ npm run cli -- autofill b5b545ce17f3
 A real Chromium window opens on the posting, the form fills in front of you, and the run stops. **The submit button is never touched.** Headed is the default on purpose: watching it type is the review step. `--headless` is a dry run that reports what it would fill and then throws the filled page away.
 
 Every run writes `applications/<job-id>-<company>/autofill-report.md` plus a full-page screenshot, split into what was filled, what needs you, and what was deliberately left alone.
+
+**After you close the browser it asks one question:** whether you submitted the form yourself. Answering `y` records `APPLIED`; anything else records nothing: `n`, a blank line, walking away, a piped run with no terminal. It asks *after* the window closes because that is when you know the answer, and it never looks at the page to work it out: whether a form went through is a fact you own, and inferring it from a URL or a success-looking screen would be guessing at it. Nothing about this touches the submit button.
 
 ### What it will not answer
 
@@ -487,6 +492,18 @@ NEW → REVIEWED → SAVED/APPLY → APPLIED → CONTACTED → SCREEN
     → INTERVIEW → FINAL → OFFER
     (or SKIPPED / REJECTED / WITHDRAWN / GHOSTED)
 ```
+
+Two of those transitions happen without you typing anything: `apply` advances a job to `APPLY`, and `autofill` offers to record `APPLIED` after you close the browser. Neither ever moves a job backwards, and neither ever sets a terminal outcome. `SCREEN`, `REJECTED`, `GHOSTED` and the rest describe what an employer did, and only you can say what that was.
+
+The rest is deliberately low-friction rather than automatic:
+
+```bash
+npm run cli -- inflight            # everything live, its age, and the command to move it
+npm run cli -- inflight --stale    # only what has gone quiet
+npm run cli -- status "Acme" SCREEN  # a company name resolves when it is unambiguous
+```
+
+An ambiguous company name is never resolved by picking one; the candidates are printed and the command stops. The daily briefing carries a **Needs an outcome** section listing anything past its expected response window, with the exact command per row; past 30 days of silence it says a role has probably been ghosted, and still waits for you to confirm it.
 
 `stats` computes conversion between adjacent funnel stages and diagnoses the bottleneck — but **refuses to diagnose below ~15 applications**, reporting a sample warning instead. Confident nonsense from four data points is worse than no diagnosis.
 
@@ -560,7 +577,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 316 tests
+npm test          # 355 tests
 npm run typecheck
 ```
 
@@ -583,7 +600,7 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, 316 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, 355 tests.
 
 A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 

@@ -335,6 +335,34 @@ export class JobRepo {
     return null;
   }
 
+  /**
+   * Jobs at a company whose name starts with `query`, in-flight ones first.
+   *
+   * Typing a company name is the low-friction path for moving a job along; an
+   * id has to be copied from somewhere. The caller decides what to do with more
+   * than one hit - this deliberately returns every match rather than picking,
+   * so an ambiguous name can be refused instead of guessed at.
+   *
+   * The query is normalized the same way the stored column was. `company` is
+   * "Acme Corp, Inc." and `company_normalized` is "acme", so matching the raw
+   * input against that column finds nothing at all. Normalizing also strips the
+   * characters LIKE would treat as wildcards, so the prefix is literal.
+   */
+  findByCompany(query: string, limit = 20): EnrichedJob[] {
+    const normalized = normalizeForIdentity(query);
+    if (!normalized) return [];
+    const placeholders = IN_FLIGHT_STATUSES.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM jobs
+         WHERE company_normalized LIKE ?
+         ORDER BY status IN (${placeholders}) DESC, status_changed_at DESC, application_roi DESC
+         LIMIT ?`,
+      )
+      .all(`${normalized}%`, ...IN_FLIGHT_STATUSES, limit) as JobRow[];
+    return rows.map(toEnriched);
+  }
+
   /** Jobs that need scoring: never scored, or scored before the last content change. */
   needingScore(): NormalizedJob[] {
     const rows = this.db.prepare("SELECT * FROM jobs WHERE scored_at IS NULL").all() as JobRow[];
