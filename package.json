@@ -24,7 +24,7 @@
     "better-sqlite3": "^11.10.0",
     "commander": "^14.0.0",
     "yaml": "^2.9.0",
-    "zod": "^3.25.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
