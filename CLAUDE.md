@@ -69,4 +69,10 @@ Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds`
 
 ## Verification
 
-Before claiming anything works: `npm test` (408 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+Before claiming anything works: `npm test` (452 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+
+`npm test` launches a real Chromium. `tests/autofill.browser.test.ts` drives a saved application form from `file://` and asserts the refusals in `src/apply/` — no checkbox ticked, no attestation affirmed, no demographic question answered, submit never clicked, each combobox reading only its own listbox. It needs `npx playwright install chromium`, and it **fails loudly** rather than skipping when the browser is missing: a refusal test that quietly disappears leaves the suite green on a machine where nothing was checked.
+
+It costs about 12s of the ~13s run. That stays in the default `npm test` rather than behind an opt-in flag, because a refusal test you have to remember to run is one that does not run. `npm run test:unit` (1s) is the fast inner loop while iterating; `npm run test:browser` runs the harness alone. **`npm test` is the gate** — neither of the other two is sufficient before claiming something works.
+
+The fixture's combobox behaviour is a shim standing in for react-select, so it cannot notice react-select changing the contract it depends on. Running `autofill` against a live posting stays part of shipping any `src/apply/` change; the harness supplements that, it does not replace it.

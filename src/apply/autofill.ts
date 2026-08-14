@@ -315,30 +315,25 @@ function offered(options: string[], limit = 8): string {
   return ` Offered: ${shown.join(", ")}${more}`;
 }
 
-export async function autofillApplication(
-  job: EnrichedJob,
+/**
+ * Decide and fill, given a page that is already open on the form.
+ *
+ * Split from `autofillApplication` for the same reason `detectChallenge` was
+ * split from the page: this is the half that carries the refusals, and it is
+ * worth being able to run it against a saved form instead of only against a
+ * live posting. Launching a browser a human watches is a separate concern from
+ * deciding what belongs in each field, and only the second one can make a false
+ * statement on an application.
+ *
+ * Everything here is reported, never silently skipped. The return value is the
+ * whole record of what happened.
+ */
+export async function fillForm(
+  page: Page,
   personal: Personal,
   pack: ApplicationPack | null,
-  opts: { screenshotDir?: string; headless?: boolean; resume?: ResumeChoice } = {},
-): Promise<AutofillResult> {
-  const url = job.applicationUrl ?? job.sourceUrl;
-  if (!url) throw new Error("This job has no application URL.");
-
-  const context = await chromium.launchPersistentContext(BROWSER_PROFILE, {
-    // Headed by default: watching it type IS the review step. Headless exists
-    // to verify field classification against a live form without opening a
-    // window, and is useless for actually applying - the filled form dies with
-    // the process.
-    headless: opts.headless === true,
-    viewport: { width: 1280, height: 1000 },
-    args: ["--window-size=1300,1050"],
-  });
-  const page = context.pages()[0] ?? (await context.newPage());
-
-  log.info(`Opening ${url}`);
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-  await page.waitForTimeout(1200);
-
+  resume: ResumeChoice | null,
+): Promise<FieldOutcome[]> {
   const { visible, present } = pageProbes(page);
   const challenge = await detectChallenge(visible, present);
   if (challenge?.kind === "blocking") {
@@ -362,11 +357,6 @@ export async function autofillApplication(
         "there is a CAPTCHA widget here. It is not touched. If it shows a checkbox, tick it yourself before submitting",
     });
   }
-  // A resume tailored to THIS posting wins over anything generic in resumes/.
-  // The caller normally decides and hands over the whole choice; the fallback
-  // is for programmatic callers, never a re-derivation of one that was passed.
-  const resume = opts.resume ?? chooseResume();
-
   for (const c of controls) {
     // File inputs are usually labelled by their styled button ("Attach"), which
     // says nothing. Their id does: `resume`, `cover_letter`.
@@ -530,6 +520,38 @@ export async function autofillApplication(
       }
     }
   }
+
+  return outcomes;
+}
+
+export async function autofillApplication(
+  job: EnrichedJob,
+  personal: Personal,
+  pack: ApplicationPack | null,
+  opts: { screenshotDir?: string; headless?: boolean; resume?: ResumeChoice } = {},
+): Promise<AutofillResult> {
+  const url = job.applicationUrl ?? job.sourceUrl;
+  if (!url) throw new Error("This job has no application URL.");
+
+  const context = await chromium.launchPersistentContext(BROWSER_PROFILE, {
+    // Headed by default: watching it type IS the review step. Headless exists
+    // to verify field classification against a live form without opening a
+    // window, and is useless for actually applying - the filled form dies with
+    // the process.
+    headless: opts.headless === true,
+    viewport: { width: 1280, height: 1000 },
+    args: ["--window-size=1300,1050"],
+  });
+  const page = context.pages()[0] ?? (await context.newPage());
+
+  log.info(`Opening ${url}`);
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  await page.waitForTimeout(1200);
+
+  // A resume tailored to THIS posting wins over anything generic in resumes/.
+  // The caller normally decides and hands over the whole choice; the fallback
+  // is for programmatic callers, never a re-derivation of one that was passed.
+  const outcomes = await fillForm(page, personal, pack, opts.resume ?? chooseResume());
 
   let screenshot: string | null = null;
   if (opts.screenshotDir) {
