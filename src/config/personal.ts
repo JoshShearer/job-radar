@@ -37,7 +37,10 @@ export const PersonalSchema = z.object({
       website: z.string().default(""),
       twitter: z.string().default(""),
     })
-    .default({}),
+    // zod 4: `.default()` takes the parsed output, `.prefault()` takes the raw
+    // input and runs it through the schema. `{}` here means "section omitted -
+    // let each field fall back to its own empty default", which is prefault.
+    .prefault({}),
   work_eligibility: z.object({
     /**
      * `null` means unstated, and unstated means the field is left blank and
@@ -66,7 +69,9 @@ export const PersonalSchema = z.object({
       desired_salary: z.string().default(""),
       notice_period: z.string().default(""),
     })
-    .default({}),
+    // See the note on `links` above: prefault, not default, so an omitted
+    // section still yields empty strings rather than a populated object.
+    .prefault({}),
   /**
    * Escape hatch for company-specific questions. First match wins, and these
    * are checked before any built-in rule, so a bad automatic answer can always
