@@ -69,4 +69,4 @@ Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds`
 
 ## Verification
 
-Before claiming anything works: `npm test` (406 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+Before claiming anything works: `npm test` (408 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.

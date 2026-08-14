@@ -29,18 +29,32 @@ afterAll(() => {
 const get = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${port}${path}`, init);
 
 describe("report server", () => {
-  it("serves an index listing past briefings", async () => {
+  // The whole point of the landing page. `--open` opens the root, so if the
+  // root is a list of links then that list is what "the dashboard" means to
+  // anyone who runs the server - which is exactly how this shipped wrong once.
+  it("serves the dashboard at the root", async () => {
     const res = await get("/");
     expect(res.status).toBe(200);
     const body = await res.text();
-    expect(body).toContain("Job Radar");
+    expect(body).toContain("Dashboard");
+    expect(body).not.toContain("Past briefings");
+  });
+
+  it("serves the dashboard at /index.html too", async () => {
+    expect(await (await get("/index.html")).text()).toContain("Dashboard");
+  });
+
+  it("serves the archive at /archive", async () => {
+    const res = await get("/archive");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Past briefings");
     expect(body).toContain("2026-08-12");
-    expect(body).toContain("latest.html");
     expect(body).toContain("latest-briefing.html");
   });
 
   it("keeps the rolling files out of the dated archive list", async () => {
-    const body = await (await get("/")).text();
+    const body = await (await get("/archive")).text();
     // Both rolling files are linked in the header, and neither belongs in the
     // list below it - "latest-briefing" is not a date, and it would sort in
     // among them as though it were one. Nothing failed when this was wrong,
@@ -51,16 +65,16 @@ describe("report server", () => {
     expect(list).not.toContain("latest.html");
   });
 
-  it("only offers a rolling file that exists", async () => {
-    // Header links are existence-gated, so a directory with no dashboard shows
-    // no dashboard link rather than a 404 dressed as navigation.
+  it("falls back to the archive at the root when no dashboard exists yet", async () => {
+    // A fresh checkout should get a page that explains itself, not a 404.
     const empty = mkdtempSync(join(tmpdir(), "job-radar-serve-empty-"));
     const started = await startReportServer({ dir: empty, port: 45899 });
     try {
       const body = await (await fetch(`http://127.0.0.1:${started.port}/`)).text();
-      expect(body).not.toContain('href="/latest.html"');
-      expect(body).not.toContain('href="/latest-briefing.html"');
       expect(body).toContain("No briefings yet");
+      // Header links are existence-gated, so nothing points at a file that
+      // is not there.
+      expect(body).not.toContain('href="/latest-briefing.html"');
     } finally {
       started.close();
       rmSync(empty, { recursive: true, force: true });

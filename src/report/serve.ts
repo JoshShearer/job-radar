@@ -71,10 +71,29 @@ export function createReportServer(opts: ServeOptions) {
       return;
     }
 
+    // The root is the dashboard, because the root is where a browser lands and
+    // the dashboard is the thing worth landing on. The archive moved to
+    // /archive rather than keeping the front door for a list of links.
+    //
+    // Falls back to the archive index when no dashboard has been generated
+    // yet, so a fresh checkout gets a page that explains itself instead of a
+    // 404.
     if (pathname === "/" || pathname === "/index.html") {
-      const body = renderIndex(root);
+      const dashboard = resolve(root, "latest.html");
+      if (existsSync(dashboard)) {
+        const body = readFileSync(dashboard);
+        res.writeHead(200, htmlHeaders("text/html; charset=utf-8"));
+        res.end(req.method === "HEAD" ? undefined : body);
+        return;
+      }
       res.writeHead(200, htmlHeaders("text/html; charset=utf-8"));
-      res.end(req.method === "HEAD" ? undefined : body);
+      res.end(req.method === "HEAD" ? undefined : renderIndex(root));
+      return;
+    }
+
+    if (pathname === "/archive" || pathname === "/archive/") {
+      res.writeHead(200, htmlHeaders("text/html; charset=utf-8"));
+      res.end(req.method === "HEAD" ? undefined : renderIndex(root));
       return;
     }
 
@@ -166,9 +185,9 @@ function renderIndex(root: string): string {
 </style></head>
 <body><main>
 <h1>Job Radar</h1>
-<p class="sub">Local briefing archive. Served from 127.0.0.1 only.</p>
+<p class="sub">Past briefings. Served from 127.0.0.1 only.</p>
 <p class="links">
-${hasDashboard ? '<a class="latest" href="/latest.html">Dashboard &rarr;</a>' : ""}
+${hasDashboard ? '<a class="latest" href="/">Dashboard &rarr;</a>' : ""}
 ${hasBriefing ? '<a class="latest secondary" href="/latest-briefing.html">Today\'s briefing &rarr;</a>' : ""}
 </p>
 <ul>
