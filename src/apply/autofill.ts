@@ -134,7 +134,7 @@ function pageProbes(page: Page) {
  * has (aria-labelledby, label[for], ancestor <label>).
  */
 async function enumerateControls(page: Page): Promise<ControlInfo[]> {
-  return page.evaluate(() => {
+  return page.evaluate((SELECTOR) => {
     const out: Array<{
       idx: number;
       kind: string;
@@ -144,9 +144,7 @@ async function enumerateControls(page: Page): Promise<ControlInfo[]> {
       required: boolean;
     }> = [];
 
-    const nodes = Array.from(
-      document.querySelectorAll<HTMLElement>("input, textarea, select, [role='combobox']"),
-    );
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>(SELECTOR));
 
     let idx = 0;
     for (const el of nodes) {
@@ -209,7 +207,87 @@ async function enumerateControls(page: Page): Promise<ControlInfo[]> {
       idx++;
     }
     return out;
-  }) as Promise<ControlInfo[]>;
+  }, CONTROL_SELECTOR) as Promise<ControlInfo[]>;
+}
+
+/** Everything `enumerateControls` will look at. Kept in one place so the wait
+ * and the enumeration cannot drift apart. */
+const CONTROL_SELECTOR = "input, textarea, select, [role='combobox']";
+
+/**
+ * Wait for a client-rendered form to finish painting, and report how many
+ * controls it settled on.
+ *
+ * A flat post-navigation delay is a guess, and it was wrong: Ashby renders its
+ * application form several seconds after `domcontentloaded`, so a 1.2s wait
+ * enumerated an empty document and produced "Filled: 0 / For you: 0" - which
+ * reads exactly like a form that had nothing to fill. Silent and plausible is
+ * the worst failure this tool has.
+ *
+ * Settling matters as much as appearing. Controls often arrive in bursts, so
+ * returning on the first one enumerates half a form and skips the rest without
+ * saying so. This waits for the count to hold steady for `settleMs` before
+ * trusting it.
+ *
+ * `settleMs` is deliberately as long as the fixed delay it replaces: bursts
+ * separated by more than that still return early, and no finite wait can rule
+ * that out, so the window is generous rather than clever. The cost is the same
+ * ~1.2s that was already spent unconditionally after every navigation - now
+ * spent measuring the form instead of guessing at it.
+ *
+ * A page that never renders a control returns 0 at the cap rather than
+ * throwing: that is a real answer for a posting whose form lives behind a link,
+ * and the caller reports it.
+ */
+export const CONTROL_SETTLE_MS = 1200;
+export const CONTROL_WAIT_MS = 15000;
+
+export async function waitForControls(
+  page: Page,
+  opts: { timeoutMs?: number; settleMs?: number } = {},
+): Promise<number> {
+  const timeoutMs = opts.timeoutMs ?? CONTROL_WAIT_MS;
+  const settleMs = opts.settleMs ?? CONTROL_SETTLE_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  let last = -1;
+  let stableSince = 0;
+
+  while (Date.now() < deadline) {
+    let count: number;
+    try {
+      count = await page.locator(CONTROL_SELECTOR).count();
+    } catch {
+      // Navigating or otherwise mid-flight; try again.
+      count = -1;
+    }
+
+    if (count > 0 && count === last) {
+      if (Date.now() - stableSince >= settleMs) return count;
+    } else {
+      last = count;
+      stableSince = Date.now();
+    }
+    await page.waitForTimeout(150);
+  }
+
+  return Math.max(last, 0);
+}
+
+/**
+ * Get a freshly navigated page ready to be read, and report how many controls
+ * it settled on.
+ *
+ * A page showing an active challenge will never paint an application form, so
+ * waiting the full control timeout on one just delays the refusal by fifteen
+ * seconds. `fillForm` re-checks and is what actually stops the run; this only
+ * avoids pausing before it does.
+ */
+export async function settlePage(page: Page): Promise<number> {
+  const { visible, present } = pageProbes(page);
+  const challenge = await detectChallenge(visible, present);
+  if (challenge?.kind === "blocking") return 0;
+  return waitForControls(page);
 }
 
 /**
@@ -546,7 +624,17 @@ export async function autofillApplication(
 
   log.info(`Opening ${url}`);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-  await page.waitForTimeout(1200);
+
+  // Boards that render the form client-side paint their controls seconds after
+  // this point, so the page is polled until the control count settles rather
+  // than guessed at with a fixed delay. `fillForm` re-reads the DOM itself, and
+  // detectChallenge runs inside it before anything is typed, so waiting here
+  // does not let a challenge page slip past - it only stops us reading a form
+  // that has not been drawn yet.
+  const painted = await settlePage(page);
+  if (painted === 0) {
+    log.warn("No form controls appeared on this page. It may render the form behind a link or button.");
+  }
 
   // A resume tailored to THIS posting wins over anything generic in resumes/.
   // The caller normally decides and hands over the whole choice; the fallback
