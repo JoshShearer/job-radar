@@ -46,6 +46,41 @@ export function isInFlight(status: string): boolean {
 }
 
 /**
+ * Which statuses a lifecycle-advancing command may move a job away from.
+ *
+ * An explicit allowlist rather than a rank comparison, because a rank cannot
+ * express this rule: REVIEWED and APPLY sit at the same position in the order
+ * map inside stagesReached, so "strictly greater rank" would refuse the
+ * REVIEWED -> APPLY move that `apply` is supposed to make.
+ *
+ * Everything absent from a list is left exactly where it is. That covers two
+ * different cases on purpose:
+ *
+ *  - Already further along (APPLIED, SCREEN, OFFER...). Preparing a pack for a
+ *    job that is already at SCREEN must never drag it back to APPLY.
+ *  - Deliberately parked (SKIPPED, REJECTED, WITHDRAWN, GHOSTED). A human said
+ *    something about these. A command that prepares or fills does not get to
+ *    overrule that quietly; it reports and leaves them alone.
+ */
+const ADVANCE_FROM = {
+  APPLY: ["NEW", "REVIEWED", "SAVED"],
+  APPLIED: ["NEW", "REVIEWED", "SAVED", "APPLY"],
+} as const satisfies Record<string, readonly Status[]>;
+
+/** The two statuses a command may set on the candidate's behalf. */
+export type AdvanceTarget = keyof typeof ADVANCE_FROM;
+
+/**
+ * The status to write, or null when the job should be left alone.
+ *
+ * Deterministic and total: every status in STATUSES has a defined answer for
+ * every target, and the answer never depends on anything but the two inputs.
+ */
+export function advanceStatus(current: Status, target: AdvanceTarget): Status | null {
+  return (ADVANCE_FROM[target] as readonly Status[]).includes(current) ? target : null;
+}
+
+/**
  * Days after which an in-flight role with no movement is worth a nudge.
  * Applications go quiet by default; the point of tracking is to notice.
  */
@@ -60,6 +95,16 @@ export const STALE_AFTER_DAYS: Readonly<Record<string, number>> = {
   OFFER: 3,
 };
 
+/**
+ * Days of silence after which an in-flight role has probably gone nowhere.
+ *
+ * Only ever used to ASK. Nothing sets GHOSTED automatically: whether an
+ * employer stopped replying is a fact about what they did, and inferring it
+ * from a clock would put a made-up outcome into the funnel that the funnel then
+ * treats as evidence.
+ */
+export const GHOSTED_AFTER_DAYS = 30;
+
 /** What to do next, given a status and how long it has sat there. */
 export function nextAction(status: string, daysInStatus: number): string {
   const stale = daysInStatus >= (STALE_AFTER_DAYS[status] ?? 7);
@@ -67,7 +112,11 @@ export function nextAction(status: string, daysInStatus: number): string {
     case "SAVED":
       return stale ? "prepared but never submitted - finish it or skip it" : "pack prepared; submit when ready";
     case "APPLY":
-      return stale ? "marked to apply and still not applied" : "marked to apply";
+      // `apply` sets this status, so a pack exists on disk. Saying only
+      // "marked to apply" would hide that and read as untouched work.
+      return stale
+        ? "pack prepared and still not submitted - finish it or skip it"
+        : "pack prepared; submit when ready";
     case "APPLIED":
       return stale ? "no reply - send the outreach draft or follow up" : "waiting on them";
     case "CONTACTED":

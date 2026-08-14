@@ -35,7 +35,18 @@ import { discoverCompany, type DiscoveryHit } from "./sources/discover.js";
 import { startReportServer } from "./report/serve.js";
 import { PoliteFetcher } from "./lib/http.js";
 import { log, setVerbose } from "./lib/log.js";
-import { isStatus, STATUSES, INTERVIEW_STAGES } from "./model/status.js";
+import {
+  advanceStatus,
+  isStatus,
+  nextAction,
+  GHOSTED_AFTER_DAYS,
+  STALE_AFTER_DAYS,
+  STATUSES,
+  INTERVIEW_STAGES,
+} from "./model/status.js";
+import { statusAfterAutofill } from "./apply/record.js";
+import { resolveJob } from "./db/resolve.js";
+import { confirmYesNo } from "./lib/prompt.js";
 import { formatSalary } from "./lib/salary.js";
 
 // Must run before any command reads process.env for credentials or overrides.
@@ -188,10 +199,19 @@ program
       const markdown = renderPack(job, pack, profile);
       const { dir, md, html } = writePack(job, markdown, pack);
 
-      // SAVED, not APPLIED. Recording an application that has not been
+      // APPLY, not APPLIED. Recording an application that has not been
       // submitted would corrupt the funnel metrics with a phantom data point,
-      // and the funnel is the thing that tells him what to fix.
-      repo.setStatus(job.id, "SAVED", "Application pack prepared; not yet submitted");
+      // and the funnel is the thing that tells him what to fix. APPLY is the
+      // intent half of that pair, and `stagesReached` maps it to QUALIFIED
+      // exactly as SAVED was, so the APPLIED count does not move here.
+      //
+      // Conditional, because this used to be an unconditional write: preparing
+      // a fresh pack for a role already at SCREEN dragged it back down the
+      // funnel. advanceStatus refuses every backwards move.
+      const nextStatus = advanceStatus(job.status, "APPLY");
+      if (nextStatus) {
+        repo.setStatus(job.id, nextStatus, "Application pack prepared; not yet submitted");
+      }
 
       console.log("");
       console.log(markdown);
@@ -202,7 +222,11 @@ program
       log.info(
         `  tokens   : ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`,
       );
-      log.info(`Status set to SAVED. After you actually submit: job-radar status ${job.id} APPLIED`);
+      log.info(
+        nextStatus
+          ? `Status ${job.status} -> ${nextStatus}. After you actually submit: job-radar status ${job.id} APPLIED`
+          : `Status left at ${job.status} - this job is already past "marked to apply", so nothing was changed.`,
+      );
       log.info(`To fill the real form in a browser: job-radar autofill ${job.id}`);
 
       if (opts.open) {
@@ -557,15 +581,48 @@ program
       } else {
         log.info("The browser is open and the form is filled. Nothing has been submitted.");
         log.info("Review every field, attach anything missing, then press the button yourself.");
-        log.info(`Afterwards: job-radar status ${job.id} APPLIED`);
         log.info("Close the browser window when you are done (or press Ctrl+C here).");
 
         // Hold the process open so the browser stays up for review. The context
         // is never closed by us on the happy path - the human closes the window.
-        await new Promise<void>((done) => {
-          result.context.on("close", () => done());
-          process.once("SIGINT", () => done());
+        const interrupted = await new Promise<boolean>((done) => {
+          const onSigint = () => done(true);
+          result.context.on("close", () => {
+            // Without this removal the handler outlives the wait, and because
+            // any SIGINT listener suppresses Node's default exit, Ctrl+C at the
+            // prompt below would be swallowed and the process would not die.
+            process.removeListener("SIGINT", onSigint);
+            done(false);
+          });
+          process.once("SIGINT", onSigint);
         });
+
+        // Asked AFTER the browser closes, because that is when the human knows
+        // the answer. Asking while the form is still open would be asking them
+        // to predict themselves, and a predicted APPLIED is the phantom data
+        // point the funnel must not contain.
+        //
+        // This records; it does not submit, and it does not look at the page to
+        // work out what happened. Whether the form went through is a fact the
+        // human owns, and inferring it from a URL or a success-looking screen
+        // would be guessing at it.
+        if (!interrupted) {
+          console.log("");
+          console.log("The form is filled and NOT submitted. Nothing was sent.");
+          const confirmed = await confirmYesNo("If you submitted it yourself, record that here?");
+          const recorded = statusAfterAutofill(job.status, confirmed);
+          if (recorded) {
+            repo.setStatus(job.id, recorded);
+            log.info(`Recorded: ${job.status} -> ${recorded}`);
+          } else if (confirmed) {
+            log.info(
+              `Status left at ${job.status} - it is already past APPLIED, or parked. ` +
+                `Change it yourself if that is wrong: job-radar status ${job.id} <status>`,
+            );
+          } else {
+            log.info(`Nothing recorded. When you do submit: job-radar status ${job.id} APPLIED`);
+          }
+        }
       }
 
       return { ok: true, filled: result.outcomes.filter((o) => o.status === "filled").length };
@@ -675,16 +732,17 @@ program
 // ---- show -----------------------------------------------------------------
 
 program
-  .command("show <jobId>")
-  .description("Full detail for one job (id or unique prefix)")
+  .command("show <job>")
+  .description("Full detail for one job (id, unique id prefix, or unambiguous company name)")
   .action(async (jobId: string) => {
     await withRepo("show", (repo) => {
-      const job = repo.get(jobId);
-      if (!job) {
-        console.error(`No job matches "${jobId}". Use \`job-radar top\` to list ids.`);
+      const resolved = resolveJob(repo, jobId, { byCompany: true });
+      if (!resolved.job) {
+        console.error(resolved.message);
         process.exitCode = 1;
         return { found: false };
       }
+      const job = resolved.job;
 
       console.log("");
       console.log(`${job.title}`);
@@ -762,8 +820,10 @@ program
 // ---- status ---------------------------------------------------------------
 
 program
-  .command("status <jobId> <status>")
-  .description(`Set a job's status. One of: ${STATUSES.join(", ")}`)
+  .command("status <job> <status>")
+  .description(
+    `Set a job's status by id, id prefix, or unambiguous company name. One of: ${STATUSES.join(", ")}`,
+  )
   .option("-n, --note <text>", "attach a note")
   .action(async (jobId: string, status: string, opts: { note?: string }) => {
     const upper = status.toUpperCase();
@@ -773,12 +833,17 @@ program
       return;
     }
     await withRepo("status", (repo) => {
-      const job = repo.get(jobId);
-      if (!job) {
-        console.error(`No job matches "${jobId}".`);
+      // A company name is allowed here: this is the command a human runs the
+      // moment they hear back, and copying an id from another window is the
+      // friction that keeps outcomes out of the database. An ambiguous name is
+      // refused with the candidates listed, never resolved by picking one.
+      const resolved = resolveJob(repo, jobId, { byCompany: true });
+      if (!resolved.job) {
+        console.error(resolved.message);
         process.exitCode = 1;
         return { ok: false };
       }
+      const job = resolved.job;
       repo.setStatus(job.id, upper, opts.note);
       console.log(`${job.company} - ${job.title}: ${job.status} -> ${upper}`);
 
@@ -796,6 +861,57 @@ program
         log.warn(`Status saved, but the briefing could not be regenerated: ${(err as Error).message}`);
       }
       return { ok: true };
+    });
+  });
+
+// ---- inflight -------------------------------------------------------------
+
+program
+  .command("inflight")
+  .description("Everything live and waiting, with the command to move each one along")
+  .option("--stale", "only the ones that have gone quiet", false)
+  .action(async (opts: { stale: boolean }) => {
+    await withRepo("inflight", (repo) => {
+      const now = Date.now();
+      const days = (iso: string | null) =>
+        iso ? Math.max(0, Math.floor((now - new Date(iso).getTime()) / 86400000)) : 0;
+
+      let jobs = repo.inFlight();
+      if (opts.stale) jobs = jobs.filter((j) => days(j.statusChangedAt) >= (STALE_AFTER_DAYS[j.status] ?? 7));
+
+      if (jobs.length === 0) {
+        console.log(
+          opts.stale
+            ? "Nothing has gone quiet. Every live role is inside its normal response window."
+            : "Nothing in flight. Prepare one with `job-radar apply <job-id>`.",
+        );
+        return { count: 0 };
+      }
+
+      console.log("");
+      console.log(`${"ID".padEnd(13)} ${"STATUS".padEnd(10)} ${"AGE".padStart(4)}  ${"COMPANY".padEnd(20)} TITLE`);
+      console.log("-".repeat(110));
+      for (const j of jobs) {
+        const age = days(j.statusChangedAt);
+        const stale = age >= (STALE_AFTER_DAYS[j.status] ?? 7);
+        console.log(
+          `${j.id.padEnd(13)} ${j.status.padEnd(10)} ${`${age}d`.padStart(4)}${stale ? " !" : "  "} ` +
+            `${truncate(j.company, 20).padEnd(20)} ${truncate(j.title, 46)}`,
+        );
+        console.log(`${" ".repeat(14)}${nextAction(j.status, age)}`);
+      }
+
+      console.log("");
+      console.log("Move one along - the company name works in place of the id when it is unambiguous:");
+      console.log("  npm run cli -- status <company-or-id> SCREEN     # they replied");
+      console.log("  npm run cli -- status <company-or-id> REJECTED   # they passed");
+      console.log("  npm run cli -- status <company-or-id> GHOSTED    # nothing, and it has been a while");
+      console.log("");
+      console.log(
+        `A "no" is worth as much to the funnel as a win. ` +
+          `Anything quiet for ${GHOSTED_AFTER_DAYS}+ days is worth closing out.`,
+      );
+      return { count: jobs.length };
     });
   });
 

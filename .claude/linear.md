@@ -118,7 +118,7 @@ directory, and never run gnhf against a worktree these commands created.
 This repo has **no CI and no lint script**. The gates are local and both must pass:
 
 ```bash
-npm test          # vitest run — 316 tests
+npm test          # vitest run — 355 tests
 npm run typecheck # tsc --noEmit
 ```
 
