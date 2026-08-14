@@ -14,7 +14,21 @@ import { paths } from "../config/load.js";
  * own generator rather than arbitrary user content.
  */
 export function markdownToHtml(markdown: string, title: string): string {
-  const body = renderBlocks(markdown);
+  return renderPage(title, renderBlocks(markdown));
+}
+
+/**
+ * The page shell: doctype, head, stylesheet, body wrapper.
+ *
+ * Shared by the briefing and the dashboard so there is exactly one place where
+ * "self-contained, no external assets" is true or false. Two pages with two
+ * copies of this would drift, and the copy that drifts is the one that starts
+ * requesting a font from a CDN and telling someone what you are looking at.
+ *
+ * `extraCss` is appended after the base rules, so a page can add its own
+ * components without forking the palette.
+ */
+export function renderPage(title: string, body: string, extraCss = ""): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -86,6 +100,7 @@ export function markdownToHtml(markdown: string, title: string): string {
   .UNKNOWN { color: var(--muted); font-weight: 640; }
   footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--line);
            color: var(--muted); font-size: .85rem; }
+${extraCss}
 </style>
 </head>
 <body>
@@ -95,6 +110,8 @@ ${body}
 </body>
 </html>`;
 }
+
+export { escapeHtml };
 
 /** Wrap each `### N. Title` section and everything under it in a card. */
 function renderBlocks(markdown: string): string {
@@ -247,13 +264,23 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Write the HTML report next to the Markdown one. Returns the path. */
+/**
+ * Write the HTML briefing next to the Markdown one. Returns the dated path.
+ *
+ * The rolling copy is `latest-briefing.html`, not `latest.html`: the dashboard
+ * took the landing name, because that is what `open` opens and what `serve`
+ * links. The dated archive stays the briefing, so `serve`'s index continues to
+ * mean "past briefings" and old links keep resolving.
+ */
 export function writeHtmlReport(markdown: string, dir = paths.reports()): string {
   mkdirSync(dir, { recursive: true });
   const date = new Date().toISOString().slice(0, 10);
   const html = markdownToHtml(markdown, `Job Radar - ${date}`);
   const file = resolve(dir, `${date}.html`);
   writeFileSync(file, html, "utf8");
-  writeFileSync(resolve(dir, "latest.html"), html, "utf8");
+  writeFileSync(resolve(dir, BRIEFING_LATEST), html, "utf8");
   return file;
 }
+
+/** The rolling briefing filename, shared with `serve` so the two cannot drift. */
+export const BRIEFING_LATEST = "latest-briefing.html";

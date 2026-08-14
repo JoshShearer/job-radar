@@ -83,12 +83,19 @@ export function createReportServer(opts: ServeOptions) {
   });
 }
 
+/**
+ * The two rolling files. Both are regenerated every run and neither is a dated
+ * archive entry, so both are excluded from the list below - otherwise
+ * `latest-briefing` sorts in among the dates as a row that is not a date.
+ */
+const ROLLING = new Set(["latest.html", "latest-briefing.html"]);
+
 /** Index of every briefing on disk, newest first. */
 function renderIndex(root: string): string {
   let files: string[] = [];
   if (existsSync(root)) {
     files = readdirSync(root)
-      .filter((f) => f.endsWith(".html") && f !== "latest.html")
+      .filter((f) => f.endsWith(".html") && !ROLLING.has(f))
       .sort()
       .reverse();
   }
@@ -103,7 +110,10 @@ function renderIndex(root: string): string {
     })
     .join("\n");
 
-  const hasLatest = existsSync(resolve(root, "latest.html"));
+  // Each link is gated on the file existing. A header link into a directory
+  // that has never been generated is a 404 dressed as navigation.
+  const hasDashboard = existsSync(resolve(root, "latest.html"));
+  const hasBriefing = existsSync(resolve(root, "latest-briefing.html"));
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -121,8 +131,10 @@ function renderIndex(root: string): string {
   h1 { font-size:1.4rem; margin:0 0 .5rem; }
   p.sub { color:var(--muted); margin:0 0 2rem; font-size:.92rem; }
   a { color:var(--accent); }
+  p.links { display:flex; gap:.6rem; flex-wrap:wrap; margin:0 0 2rem; }
   .latest { display:inline-block; padding:.7rem 1.1rem; border:1px solid var(--accent);
-            border-radius:8px; text-decoration:none; font-weight:600; margin-bottom:2rem; }
+            border-radius:8px; text-decoration:none; font-weight:600; }
+  .latest.secondary { border-color:var(--line); color:var(--fg); font-weight:500; }
   ul { list-style:none; padding:0; margin:0; }
   li { padding:.6rem 0; border-bottom:1px solid var(--line); }
   footer { margin-top:2.5rem; color:var(--muted); font-size:.85rem; }
@@ -130,7 +142,10 @@ function renderIndex(root: string): string {
 <body><main>
 <h1>Job Radar</h1>
 <p class="sub">Local briefing archive. Served from 127.0.0.1 only.</p>
-${hasLatest ? '<a class="latest" href="/latest.html">Read the latest briefing &rarr;</a>' : ""}
+<p class="links">
+${hasDashboard ? '<a class="latest" href="/latest.html">Dashboard &rarr;</a>' : ""}
+${hasBriefing ? '<a class="latest secondary" href="/latest-briefing.html">Today\'s briefing &rarr;</a>' : ""}
+</p>
 <ul>
 ${rows || "<li>No briefings yet. Run <code>npm run radar</code>.</li>"}
 </ul>

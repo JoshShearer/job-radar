@@ -54,8 +54,15 @@ function countAny(counts: Record<string, number>, keys: string[]): number {
   return keys.reduce((a, k) => a + (counts[k] ?? 0), 0);
 }
 
-/** Minimum observations before a stage's conversion rate is worth reading. */
-const MIN_SAMPLE = {
+/**
+ * Minimum observations before a stage's conversion rate is worth reading.
+ *
+ * Exported because the dashboard gates its trend chart on the same floor. Two
+ * copies of this number would eventually disagree, and the failure is silent
+ * and contradictory: a page drawing a chart directly under its own warning that
+ * the numbers are noise.
+ */
+export const MIN_SAMPLE = {
   applied: 15,
   screen: 6,
   technical: 4,

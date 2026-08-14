@@ -12,6 +12,7 @@ import { runScoring } from "./pipeline/rescore.js";
 import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL } from "./analysis/analyzer.js";
 import { buildDailyReport, writeReport } from "./report/daily.js";
 import { writeHtmlReport } from "./report/html.js";
+import { buildDashboard, writeDashboard } from "./report/dashboard.js";
 import { loadPack, packDir, prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
 import { loadPersonal } from "./config/personal.js";
 import { autofillApplication, findResume, renderOutcomes } from "./apply/autofill.js";
@@ -677,15 +678,19 @@ program
       });
       const file = writeReport(markdown);
       const htmlFile = writeHtmlReport(markdown);
+      // The cumulative view is regenerated in the same pass, so the landing
+      // page can never be older than the briefing sitting next to it.
+      const dashFile = writeDashboard(buildDashboard({ repo, sources: sourcesConfig }));
 
       console.log("");
       console.log(markdown);
       console.log("");
       log.info(`Report written (${jobCount} actionable roles):`);
-      log.info(`  markdown : ${file}`);
-      log.info(`  html     : ${htmlFile}`);
-      log.info(`  open it  : npm run cli -- open`);
-      return { jobCount, file, htmlFile };
+      log.info(`  markdown  : ${file}`);
+      log.info(`  briefing  : ${htmlFile}`);
+      log.info(`  dashboard : ${dashFile}`);
+      log.info(`  open it   : npm run cli -- open`);
+      return { jobCount, file, htmlFile, dashFile };
     });
   });
 
@@ -852,15 +857,42 @@ program
       // no way to tell a stale page from a live one by looking at it. This is
       // a pure database read, so it costs nothing and touches no network.
       try {
-        const { markdown } = buildDailyReport({ repo, profile: loadProfile(), sources: loadSources() });
+        const sourcesConfig = loadSources();
+        const { markdown } = buildDailyReport({ repo, profile: loadProfile(), sources: sourcesConfig });
         writeReport(markdown);
         const html = writeHtmlReport(markdown);
+        // The dashboard too. A status change is precisely the event the
+        // cumulative view exists to show, so leaving the landing page on the
+        // pre-change numbers would be the worst moment for it to be stale.
+        const dash = writeDashboard(buildDashboard({ repo, sources: sourcesConfig }));
         console.log(`Briefing updated: ${html}`);
+        console.log(`Dashboard updated: ${dash}`);
       } catch (err) {
         // A stale report is not worth failing a status change over.
         log.warn(`Status saved, but the briefing could not be regenerated: ${(err as Error).message}`);
       }
       return { ok: true };
+    });
+  });
+
+// ---- dashboard ------------------------------------------------------------
+
+program
+  .command("dashboard")
+  .description("Rebuild the cumulative dashboard from the database (no network, no cost)")
+  .option("--open", "open it after writing", false)
+  .action(async (opts: { open: boolean }) => {
+    const sourcesConfig = loadSources();
+    await withRepo("dashboard", (repo) => {
+      const file = writeDashboard(buildDashboard({ repo, sources: sourcesConfig }));
+      log.info(`Dashboard written: ${file}`);
+      if (opts.open) {
+        const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+        const child = spawn(cmd, [file], { detached: true, stdio: "ignore" });
+        child.on("error", () => console.log(`Open it yourself: file://${file}`));
+        child.unref();
+      }
+      return { file };
     });
   });
 
@@ -942,22 +974,39 @@ program
 
 program
   .command("open")
-  .description("Open the latest HTML briefing in your browser")
-  .option("--md", "print the Markdown path instead of opening the browser", false)
-  .action((opts: { md: boolean }) => {
+  .description("Open the dashboard in your browser")
+  .option("--briefing", "open today's slate instead of the dashboard", false)
+  .option("--md", "print the path to the briefing Markdown instead of opening anything", false)
+  .action((opts: { briefing: boolean; md: boolean }) => {
     const dir = paths.reports();
-    const html = resolve(dir, "latest.html");
+    const dashboard = resolve(dir, "latest.html");
+    const briefing = resolve(dir, "latest-briefing.html");
     const md = resolve(dir, "latest.md");
 
-    if (!existsSync(html) && !existsSync(md)) {
-      console.error(`No report found in ${dir}. Run \`npm run radar\` first.`);
-      process.exitCode = 1;
-      return;
-    }
-    if (opts.md || !existsSync(html)) {
+    // --md means the briefing Markdown, because there is no dashboard
+    // Markdown - the dashboard is a rendered view, not a document. Saying so
+    // beats letting the two flags look interchangeable.
+    if (opts.md) {
+      if (!existsSync(md)) {
+        console.error(`No briefing Markdown in ${dir}. Run \`npm run radar\` first.`);
+        process.exitCode = 1;
+        return;
+      }
       console.log(md);
       return;
     }
+
+    const wanted = opts.briefing ? briefing : dashboard;
+    const label = opts.briefing ? "briefing" : "dashboard";
+    if (!existsSync(wanted)) {
+      // Deliberately not falling back to the other file. They answer different
+      // questions, and silently opening the one that exists would answer a
+      // question that was not asked.
+      console.error(`No ${label} in ${dir}. Run \`npm run radar\` first.`);
+      process.exitCode = 1;
+      return;
+    }
+    const html = wanted;
 
     // Platform-appropriate opener. Never shell-interpolate the path.
     const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
