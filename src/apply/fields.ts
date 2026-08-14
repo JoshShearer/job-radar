@@ -1,5 +1,6 @@
 import type { Personal } from "../config/personal.js";
 import type { ApplicationPack } from "../analysis/application.js";
+import type { Resume } from "../resume/schema.js";
 
 /**
  * Deterministic form-field logic.
@@ -33,6 +34,8 @@ export type FieldIntent =
   | "salary_expectation"
   | "notice_period"
   | "referral_source"
+  | "current_company"
+  | "current_title"
   | "eeo"
   | "attestation"
   | "unknown";
@@ -86,6 +89,13 @@ const RULES: ReadonlyArray<readonly [FieldIntent, RegExp]> = [
     /\b(work authorization|authorized to work|authorised to work|legally authorized|right to work|work permit|eligible to work|work status)\b/,
   ],
   ["referral_source", /\b(how did you hear|where did you.*hear|referral|referred|how you found|source)\b/],
+  // "Current/Most Recent Company Name". Anchored on employer wording so that
+  // "why do you want to work at this company" cannot match it.
+  [
+    "current_company",
+    /\b(current|most recent|present|previous|last)\b[^?]*\b(company|employer|organi[sz]ation)\b|^(company|employer)( name)?$/,
+  ],
+  ["current_title", /\b(current|most recent|present|previous|last)\b[^?]*\b(job )?title\b|^(job )?title$|\bcurrent role\b/],
   [
     "salary_expectation",
     /\b(salary|compensation expectation|desired (pay|compensation|salary)|expected (salary|compensation)|pay expectation)\b/,
@@ -146,6 +156,42 @@ export type FillDecision =
 export interface DecisionContext {
   personal: Personal;
   pack: ApplicationPack | null;
+  /**
+   * Master resume, when the caller has it. Employment history is answered from
+   * here rather than duplicated into `personal.yaml`: two copies of where you
+   * work is two things to keep in sync, and the stale one ends up on an
+   * application.
+   */
+  resume?: Resume;
+}
+
+/**
+ * The role a form means by "current/most recent".
+ *
+ * Deterministic, because a form field is not the place to be creative: an
+ * ongoing role wins over a finished one, the latest start breaks ties among
+ * ongoing roles, and the latest end date decides when nothing is ongoing. A
+ * same-start tie falls back to the company name compared byte-wise, so the same
+ * resume always produces the same answer regardless of array order.
+ *
+ * The caller reports which role this picked, so a candidate who means the other
+ * one can see it and change it before submitting.
+ */
+export function currentRole(resume: Resume | undefined): Resume["experience"][number] | null {
+  const roles = resume?.experience ?? [];
+  if (!roles.length) return null;
+
+  const ongoing = roles.filter((r) => !r.end);
+  const pool = ongoing.length ? ongoing : roles;
+  const key = (r: (typeof roles)[number]) => (ongoing.length ? r.start : (r.end ?? r.start));
+
+  return [...pool].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    if (ka !== kb) return ka < kb ? 1 : -1;
+    if (a.company === b.company) return 0;
+    return a.company < b.company ? -1 : 1;
+  })[0] as (typeof roles)[number];
 }
 
 /**
@@ -243,6 +289,22 @@ export function decide(rawLabel: string, intent: FieldIntent, ctx: DecisionConte
               : "not authorized",
             why: "personal.yaml work_eligibility",
           };
+    // Answered from the master resume, never from a second copy of the same
+    // fact. `why` names the role so a candidate who meant the other one can see
+    // the pick and change it before submitting.
+    case "current_company":
+    case "current_title": {
+      const r = currentRole(ctx.resume);
+      if (!r) {
+        return {
+          action: "skip",
+          why: "no employment history loaded - fill this one in yourself",
+        };
+      }
+      return intent === "current_company"
+        ? { action: "fill", value: r.company, why: `${r.company} in resume.yaml` }
+        : { action: "fill", value: r.title, why: `your title at ${r.company} in resume.yaml` };
+    }
     case "referral_source":
       return p.preferences.referral_source
         ? { action: "select", desired: p.preferences.referral_source, why: "personal.yaml" }
