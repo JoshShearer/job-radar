@@ -471,6 +471,8 @@ export async function fillForm(
   resume: ResumeChoice | null,
   /** Master resume, for the fields that are answered from employment history. */
   masterResume?: Resume,
+  /** Path to a cover letter document, when one has been generated. */
+  coverLetter?: string,
 ): Promise<FieldOutcome[]> {
   const { visible, present } = pageProbes(page);
   const challenge = await detectChallenge(visible, present);
@@ -545,8 +547,18 @@ export async function fillForm(
           }
           await el.setInputFiles(resume.path);
           outcomes.push({ label, intent, status: "filled", detail: describeResumeChoice(resume) });
+        } else if (coverLetter) {
+          // The prepared note is a real document now, so a form asking for one
+          // can be given it rather than told to wait for a human with a
+          // clipboard.
+          await el.setInputFiles(coverLetter);
+          outcomes.push({
+            label,
+            intent,
+            status: "filled",
+            detail: `attached ${coverLetter.split("/").pop()} - READ IT before you submit`,
+          });
         } else {
-          // Cover letter: prefer typing the prepared note over uploading a file.
           outcomes.push({
             label,
             intent,
@@ -673,7 +685,13 @@ export async function autofillApplication(
   job: EnrichedJob,
   personal: Personal,
   pack: ApplicationPack | null,
-  opts: { screenshotDir?: string; headless?: boolean; resume?: ResumeChoice; masterResume?: Resume } = {},
+  opts: {
+    screenshotDir?: string;
+    headless?: boolean;
+    resume?: ResumeChoice;
+    masterResume?: Resume;
+    coverLetter?: string;
+  } = {},
 ): Promise<AutofillResult> {
   const url = job.applicationUrl ?? job.sourceUrl;
   if (!url) throw new Error("This job has no application URL.");
@@ -706,7 +724,14 @@ export async function autofillApplication(
   // A resume tailored to THIS posting wins over anything generic in resumes/.
   // The caller normally decides and hands over the whole choice; the fallback
   // is for programmatic callers, never a re-derivation of one that was passed.
-  const outcomes = await fillForm(page, personal, pack, opts.resume ?? chooseResume(), opts.masterResume);
+  const outcomes = await fillForm(
+    page,
+    personal,
+    pack,
+    opts.resume ?? chooseResume(),
+    opts.masterResume,
+    opts.coverLetter,
+  );
 
   let screenshot: string | null = null;
   if (opts.screenshotDir) {

@@ -566,6 +566,47 @@ describe("bot protection", () => {
   }, 60_000);
 });
 
+describe("the cover letter", () => {
+  // It was generated for every application and then buried in a markdown pack,
+  // so every cover-letter input on every form was left for a human with a
+  // clipboard. It is a document now.
+  it("is attached to a cover letter input when one has been generated", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "job-radar-cover-"));
+    const cover = resolve(dir, "Ada_Lovelace_Cover_Letter_Acme.pdf");
+    writeFileSync(cover, "%PDF-1.4\n", "utf8");
+    const page = await openFixture();
+    try {
+      const outcomes = await fillForm(page, personal, null, resume, MASTER_RESUME, cover);
+      const o = outcomes.find((x) => x.intent === "cover_letter");
+      expect(o).toMatchObject({ status: "filled" });
+      expect(o!.detail).toContain("Ada_Lovelace_Cover_Letter_Acme.pdf");
+      expect(o!.detail).toContain("READ IT");
+
+      const attached = await page.locator("#cover_letter").evaluate((el) => {
+        const f = (el as HTMLInputElement).files;
+        return { n: f?.length ?? 0, name: f?.[0]?.name ?? null };
+      });
+      expect(attached).toEqual({ n: 1, name: "Ada_Lovelace_Cover_Letter_Acme.pdf" });
+    } finally {
+      await page.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("still asks the human when no cover letter was generated", async () => {
+    const page = await openFixture();
+    try {
+      const outcomes = await fillForm(page, personal, null, resume, MASTER_RESUME);
+      const o = outcomes.find((x) => x.intent === "cover_letter");
+      expect(o!.status).toBe("needs-you");
+      const n = await page.locator("#cover_letter").evaluate((el) => (el as HTMLInputElement).files?.length ?? 0);
+      expect(n).toBe(0);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+});
+
 describe("when there is no resume to attach", () => {
   // GitHub #11: `opts.resumeFile` was accepted and never read, so the report
   // said "no resume file found" while the file sat on disk. The inverse is

@@ -20,6 +20,12 @@ import { capturableAnswers, saveAnswers, type FieldSnapshot } from "./apply/lear
 import { chooseResume } from "./apply/resume-file.js";
 import { loadResume, resumeExists, resumePath, saveResume } from "./resume/load.js";
 import { allBullets, lintResume, type Resume } from "./resume/schema.js";
+import {
+  coverLetterName,
+  renderCoverLetterHtml,
+  renderCoverLetterMarkdown,
+  resumeName,
+} from "./resume/documents.js";
 import { scaffoldResume } from "./resume/init.js";
 import { importResume } from "./resume/import.js";
 import { matchResumeToJob } from "./resume/requirements.js";
@@ -233,9 +239,31 @@ program
       console.log("");
       console.log(markdown);
       console.log("");
+      // The cover note was already written, specific to this posting, and then
+      // buried as one section of a long markdown pack - no header, no contact
+      // details, no PDF, nothing a form could accept. Render it as a real
+      // document. Nothing is rewritten here: the renderer lays out the text it
+      // was given, which came from the prompt that forbids inventing anything.
+      let coverPdf: string | null = null;
+      if (pack.coverNote?.trim()) {
+        const who = candidateName();
+        const contactLine = buildContactLine();
+        const base = coverLetterName(who, job.company, "");
+        writeFileSync(
+          resolve(dir, `${base}md`),
+          renderCoverLetterMarkdown(who, job.company, job.title, pack.coverNote, contactLine),
+          "utf8",
+        );
+        const coverHtml = renderCoverLetterHtml(who, job.company, job.title, pack.coverNote, contactLine);
+        writeFileSync(resolve(dir, `${base}html`), coverHtml, "utf8");
+        coverPdf = resolve(dir, coverLetterName(who, job.company));
+        await writeResumePdf(coverHtml, coverPdf);
+      }
+
       log.info(`Pack written to ${dir}`);
       log.info(`  markdown : ${md}`);
       log.info(`  html     : ${html}`);
+      if (coverPdf) log.info(`  cover    : ${basename(coverPdf)}  <- autofill attaches this`);
       log.info(
         `  tokens   : ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`,
       );
@@ -426,8 +454,13 @@ resumeCmd
 
       const dir = packDir(job);
       mkdirSync(dir, { recursive: true });
-      writeFileSync(resolve(dir, "resume.md"), md, "utf8");
-      writeFileSync(resolve(dir, "resume.html"), html, "utf8");
+      // Named for the person and the company. The filename is what a recruiter
+      // reads in the attachment list, and "resume.pdf" reads as a mass
+      // application. Derived, never stored, so every command computes the same
+      // name from the same two inputs.
+      const base = resumeName(resume.basics.name, job.company, "");
+      writeFileSync(resolve(dir, `${base}md`), md, "utf8");
+      writeFileSync(resolve(dir, `${base}html`), html, "utf8");
       writeFileSync(resolve(dir, "resume-match.md"), renderMatchReport(job, match), "utf8");
       // Persisted so layout can be iterated on with `resume render`, which
       // costs nothing. Without it, fixing a margin means paying for the whole
@@ -436,7 +469,7 @@ resumeCmd
 
       let pdf: string | null = null;
       if (opts.pdf) {
-        pdf = resolve(dir, "resume.pdf");
+        pdf = resolve(dir, resumeName(resume.basics.name, job.company));
         await writeResumePdf(html, pdf);
       }
 
@@ -446,7 +479,7 @@ resumeCmd
       log.info(`Positioning: ${plan.positioning}`);
       console.log("");
       log.info(`Written to ${dir}`);
-      if (pdf) log.info(`  resume.pdf  <- autofill attaches this automatically`);
+      if (pdf) log.info(`  ${basename(pdf)}  <- autofill attaches this automatically`);
       log.info(`  tokens: ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`);
 
       if (violations.length) {
@@ -475,7 +508,7 @@ resumeCmd
 
 resumeCmd
   .command("render <jobId>")
-  .description("Re-render an already-tailored resume from its saved plan. No API call.")
+  .description("Re-render the tailored resume, and the cover letter, from what is already saved. No API call.")
   .action(async (jobId: string) => {
     const resume = loadResume();
     await withRepo("resume-render", async (repo) => {
@@ -508,12 +541,33 @@ resumeCmd
 
       const composed = composeResume(resume, plan);
       const contact = buildContactLine();
-      writeFileSync(resolve(dir, "resume.md"), renderResumeMarkdown(resume, composed, contact), "utf8");
+      const base = resumeName(resume.basics.name, job.company, "");
+      writeFileSync(resolve(dir, `${base}md`), renderResumeMarkdown(resume, composed, contact), "utf8");
       const html = renderResumeHtml(resume, composed, contact);
-      writeFileSync(resolve(dir, "resume.html"), html, "utf8");
-      await writeResumePdf(html, resolve(dir, "resume.pdf"));
+      writeFileSync(resolve(dir, `${base}html`), html, "utf8");
+      await writeResumePdf(html, resolve(dir, resumeName(resume.basics.name, job.company)));
 
-      log.info(`Re-rendered ${dir}/resume.{md,html,pdf}`);
+      log.info(`Re-rendered ${dir}/${resumeName(resume.basics.name, job.company, "")}{md,html,pdf}`);
+
+      // The cover note is already on disk in pack.json. Rendering it here costs
+      // nothing and means an application prepared before cover letters were
+      // documents does not have to be paid for twice.
+      const saved = loadPack(job);
+      if (saved?.coverNote?.trim()) {
+        const who = candidateName();
+        const base = coverLetterName(who, job.company, "");
+        writeFileSync(
+          resolve(dir, `${base}md`),
+          renderCoverLetterMarkdown(who, job.company, job.title, saved.coverNote, contact),
+          "utf8",
+        );
+        const coverHtml = renderCoverLetterHtml(who, job.company, job.title, saved.coverNote, contact);
+        writeFileSync(resolve(dir, `${base}html`), coverHtml, "utf8");
+        await writeResumePdf(coverHtml, resolve(dir, coverLetterName(who, job.company)));
+        log.info(`Re-rendered ${coverLetterName(who, job.company)}`);
+      } else {
+        log.info("No saved cover note for this job - run `apply` to write one.");
+      }
       if (violations.length) {
         console.log("Provenance re-check caught changes since the plan was made:");
         for (const v of violations) console.log(`  [${v.kind}] ${v.bulletId}: ${v.detail}`);
@@ -522,6 +576,27 @@ resumeCmd
       return { ok: true };
     });
   });
+
+/**
+ * The candidate's name for a document header and filename.
+ *
+ * The master resume is the source of truth for how the name is written on a
+ * document; personal.yaml is the fallback for someone who has not imported a
+ * resume yet.
+ */
+function candidateName(): string {
+  try {
+    if (resumeExists()) return loadResume().basics.name;
+  } catch {
+    // Fall through to personal.yaml.
+  }
+  try {
+    const p = loadPersonal();
+    return `${p.identity.first_name} ${p.identity.last_name}`.trim();
+  } catch {
+    return "Candidate";
+  }
+}
 
 /** Contact line for the resume header, from personal.yaml when available. */
 function buildContactLine(): string[] {
@@ -571,7 +646,13 @@ program
       // choice is made once, here, and handed over whole: `autofill` reports
       // which file it attached and what it passed over, and it cannot label a
       // generic resume "tailored" from a bare path.
-      const tailored = resolve(dir, "resume.pdf");
+      // The tailored file is named for the person and the company. The legacy
+      // `resume.pdf` is still accepted so packs generated before that change
+      // keep working.
+      const who = candidateName();
+      const namedResume = resolve(dir, resumeName(who, job.company));
+      const legacyResume = resolve(dir, "resume.pdf");
+      const tailored = existsSync(namedResume) ? namedResume : legacyResume;
       const resume = chooseResume(existsSync(tailored) ? tailored : undefined);
       if (!resume) {
         log.warn(`No resume to attach. Generate one: npm run cli -- resume tailor ${job.id}`);
@@ -591,11 +672,18 @@ program
         log.warn("No master resume, so current employer/title will be left for you.");
       }
 
+      // A cover letter is a document now, not a paragraph to copy out of a
+      // markdown file, so a form that asks for one can be given it.
+      const namedCover = resolve(dir, coverLetterName(who, job.company));
+      const coverLetter = existsSync(namedCover) ? namedCover : undefined;
+      if (coverLetter) log.info(`Attaching the cover letter: ${basename(namedCover)}`);
+
       const result = await autofillApplication(job, personal, pack, {
         screenshotDir: opts.screenshot ? dir : undefined,
         headless: opts.headless,
         ...(resume ? { resume } : {}),
         ...(masterResume ? { masterResume } : {}),
+        ...(coverLetter ? { coverLetter } : {}),
       });
 
       const report = renderOutcomes(job, result);
