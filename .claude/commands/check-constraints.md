@@ -5,76 +5,90 @@ Validate that the current changes do not violate the non-negotiable rules in `CL
 > regression here is not a code-quality issue, it is a correctness issue about statements
 > made to employers.
 
+## The diff range
+
+Every block below diffs against **`$(git merge-base origin/main HEAD)`**, not `HEAD`.
+
+This is load-bearing. `git diff HEAD` shows only *uncommitted* work, and `/ship` runs this
+gate **after** committing — so with `HEAD` as the base every grep returns empty and the gate
+reports PASS on everything it never looked at. That is the exact failure Step 3 below warns
+about, and it was live in this command until it was caught by running `/ship` for real.
+
+The merge-base range catches all three states at once: committed on the branch, staged, and
+unstaged. Verify it yourself with `git diff $(git merge-base origin/main HEAD) --name-only`
+— if that prints nothing on a branch with commits, something is wrong with the range, not
+with the code.
+
 ## Dynamic Context
 
 ### Changed files
 ```
-$!git diff --name-only HEAD 2>/dev/null; git diff --name-only --cached 2>/dev/null; echo "---UNPUSHED---"; git log origin/main..HEAD --name-only --pretty=format: 2>/dev/null | sort -u | head -50
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); echo "range: $B..working-tree"; git diff --name-only "$B" 2>/dev/null | head -50; echo "---BRANCH COMMITS---"; git log origin/main..HEAD --oneline 2>/dev/null | head -20
 ```
 
 ### Model calls outside the analysis and resume boundaries
 ```
-$!git diff HEAD --unified=0 2>/dev/null | grep -E "^\+.*(@anthropic-ai/sdk|new Anthropic\(|messages\.create)" | head -20
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=0 2>/dev/null | grep -E "^\+.*(@anthropic-ai/sdk|new Anthropic\(|messages\.create)" | head -20
 ```
 
 ### Model output heading for a rendered document
 ```
-$!git diff HEAD --unified=3 2>/dev/null | grep -nE "^\+.*(renderResume|writeFile|toMarkdown|toDocx).*(completion|response|content\[0\]|message\.)" | head -10
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null | grep -nE "^\+.*(renderResume|writeFile|toMarkdown|toDocx).*(completion|response|content\[0\]|message\.)" | head -10
 ```
 
 ### Provenance enforcement weakened
 ```
-$!git diff HEAD --unified=3 2>/dev/null -- src/resume/tailor.ts src/resume/provenance.ts | grep -E "^[-+].*(enforceProvenance|checkRewrite|checkSelection|buildVocabulary|reverted|verified)" | head -25
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/resume/tailor.ts src/resume/provenance.ts | grep -E "^[-+].*(enforceProvenance|checkRewrite|checkSelection|buildVocabulary|reverted|verified)" | head -25
 ```
 
 ### Three-state match collapsed
 ```
-$!git diff HEAD --unified=3 2>/dev/null -- src/resume/requirements.ts | grep -E "^[-+].*(partial|QUALIFIERS|inEvidence|inRequirement)" | head -25
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/resume/requirements.ts | grep -E "^[-+].*(partial|QUALIFIERS|inEvidence|inRequirement)" | head -25
 ```
 
 ### Autofill refusals touched
 ```
-$!git diff HEAD --unified=3 2>/dev/null -- src/apply/ | grep -E "^[-+].*(NEVER_FILL|isNeverFill|isSubmitControl|chooseOption|threshold|checkbox|check\(\)|click\(|submit)" | head -30
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/apply/ | grep -E "^[-+].*(NEVER_FILL|isNeverFill|isSubmitControl|chooseOption|threshold|checkbox|check\(\)|click\(|submit)" | head -30
 ```
 
 ### Unset personal value given a default
 ```
-$!git diff HEAD --unified=3 2>/dev/null -- src/apply/ src/config/personal.ts | grep -E "^\+.*(\?\?|\|\||default).*(work_eligibility|sponsorship|personal\.)" | head -15
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/apply/ src/config/personal.ts | grep -E "^\+.*(\?\?|\|\||default).*(work_eligibility|sponsorship|personal\.)" | head -15
 ```
 
 ### Anti-bot evasion
 ```
-$!git diff HEAD --unified=0 2>/dev/null | grep -iE "^\+.*(stealth|puppeteer-extra|playwright-extra|webdriver|navigator\.|fingerprint|user-?agent|captcha|solver|bypass)" | head -20
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=0 2>/dev/null | grep -iE "^\+.*(stealth|puppeteer-extra|playwright-extra|webdriver|navigator\.|fingerprint|user-?agent|captcha|solver|bypass)" | head -20
 ```
 
 ### Rate limiting weakened
 ```
-$!git diff HEAD --unified=3 2>/dev/null -- src/lib/http.ts src/sources/ | grep -E "^[-+].*(delay|Delay|sleep|throttle|rate|concurren)" | head -20
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/lib/http.ts src/sources/ | grep -E "^[-+].*(delay|Delay|sleep|throttle|rate|concurren)" | head -20
 ```
 
 ### Cost controls touched
 ```
-$!git diff HEAD --unified=3 2>/dev/null -- src/analysis/ src/db/repo.ts | grep -E "^[-+].*(cache_control|ephemeral|analysis_threshold|cacheKey|hash|truncat|budget|max_tokens|upsert)" | head -25
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/analysis/ src/db/repo.ts | grep -E "^[-+].*(cache_control|ephemeral|analysis_threshold|cacheKey|hash|truncat|budget|max_tokens|upsert)" | head -25
 ```
 
 ### Structured output bypassed
 ```
-$!git diff HEAD --unified=3 2>/dev/null | grep -E "^[-+].*(AnalysisSchema|safeParse|JSON\.parse)" | head -20
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null | grep -E "^[-+].*(AnalysisSchema|safeParse|JSON\.parse)" | head -20
 ```
 
 ### Remote OK attribution
 ```
-$!git diff HEAD --unified=3 2>/dev/null -- src/report/ | grep -iE "^[-+].*(remote ?ok|remoteok)" | head -10
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/report/ | grep -iE "^[-+].*(remote ?ok|remoteok)" | head -10
 ```
 
 ### Auto-send surface
 ```
-$!git diff HEAD --unified=0 2>/dev/null | grep -iE "^\+.*(sendMail|nodemailer|smtp|sendMessage|\.send\(|mailto:.*\?.*send)" | head -15
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=0 2>/dev/null | grep -iE "^\+.*(sendMail|nodemailer|smtp|sendMessage|\.send\(|mailto:.*\?.*send)" | head -15
 ```
 
-### Personal data staged
+### Personal data staged or committed
 ```
-$!git diff --name-only --cached 2>/dev/null | grep -E "(config/personal\.yaml|config/resume\.yaml|^resumes/|^applications/|^data/|^reports/|\.env$)" | head -10
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff --name-only "$B" 2>/dev/null | grep -E "(config/personal\.yaml|config/resume\.yaml|^resumes/|^applications/|^data/|^reports/|\.env$)" | head -10; echo "---UNTRACKED---"; git status --porcelain --untracked-files=all 2>/dev/null | grep -E "(config/personal\.yaml|config/resume\.yaml|^\?\? (resumes|applications|data|reports)/|\.env$)" | head -10
 ```
 
 ### Current branch

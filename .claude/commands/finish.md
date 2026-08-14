@@ -78,8 +78,8 @@ After the loop:
 7. **Verify**: re-run `git ls-remote --heads origin <branch>` and `git show-ref --verify --quiet refs/heads/<branch>` for every branch. Both must come back empty. Anything remaining is a FAILED row in the summary, not a success.
 
 **Linear**: extract `JOB-XX` from the merged PR title first, then the branch name
-(`job-(\d+)`). For each, check whether it is already Done; if not, `mcp__linear-jr__save_issue`
-with `state: "Done"`.
+(`job-(\d+)`). For each, `mcp__linear-jr__save_issue` with `state: "Done"`. Nothing closes
+these automatically — see Step 10 for why.
 
 Continue to Steps 8 → 9 → 10 with the batch template.
 
@@ -99,11 +99,24 @@ git config branch.<branch-name>.base-branch
 
 Set → return there. Unset → `main`.
 
-## Step 4: Pull
+## Step 4: Leave the branch, then pull
+
+**Order matters, and getting it wrong is silent.** Check out the base branch *before*
+pulling, for two reasons:
+
+- `git pull origin main` while still standing on the feature branch merges main **into the
+  feature branch**, which is not what this command is for.
+- `git branch -d` in Step 6 cannot delete the branch you are currently on. It fails with
+  "cannot delete branch checked out at", and the cleanup stops half-done.
 
 ```bash
-git pull origin <base-branch>
+git checkout <base-branch>
+git pull --ff-only origin <base-branch>
 ```
+
+If checkout fails on uncommitted changes, stop and surface it — do not stash silently. The
+work being cleaned up is supposed to be merged already; unexpected local changes mean
+something is wrong.
 
 ## Step 5: Delete the remote branch FIRST
 
@@ -141,10 +154,14 @@ git ls-remote --heads origin <branch-name>                # must print nothing
 
 If either still resolves, surface it as a failure. Cleanup is not complete until both are gone.
 
-## Step 8: Sync
+## Step 8: Confirm sync
+
+Step 4 already moved to the base branch and pulled. Confirm rather than repeat:
 
 ```bash
-git checkout main && git pull origin main
+git branch --show-current                      # should be the base branch
+git rev-list --left-right --count origin/main...HEAD   # should be 0 0
+git status --short                             # should be empty
 ```
 
 ## Step 9: Worktree cleanup (conditional)
@@ -165,8 +182,15 @@ Worktree exists → offer removal. Inside it → instruct the user to exit first
 
 ## Step 10: Update Linear (single branch)
 
-Check whether the issue is already Done (auto-closed by `Resolves JOB-XX`). If not,
 `mcp__linear-jr__save_issue` with `state: "Done"`.
+
+**This step is load-bearing, not a safety net.** `Resolves JOB-XX` in a commit footer does
+**not** close a Linear issue — it is a GitHub issue-closing keyword. Linear closes issues
+from branch or PR names through its GitHub integration, which is **not connected** for this
+repo. Verified on JOB-5: the PR merged with `Resolves JOB-5` in the footer and the issue was
+still In Progress afterward.
+
+Check the current state first and skip only if it is genuinely already Done.
 
 ## Step 11: Summary
 
