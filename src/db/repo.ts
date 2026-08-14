@@ -435,6 +435,19 @@ export class JobRepo {
     return picked.map(toEnriched);
   }
 
+  /**
+   * Every job's source and last sighting, for closed-posting detection.
+   *
+   * Two columns over the whole index rather than hydrating rows: this is called
+   * to colour a listing, and pulling full descriptions to answer "when did each
+   * board last see this" would read hundreds of megabytes to print a flag.
+   */
+  allSightings(): Array<{ id: string; source: string; lastSeen: string | null }> {
+    return this.db
+      .prepare("SELECT id, source, last_seen AS lastSeen FROM jobs")
+      .all() as Array<{ id: string; source: string; lastSeen: string | null }>;
+  }
+
   /** Top actionable jobs for the daily report. */
   top(opts: { minFit: number; limit: number; since?: string; includeReviewed?: boolean }): EnrichedJob[] {
     const statusClause = opts.includeReviewed

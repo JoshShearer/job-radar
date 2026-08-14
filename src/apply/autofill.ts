@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { PROJECT_ROOT } from "../config/load.js";
 import { chooseResume, describeResumeChoice, type ResumeChoice } from "./resume-file.js";
 import type { FieldSnapshot } from "./learn.js";
+import { closedPostingMarker } from "../model/freshness.js";
 import type { Resume } from "../resume/schema.js";
 import type { Personal } from "../config/personal.js";
 import type { ApplicationPack } from "../analysis/application.js";
@@ -717,6 +718,22 @@ export async function autofillApplication(
   // does not let a challenge page slip past - it only stops us reading a form
   // that has not been drawn yet.
   const painted = await settlePage(page);
+
+  // A closed posting is not an empty form. Greenhouse redirects a dead job to
+  // the board root, which renders a real listings page and enumerates like one
+  // - so without this the run reports a form it never found and hands over a
+  // browser window showing a job list. Direct evidence from the page, so it
+  // does not depend on the freshness inference being right.
+  const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 4000)).catch(() => "");
+  const closed = closedPostingMarker(page.url(), bodyText);
+  if (closed) {
+    throw new Error(
+      `This posting is no longer open - ${closed}.\n` +
+        `Landed on: ${page.url()}\n` +
+        `Nothing was filled. Re-check the board with \`npm run cli -- ingest\`.`,
+    );
+  }
+
   if (painted === 0) {
     log.warn("No form controls appeared on this page. It may render the form behind a link or button.");
   }

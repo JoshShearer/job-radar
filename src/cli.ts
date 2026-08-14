@@ -55,6 +55,8 @@ import {
   INTERVIEW_STAGES,
 } from "./model/status.js";
 import { statusAfterAutofill } from "./apply/record.js";
+import { isStale, newestBySource, closedPostingMarker } from "./model/freshness.js";
+import type { EnrichedJob } from "./model/job.js";
 import { resolveJob } from "./db/resolve.js";
 import { confirmYesNo } from "./lib/prompt.js";
 import { formatSalary } from "./lib/salary.js";
@@ -196,12 +198,18 @@ program
   .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
   .option("--effort <level>", "reasoning effort (default high - this one is worth the tokens)")
   .option("--open", "open the generated pack in your browser", false)
-  .action(async (jobId: string, opts: { model?: string; effort?: string; open: boolean }) => {
+  .option("--stale-ok", "prepare even if the posting looks closed", false)
+  .action(async (jobId: string, opts: { model?: string; effort?: string; open: boolean; staleOk: boolean }) => {
     const profile = loadProfile();
     await withRepo("apply", async (repo) => {
       const job = repo.get(jobId);
       if (!job) {
         console.error(`No job matches "${jobId}". Use \`job-radar top\` to list ids.`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+
+      if (refuseIfClosed(repo, job, opts.staleOk, "apply")) {
         process.exitCode = 1;
         return { ok: false };
       }
@@ -406,6 +414,7 @@ resumeCmd
         process.exitCode = 1;
         return { ok: false };
       }
+
       const bullets = allBullets(resume).map((b) => ({ bullet: b.bullet, sourceLabel: b.sourceLabel }));
       const report = matchResumeToJob(resume, job.descriptionClean, bullets);
       console.log("");
@@ -420,7 +429,8 @@ resumeCmd
   .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
   .option("--effort <level>", "reasoning effort (default high)")
   .option("--no-pdf", "skip PDF generation")
-  .action(async (jobId: string, opts: { model?: string; effort?: string; pdf: boolean }) => {
+  .option("--stale-ok", "prepare even if the posting looks closed", false)
+  .action(async (jobId: string, opts: { model?: string; effort?: string; pdf: boolean; staleOk: boolean }) => {
     const resume = loadResume();
     const errors = lintResume(resume).filter((i) => i.level === "error");
     if (errors.length) {
@@ -434,6 +444,11 @@ resumeCmd
       const job = repo.get(jobId);
       if (!job) {
         console.error(`No job matches "${jobId}".`);
+        process.exitCode = 1;
+        return { ok: false };
+      }
+
+      if (refuseIfClosed(repo, job, opts.staleOk, "resume tailor")) {
         process.exitCode = 1;
         return { ok: false };
       }
@@ -576,6 +591,28 @@ resumeCmd
       return { ok: true };
     });
   });
+
+/**
+ * Stop before spending on a posting the board has stopped listing.
+ *
+ * This is an inference, not proof - a provider can drop a posting for a minute
+ * - so it gates only the two commands that cost money, and `--stale-ok`
+ * overrides it. Everywhere else a stale posting is flagged, never hidden.
+ */
+function refuseIfClosed(repo: JobRepo, job: EnrichedJob, override: boolean, command: string): boolean {
+  if (override) return false;
+  const newest = newestBySource(repo.allSightings());
+  if (!isStale({ id: job.id, source: job.source, lastSeen: job.lastSeen }, newest)) return false;
+
+  console.error(
+    `${job.company} - ${job.title} looks closed.\n` +
+      `Its board was swept more recently (${newest.get(job.source)?.slice(0, 16)}) than this posting was last seen ` +
+      `on it (${job.lastSeen?.slice(0, 16)}), which usually means it was taken down.\n\n` +
+      `Nothing was spent. Re-check with \`npm run cli -- ingest\`, or if you know it is still live:\n` +
+      `  npm run cli -- ${command} ${job.id} --stale-ok`,
+  );
+  return true;
+}
 
 /**
  * The candidate's name for a document header and filename.
@@ -875,20 +912,33 @@ program
         return { count: 0 };
       }
 
+      // A posting the board has stopped listing costs two model calls to
+      // prepare and then opens a browser on a generic job list. Flag it here,
+      // before anything is spent on it.
+      const newest = newestBySource(repo.allSightings());
+      const stale = new Set(jobs.filter((j) => isStale({ id: j.id, source: j.source, lastSeen: j.lastSeen }, newest)).map((j) => j.id));
+
       console.log("");
       console.log(
         `${"ID".padEnd(13)} ${"ROI".padStart(3)} ${"FIT".padStart(3)} ${"P".padStart(1)} ${"COMP".padEnd(7)} ${"COMPANY".padEnd(20)} TITLE`,
       );
       console.log("-".repeat(120));
       for (const j of jobs) {
+        const mark = stale.has(j.id) ? " [CLOSED?]" : "";
         console.log(
           `${j.id.padEnd(13)} ${String(j.applicationRoi ?? "-").padStart(3)} ${String(j.fitScore ?? "-").padStart(3)} ` +
             `${(j.priority ?? "-").padStart(1)} ${(j.compensationBand ?? "-").padEnd(7)} ` +
-            `${truncate(j.company, 20).padEnd(20)} ${truncate(j.title, 52)}`,
+            `${truncate(j.company, 20).padEnd(20)} ${truncate(j.title, 52 - mark.length)}${mark}`,
         );
       }
       console.log("");
       console.log(`${jobs.length} shown. \`job-radar show <id>\` for detail.`);
+      if (stale.size) {
+        console.log(
+          `${stale.size} marked [CLOSED?]: the board was swept more recently than the posting was last seen on it. ` +
+            `\`ingest\` to re-check.`,
+        );
+      }
       return { count: jobs.length };
     });
   });
