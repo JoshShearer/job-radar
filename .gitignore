@@ -32,12 +32,16 @@ applications/
 
 # Real contact details, work-authorization answers, links
 config/personal.yaml
+# Timestamped copies written before `autofill` saves a learned answer. Same
+# personal data as the original, so the same rule applies.
+config/personal.yaml.*.bak
 
 # Persistent browser profile used by `autofill` (holds cookies/sessions)
 .browser-profile/
 
 # Master resume (real employment history)
 config/resume.yaml
+config/resume.yaml.*.bak
 
 # Claude Code working notes: session handoffs, plans, last critique verdict.
 # The commands themselves (.claude/commands/, .claude/linear.md) ARE committed.

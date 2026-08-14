@@ -67,17 +67,30 @@ program
     setVerbose(Boolean(thisCommand.opts().verbose));
   });
 
+/**
+ * `JOB_RADAR_NO_RUN_LOG=1` renders without recording a run.
+ *
+ * Set by the dashboard watcher on the process it spawns. Without it the
+ * rebuild writes a row to `runs`, which grows the database file, which the
+ * watcher sees as a data change, which triggers another rebuild - forever. It
+ * had already written 732 of the 882 rows in that table before anyone noticed.
+ *
+ * A watcher-triggered render is not a pipeline run in any case: it reads, it
+ * writes a page, and it changes nothing worth auditing.
+ */
+const SKIP_RUN_LOG = process.env.JOB_RADAR_NO_RUN_LOG === "1";
+
 function withRepo<T>(command: string, fn: (repo: JobRepo, db: ReturnType<typeof openDb>) => T | Promise<T>): Promise<T> {
   const db = openDb();
   const repo = new JobRepo(db);
-  const runId = repo.startRun(command);
+  const runId = SKIP_RUN_LOG ? null : repo.startRun(command);
   return Promise.resolve(fn(repo, db))
     .then((result) => {
-      repo.finishRun(runId, result ?? {}, true);
+      if (runId !== null) repo.finishRun(runId, result ?? {}, true);
       return result;
     })
     .catch((err) => {
-      repo.finishRun(runId, { error: String(err) }, false);
+      if (runId !== null) repo.finishRun(runId, { error: String(err) }, false);
       throw err;
     })
     .finally(() => closeDb());
@@ -1114,6 +1127,7 @@ program
     console.log(`  bound to             127.0.0.1 only (not reachable from your network)`);
     if (watcher) {
       console.log(`  watching             ${WATCHED_DIRS.join(", ")}`);
+      console.log(`  plus the database    ${paths.db()}`);
       console.log(
         `  auto-refresh         ${reloadSeconds ? `every ${reloadSeconds}s` : "off (--reload-seconds 0)"}`,
       );

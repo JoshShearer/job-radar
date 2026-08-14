@@ -1,12 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, renameSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   isWatchedFile,
   rebuildCommand,
   snapshotsDiffer,
+  startDashboardWatcher,
   takeSnapshot,
+  watchedDataFiles,
   WATCHED_DIRS,
 } from "../src/report/watch.js";
 
@@ -170,4 +172,130 @@ describe("WATCHED_DIRS", () => {
     expect(WATCHED_DIRS).toContain("src/model");
     expect(WATCHED_DIRS).toContain("src/db");
   });
+});
+
+/**
+ * JOB-15. Five applications were submitted, all five moved to APPLIED in the
+ * database, and `npm run dev` served the same stale dashboard indefinitely.
+ *
+ * The watcher looked only at `.ts` files in source directories, so the one file
+ * that changes when the tool is actually used was outside every watched
+ * directory AND excluded by the extension filter. A stale dashboard is worse
+ * than no dashboard: it answers "is this working" confidently, with old
+ * numbers, and nothing on the page says so.
+ */
+describe("watching the database", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(resolve(tmpdir(), "job-radar-watch-db-"));
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("notices a write to the database", () => {
+    const db = resolve(dir, "job-radar.sqlite");
+    writeFileSync(db, "sqlite-bytes");
+
+    const before = takeSnapshot([], dir, [db]);
+    expect(before.size).toBe(1);
+
+    writeFileSync(db, "sqlite-bytes-plus-one-more-application");
+    expect(snapshotsDiffer(before, takeSnapshot([], dir, [db]))).toBe(true);
+  });
+
+  it("notices a write that lands in the WAL sidecar first", () => {
+    // SQLite runs in WAL mode, so a write can be in -wal before the main
+    // file's mtime moves.
+    const db = resolve(dir, "job-radar.sqlite");
+    const wal = `${db}-wal`;
+    writeFileSync(db, "sqlite-bytes");
+
+    const before = takeSnapshot([], dir, [db, wal]);
+    writeFileSync(wal, "pending write");
+    expect(snapshotsDiffer(before, takeSnapshot([], dir, [db, wal]))).toBe(true);
+  });
+
+  it("does not treat a missing WAL sidecar as a change", () => {
+    const db = resolve(dir, "job-radar.sqlite");
+    const wal = `${db}-wal`;
+    writeFileSync(db, "sqlite-bytes");
+
+    const a = takeSnapshot([], dir, [db, wal]);
+    const b = takeSnapshot([], dir, [db, wal]);
+    expect(a.size).toBe(1); // only the file that exists
+    expect(snapshotsDiffer(a, b)).toBe(false);
+  });
+
+  it("watches the database even though it is not a .ts file", () => {
+    // The extension filter exists to stop editor swap files causing rebuild
+    // storms in source directories. It must not reach explicit data paths.
+    expect(isWatchedFile("job-radar.sqlite")).toBe(false);
+    const db = resolve(dir, "job-radar.sqlite");
+    writeFileSync(db, "x");
+    expect(takeSnapshot([], dir, [db]).size).toBe(1);
+  });
+
+  it("still ignores editor noise in the source directories", () => {
+    const src = resolve(dir, "src");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(resolve(src, "dashboard.ts"), "export const a = 1;");
+    writeFileSync(resolve(src, ".dashboard.ts.swp"), "swap");
+
+    expect(takeSnapshot(["src"], dir, []).size).toBe(1);
+  });
+
+  it("respects a JOB_RADAR_DB override", () => {
+    const custom = resolve(dir, "somewhere-else.sqlite");
+    const previous = process.env.JOB_RADAR_DB;
+    process.env.JOB_RADAR_DB = custom;
+    try {
+      expect(watchedDataFiles()).toContain(custom);
+      expect(watchedDataFiles()).toContain(`${custom}-wal`);
+    } finally {
+      if (previous === undefined) delete process.env.JOB_RADAR_DB;
+      else process.env.JOB_RADAR_DB = previous;
+    }
+  });
+});
+
+/**
+ * The loop this nearly shipped with.
+ *
+ * Watching the database made the rebuild self-triggering: `dashboard` opens
+ * SQLite, closing it checkpoints the WAL back into the main file, and the mtime
+ * moves. With the snapshot taken before the rebuild rather than after, the next
+ * tick reads the rebuild's own footprint as a new change. Measured at 26
+ * rebuilds in 20 seconds - a watcher pegging a core forever, in a process a
+ * developer leaves running all day.
+ */
+describe("the watcher does not trigger itself", () => {
+  it("settles after one rebuild when the rebuild touches a watched file", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "job-radar-selftrigger-"));
+    const db = resolve(dir, "job-radar.sqlite");
+    writeFileSync(db, "initial");
+
+    let rebuilds = 0;
+    const handle = startDashboardWatcher({
+      dirs: [],
+      files: [db],
+      intervalMs: 60,
+      onRebuild: () => {
+        rebuilds++;
+        // Stand in for what the real rebuild does to the database it read.
+        writeFileSync(db, `rewritten ${rebuilds}`);
+      },
+    });
+
+    try {
+      writeFileSync(db, "a real change"); // one genuine edit
+      await new Promise((r) => setTimeout(r, 1500));
+      // One edit, one rebuild. Without the re-stamp this climbs without bound.
+      expect(rebuilds).toBeLessThanOrEqual(2);
+      expect(rebuilds).toBeGreaterThanOrEqual(1);
+    } finally {
+      handle.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
