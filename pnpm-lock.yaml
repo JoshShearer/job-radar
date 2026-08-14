@@ -18,7 +18,7 @@ importers:
         specifier: ^14.0.0
         version: 14.0.3
       yaml:
-        specifier: ^2.8.0
+        specifier: ^2.9.0
         version: 2.9.0
       zod:
         specifier: ^3.25.0
@@ -34,7 +34,7 @@ importers:
         specifier: ^1.62.1
         version: 1.62.1
       tsx:
-        specifier: ^4.20.0
+        specifier: ^4.23.12
         version: 4.23.12
       typescript:
         specifier: ^5.8.0
