@@ -11,7 +11,8 @@ let close: () => void;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "job-radar-serve-"));
-  writeFileSync(join(dir, "latest.html"), "<h1>Latest briefing</h1>", "utf8");
+  writeFileSync(join(dir, "latest.html"), "<h1>Dashboard</h1>", "utf8");
+  writeFileSync(join(dir, "latest-briefing.html"), "<h1>Latest briefing</h1>", "utf8");
   writeFileSync(join(dir, "2026-08-12.html"), "<h1>Aug 12</h1>", "utf8");
   writeFileSync(join(dir, "2026-08-12.md"), "# Aug 12", "utf8");
   const started = await startReportServer({ dir, port: 45871 });
@@ -35,6 +36,41 @@ describe("report server", () => {
     expect(body).toContain("Job Radar");
     expect(body).toContain("2026-08-12");
     expect(body).toContain("latest.html");
+    expect(body).toContain("latest-briefing.html");
+  });
+
+  it("keeps the rolling files out of the dated archive list", async () => {
+    const body = await (await get("/")).text();
+    // Both rolling files are linked in the header, and neither belongs in the
+    // list below it - "latest-briefing" is not a date, and it would sort in
+    // among them as though it were one. Nothing failed when this was wrong,
+    // which is why it has a test of its own.
+    const list = body.slice(body.indexOf("<ul>"));
+    expect(list).toContain("2026-08-12");
+    expect(list).not.toContain("latest-briefing");
+    expect(list).not.toContain("latest.html");
+  });
+
+  it("only offers a rolling file that exists", async () => {
+    // Header links are existence-gated, so a directory with no dashboard shows
+    // no dashboard link rather than a 404 dressed as navigation.
+    const empty = mkdtempSync(join(tmpdir(), "job-radar-serve-empty-"));
+    const started = await startReportServer({ dir: empty, port: 45899 });
+    try {
+      const body = await (await fetch(`http://127.0.0.1:${started.port}/`)).text();
+      expect(body).not.toContain('href="/latest.html"');
+      expect(body).not.toContain('href="/latest-briefing.html"');
+      expect(body).toContain("No briefings yet");
+    } finally {
+      started.close();
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("serves the dashboard at the landing path", async () => {
+    const res = await get("/latest.html");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Dashboard");
   });
 
   it("serves a briefing", async () => {

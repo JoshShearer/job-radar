@@ -28,6 +28,53 @@ describe("setStatus event log", () => {
   });
 });
 
+describe("statusTransitions", () => {
+  it("returns every status change, oldest first, with both ends parsed", () => {
+    const { repo, db } = memoryRepo();
+    const a = seedJob(db, { id: "a" });
+    const b = seedJob(db, { id: "b" });
+    repo.setStatus(a, "APPLIED");
+    repo.setStatus(b, "APPLIED");
+    repo.setStatus(a, "SCREEN");
+
+    const t = repo.statusTransitions();
+    expect(t).toHaveLength(3);
+    expect(t.map((x) => x.to)).toEqual(["APPLIED", "APPLIED", "SCREEN"]);
+    expect(t[2]).toMatchObject({ jobId: "a", from: "APPLIED", to: "SCREEN" });
+    expect(Number.isNaN(Date.parse(t[0]!.at))).toBe(false);
+  });
+
+  it("ignores events that are not status changes", () => {
+    const { repo, db } = memoryRepo();
+    const id = seedJob(db);
+    repo.addEvent(id, "analyzed", { model: "x" });
+    repo.addEvent(id, "salary_changed", { from: 1, to: 2 });
+    repo.setStatus(id, "APPLIED");
+
+    expect(repo.statusTransitions().map((t) => t.to)).toEqual(["APPLIED"]);
+  });
+
+  it("drops an event whose detail cannot be read rather than guessing at it", () => {
+    const { repo, db } = memoryRepo();
+    const id = seedJob(db);
+    db.prepare("INSERT INTO job_events (job_id, event_type, detail, created_at) VALUES (?,?,?,?)").run(
+      id,
+      "status_changed",
+      "{not json",
+      new Date().toISOString(),
+    );
+    db.prepare("INSERT INTO job_events (job_id, event_type, detail, created_at) VALUES (?,?,?,?)").run(
+      id,
+      "status_changed",
+      JSON.stringify({ from: "NEW" }),
+      new Date().toISOString(),
+    );
+
+    // An event we cannot read is not evidence that a transition happened.
+    expect(repo.statusTransitions()).toEqual([]);
+  });
+});
+
 describe("findByCompany", () => {
   it("matches a name the human would actually type, against the normalized column", () => {
     const { repo, db } = memoryRepo();

@@ -475,6 +475,43 @@ export class JobRepo {
     return rows.map(toEnriched);
   }
 
+  /**
+   * Every recorded status transition, oldest first.
+   *
+   * `job_events` is append-only, so this is the history the trend view is built
+   * from - the `jobs` row only knows where something ended up. Rows whose
+   * `detail` will not parse are dropped rather than guessed at: an event we
+   * cannot read is not evidence of a transition.
+   */
+  statusTransitions(): { jobId: string; from: string | null; to: string; at: string }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT job_id, detail, created_at FROM job_events
+         WHERE event_type = 'status_changed'
+         ORDER BY created_at ASC, id ASC`,
+      )
+      .all() as { job_id: string; detail: string | null; created_at: string }[];
+
+    const out: { jobId: string; from: string | null; to: string; at: string }[] = [];
+    for (const r of rows) {
+      if (!r.detail) continue;
+      let parsed: { from?: unknown; to?: unknown };
+      try {
+        parsed = JSON.parse(r.detail) as { from?: unknown; to?: unknown };
+      } catch {
+        continue;
+      }
+      if (typeof parsed.to !== "string") continue;
+      out.push({
+        jobId: r.job_id,
+        from: typeof parsed.from === "string" ? parsed.from : null,
+        to: parsed.to,
+        at: r.created_at,
+      });
+    }
+    return out;
+  }
+
   counts(): Record<string, number> {
     const out: Record<string, number> = {};
     out.total = (this.db.prepare("SELECT COUNT(*) c FROM jobs").get() as { c: number }).c;
