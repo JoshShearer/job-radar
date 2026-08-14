@@ -57,7 +57,14 @@ npm run cli -- open --briefing  # today's slate instead
 npm run cli -- open --md        # prints the briefing Markdown path
 npm run cli -- dashboard        # rebuild just the dashboard (no network, no cost)
 npm run serve                   # local server + browsable archive
+npm run dev                     # the same server, rebuilding as you edit
 ```
+
+`npm run dev` is `serve --watch`: it polls the source directories the dashboard reads from and regenerates the page when one changes, about 600ms per rebuild. The browser re-requests every 2 seconds (`--reload-seconds 0` turns that off, or set your own interval).
+
+That auto-refresh is an HTTP `Refresh` **header**, not a `<meta>` tag or a live-reload script, and that is deliberate: the generated pages promise to be self-contained and script-free, so a development convenience must not be able to alter the artifact. The served bytes stay identical to the file on disk, and there is a test asserting it.
+
+Watch mode rebuilds the **dashboard** only. The briefing goes through `daily`, which re-scores the whole index and takes around ten seconds; the dashboard is a pure database read and takes about one.
 
 The two answer different questions, which is why they are two pages: the briefing says *what should I look at today*, the dashboard says *is this working, and where is it stalling*. `open` never falls back from one to the other, because silently answering the question you did not ask is worse than an error.
 
@@ -234,12 +241,13 @@ npm run cli -- open                        # open the dashboard
 npm run cli -- open --briefing             # open today's slate instead
 npm run cli -- dashboard                   # rebuild the dashboard from the database
 npm run serve                              # local briefing archive (127.0.0.1 only)
+npm run dev                                # the same server, rebuilding as you edit
 npm run cli -- discover "Back Market" Ramp # find a company's ATS board, print the config line
 npm run cli -- calibrate                   # how far the keyword engine drifts from the analysis
 npm run cli -- interview add --company X --role Y --stage Technical
 npm run cli -- interview list
 npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 386 tests
+npm test                                   # 406 tests
 ```
 
 Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
@@ -586,7 +594,7 @@ The command checkpoints the write-ahead log before copying, so the backup is com
 ## Testing
 
 ```bash
-npm test          # 386 tests
+npm test          # 406 tests
 npm run typecheck
 ```
 
@@ -609,7 +617,7 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, 386 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, 406 tests.
 
 A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 

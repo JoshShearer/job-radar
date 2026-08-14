@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "serve": "tsx src/cli.ts serve --open",
+    "dev": "tsx src/cli.ts serve --watch --open",
     "discover": "tsx src/cli.ts discover"
   },
   "dependencies": {
