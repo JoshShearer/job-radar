@@ -503,3 +503,114 @@ describe("current employer and title", () => {
     expect(decide("Current Employer", "current_company", withRoles([])).action).toBe("skip");
   });
 });
+
+describe("postal code is a fact, not a guess", () => {
+  // Found by running autofill against the live Samsara posting once JOB-18 made
+  // the embedded form reachable. The label matched /residence/ and landed in
+  // `location`, so the tool typed "Austin, Texas, United States" into a box
+  // asking for a zip code - a false statement on a real employer's form, of
+  // exactly the kind the whole design exists to prevent.
+  const ZIP_LABELS = [
+    "What is the zip code of your primary residence?",
+    "Zip Code",
+    "Postal Code*",
+    "Postcode",
+    "What is your ZIP code?",
+  ];
+
+  it("classifies a zip question as a postal code, never as a location", () => {
+    for (const label of ZIP_LABELS) {
+      expect(classifyLabel(label), label).toBe("postal_code");
+    }
+  });
+
+  it("still classifies a genuine location question as a location", () => {
+    // The new rule sits before `location`, so it must not swallow the questions
+    // that rule was there for.
+    expect(classifyLabel("Where are you based?")).toBe("location");
+    expect(classifyLabel("Location (City)")).toBe("city");
+    expect(classifyLabel("What is the country of your primary residence?")).toBe("country");
+  });
+
+  it("leaves it blank when no postal code was given, rather than inventing one", () => {
+    const d = decide(ZIP_LABELS[0]!, "postal_code", ctx);
+    expect(d.action).toBe("skip");
+    expect(d).toMatchObject({ consequential: true });
+    expect("value" in d ? d.value : "").not.toContain("Austin");
+  });
+
+  it("never derives a postal code from the city, through the real path", () => {
+    // Deliberately NOT passing the intent: classification is half the bug, so a
+    // test that hands `decide` the right answer cannot see the regression. This
+    // goes label -> classifyLabel -> decide, exactly as the driver does.
+    for (const label of ZIP_LABELS) {
+      const d = decide(label, classifyLabel(label), ctx);
+      expect(JSON.stringify(d), label).not.toMatch(/Austin|Texas|United States/);
+    }
+  });
+
+  it("fills it when it is actually known", () => {
+    const known: DecisionContext = {
+      personal: { ...personal, identity: { ...personal.identity, postal_code: "78701" } },
+      pack: null,
+    };
+    expect(decide(ZIP_LABELS[0]!, "postal_code", known)).toMatchObject({ action: "fill", value: "78701" });
+  });
+});
+
+describe("refusal wording must match how forms actually write it", () => {
+  // Every alternative in the eeo/attestation rules sits inside a trailing `\b`,
+  // so a stem silently fails to match its own inflections. Two alternatives
+  // were dead: `pronoun` never matched the plural every form uses, and
+  // `self identif` could not match "self identify" or "self identification"
+  // under any input, because the boundary would have to fall mid-word.
+  //
+  // Found by running autofill against the live Samsara posting, which asks for
+  // "preferred name and pronouns (she/her, they/them, he/him, ze/zir etc.)".
+  // It was classified `first_name` and answered.
+  const SAMSARA_PRONOUNS =
+    "At Samsara, we encourage employees to bring their whole selves to work (this includes applicants too!) " +
+    "Feel free to share your preferred name and pronouns (she/her, they/them, he/him, ze/zir etc.).";
+
+  it("refuses the live pronouns question instead of treating it as a name field", () => {
+    expect(classifyLabel(SAMSARA_PRONOUNS)).toBe("eeo");
+    const d = decide(SAMSARA_PRONOUNS, classifyLabel(SAMSARA_PRONOUNS), ctx);
+    expect(d.action).toBe("skip");
+    // And specifically not the candidate's name.
+    expect(JSON.stringify(d)).not.toContain("Ada");
+  });
+
+  it("matches the inflected forms, not only the stems", () => {
+    for (const label of [
+      "What are your pronouns?",
+      "Preferred pronouns",
+      "Voluntary self identification",
+      "Voluntary self-identification of disability",
+      "Do you self identify as a member of an underrepresented group?",
+      "Please describe any disabilities",
+    ]) {
+      expect(classifyLabel(label), label).toBe("eeo");
+    }
+    for (const label of [
+      "I acknowledge that I have read the policy",
+      "Acknowledgement of the terms",
+      "I consent to the processing of my data",
+      "Consents and disclosures",
+      "Attestation of accuracy",
+    ]) {
+      expect(classifyLabel(label), label).toBe("attestation");
+    }
+  });
+
+  it("keeps the singular forms working", () => {
+    expect(classifyLabel("Preferred pronoun")).toBe("eeo");
+    expect(classifyLabel("I attest that this is accurate")).toBe("attestation");
+  });
+
+  it("does not swallow an ordinary preferred-name field", () => {
+    // The eeo rule runs first, so widening it risks refusing name questions
+    // that have nothing to do with self-disclosure.
+    expect(classifyLabel("Preferred First Name")).toBe("first_name");
+    expect(classifyLabel("Preferred name")).toBe("first_name");
+  });
+});

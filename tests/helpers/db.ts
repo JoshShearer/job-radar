@@ -70,7 +70,21 @@ export function seedJob(
   return id;
 }
 
-/** An ISO timestamp `days` in the past. */
+/**
+ * An ISO timestamp `days` before `from`, which defaults to the real clock.
+ *
+ * PASS `from` WHENEVER THE CODE UNDER TEST IS GIVEN A PINNED `now`. Mixing the
+ * two is a test that passes on the day it is written and fails later:
+ * `tests/dashboard.test.ts` pinned `now` to 2026-08-14 and seeded ages from
+ * `Date.now()`, so a row seeded 32 days old measured 32 days on the day it was
+ * written and 29 three days later, at which point it stopped counting as
+ * ghosted and the suite went red with nothing having changed.
+ */
+export function daysBefore(from: Date, days: number): string {
+  return new Date(from.getTime() - days * 86400000).toISOString();
+}
+
+/** An ISO timestamp `days` before now. Only safe when the test does not pin a clock. */
 export function daysAgo(days: number): string {
-  return new Date(Date.now() - days * 86400000).toISOString();
+  return daysBefore(new Date(), days);
 }
