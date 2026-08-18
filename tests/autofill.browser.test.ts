@@ -4,9 +4,13 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync, existsSyn
 import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { capturableAnswers, saveAnswers } from "../src/apply/learn.js";
 import {
   fillForm,
+  findFormFrame,
+  revealLazyContent,
   snapshotFields,
   waitForControls,
   settlePage,
@@ -847,6 +851,126 @@ describe("a form the page lazy-mounts into an iframe", () => {
     expect(snapshot.length).toBeGreaterThan(20);
     expect(snapshot.find((f) => f.label.includes("First Name"))?.value).toBe("Ada");
   });
+});
+
+describe("an embed that has attached but has not finished rendering", () => {
+  // JOB-20. Measured live, one run in five returned the HOST page instead of
+  // the embed: its 2 decoy controls held a stable count for the whole settle
+  // window while the embed was still arriving, so the loop called the page
+  // settled and handed back a language picker as the application form.
+  //
+  // A trace of the live page through that window shows the exact state:
+  //
+  //     2304ms frames=4 total=42  main:2/complete  grnhse_iframe:40/loading
+  //
+  // The embed frame is ATTACHED, READABLE, and reports `loading`. Reproducing
+  // that needs a response whose body arrives in two parts: the frame exists and
+  // answers, its parser is still open, and no control has been parsed yet.
+  // Neither a timer nor a blocking script does it - a timer leaves readyState
+  // at "complete", and a synchronous spin makes the frame UNREADABLE, which is
+  // a different case that `withBudget` intentionally treats as settled.
+  //
+  // Earlier versions of these tests used both and passed with the fix reverted.
+  //
+  // The server is 127.0.0.1 only and serves the same two fixture files off
+  // disk. No third party is contacted; the no-network assertion on the
+  // file:// suite above is unaffected.
+  const HOST_FILE = resolve(import.meta.dirname, "fixtures", "embedded-host.html");
+  let server: Server;
+  let origin: string;
+  /** Held open until the test releases it, so the embed is mid-parse. */
+  let releaseBody: (() => void) | null = null;
+
+  beforeAll(async () => {
+    const hostHtml = readFileSync(resolve(import.meta.dirname, "fixtures", "embedded-host.html"), "utf8")
+      .replace("'greenhouse-application.html'", "'/embed'");
+    const embedHtml = readFileSync(resolve(import.meta.dirname, "fixtures", "greenhouse-application.html"), "utf8");
+    // Split before the form so the first chunk parses into a document with an
+    // open parser and zero controls.
+    const cut = embedHtml.indexOf("<form");
+    expect(cut).toBeGreaterThan(0);
+
+    server = createServer((req, res) => {
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      if (req.url?.startsWith("/embed")) {
+        res.write(embedHtml.slice(0, cut));
+        releaseBody = () => {
+          res.end(embedHtml.slice(cut));
+          releaseBody = null;
+        };
+        return;
+      }
+      res.end(hostHtml);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }, 60_000);
+
+  afterAll(async () => {
+    releaseBody?.();
+    await new Promise<void>((r) => server?.close(() => r()));
+  });
+
+  it("does not settle on the host decoy while the embed is still parsing", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    try {
+      await page.goto(`${origin}/host`, { waitUntil: "domcontentloaded" });
+      // The host mounts its embed on scroll, exactly as the live page does.
+      await revealLazyContent(page);
+
+      // Prove the premise before asserting on it: the embed frame is attached
+      // and answering, and it has no controls yet.
+      await expect
+        .poll(() => page.frames().some((f) => f.name() === "grnhse_iframe"), { timeout: 10_000 })
+        .toBe(true);
+      const embed = page.frames().find((f) => f.name() === "grnhse_iframe")!;
+      expect(await embed.evaluate(() => document.readyState)).toBe("loading");
+      expect(await embed.locator("input, textarea, select, [role='combobox']").count()).toBe(0);
+
+      // Release the rest of the form only once the driver has been waiting
+      // well past the settle window it would otherwise have expired on.
+      const settled = findFormFrame(page, { settleMs: 400, timeoutMs: 20_000 });
+      await page.waitForTimeout(2500);
+      releaseBody?.();
+
+      const form = await settled;
+      expect(form.counts[0]?.name).toBe("grnhse_iframe");
+      expect(form.count).toBeGreaterThan(20);
+    } finally {
+      await page.close();
+    }
+  }, 90_000);
+
+  it("leaves the page scrolled down, not back at the top", async () => {
+    // JOB-20. Returning to the top at the end of the reveal lost the mount
+    // entirely on one live run in eight - the iframe element was never created
+    // (`iframeInDom=false`, 3 frames instead of 8). Observer callbacks are
+    // asynchronous and lazy-mount handlers commonly re-check the element's
+    // position when the callback runs, so scrolling away first makes that check
+    // fail. `autofillApplication` scrolls the form into view afterwards.
+    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    try {
+      await page.goto(pathToFileURL(HOST_FILE).href, { waitUntil: "load" });
+      await revealLazyContent(page);
+      const y = await page.evaluate(() => window.scrollY);
+      expect(y).toBeGreaterThan(0);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
+  it("still returns promptly when the form is already painted", async () => {
+    // The gate must not turn every ordinary page into a wait for the full cap.
+    const page = await openFixture();
+    try {
+      const started = Date.now();
+      const form = await findFormFrame(page, { settleMs: 300 });
+      expect(form.count).toBeGreaterThan(20);
+      expect(Date.now() - started).toBeLessThan(4000);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
 });
 
 describe("a bot challenge inside the embedded frame", () => {
