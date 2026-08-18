@@ -45,6 +45,10 @@ The `analyze` stage is the only thing that costs money. Preserve all four mechan
 
 Never re-analyze an unchanged job. If a description changes, `repo.upsert` already invalidates the cached analysis and score — keep that behavior.
 
+The same rule applies to the two per-job documents. `resume tailor` and `apply` reuse a saved `resume-plan.json` / `pack.json` rather than calling the model again, keyed on the stamps in `applications/<job>/generation.json` (`src/apply/reuse.ts`). A changed **posting** regenerates; a changed **master resume** reuses and says so, because `enforceProvenance` re-checks every citation on render, so a stale plan can miss new bullets but can never become a false one. `--force` regenerates deliberately.
+
+This is not only cost. Bullet selection is a model decision, so re-running `tailor` returns a *different* resume for the same posting — silently replacing a document that may already have been read, approved, or submitted. Reuse is the correct default; regenerating is what needs asking for.
+
 ## Structured output
 
 All model output that reaches the database goes through a JSON Schema *and* is re-validated with Zod (`AnalysisSchema`). Malformed output is rejected, never stored. Do not let a model write free prose into a column.
