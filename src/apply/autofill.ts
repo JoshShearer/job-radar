@@ -361,9 +361,16 @@ export async function waitForControls(
  * only report that came out of that run named the footer's language picker.
  *
  * Stepped rather than a single jump to the bottom, because an
- * IntersectionObserver on a sentinel the viewport skips over never fires. Ends
- * back at the top so the human is handed a browser showing the start of the
- * form rather than the footer.
+ * IntersectionObserver on a sentinel the viewport skips over never fires.
+ *
+ * IT STOPS AT THE BOTTOM AND STAYS THERE. Returning to the top immediately lost
+ * the mount entirely on one live run in eight - the iframe element was never
+ * created (`iframeInDom=false`, 3 frames instead of 8). Observer callbacks are
+ * asynchronous, and lazy-mount handlers commonly re-check the element's
+ * position when the callback runs; scrolling away first makes that check fail.
+ * The pause at the bottom gives those callbacks a turn before anything else
+ * happens. `autofillApplication` scrolls the form into view afterwards, which
+ * is where the human wants to be anyway.
  *
  * Scrolling is ordinary use of an ordinary browser: it is what a person reading
  * the posting does, and it is how the page is designed to be read. Nothing here
@@ -379,7 +386,10 @@ export async function waitForControls(
  * "Filled: 0". Vitest transpiles differently, so no test could have caught it.
  * Keep page-side code to expressions with no named functions.
  */
-export async function revealLazyContent(page: Page, opts: { stepPx?: number; pauseMs?: number } = {}): Promise<void> {
+export async function revealLazyContent(
+  page: Page,
+  opts: { stepPx?: number; pauseMs?: number; settleAtBottomMs?: number } = {},
+): Promise<void> {
   const stepPx = opts.stepPx ?? 600;
   const pauseMs = opts.pauseMs ?? 100;
   try {
@@ -394,7 +404,8 @@ export async function revealLazyContent(page: Page, opts: { stepPx?: number; pau
       await page.evaluate((top: number) => window.scrollTo(0, top), y);
       await page.waitForTimeout(pauseMs);
     }
-    await page.evaluate(() => window.scrollTo(0, 0));
+    // Let observer callbacks fired by the last step actually run.
+    await page.waitForTimeout(opts.settleAtBottomMs ?? 600);
   } catch (err) {
     // A page that refuses to be scripted is not a reason to abandon the run -
     // the form may well be in the initial HTML - but it is never something to
@@ -461,6 +472,37 @@ export async function findFormFrame(
     return { scope: best, count: bestCount, counts };
   };
 
+  /**
+   * Is every frame done loading?
+   *
+   * A frame that is still parsing has a steady control count of zero, and the
+   * host page around it has a steady count of its own, so the settle window
+   * expires on a page whose form has not arrived. Measured live one run in
+   * five, where the trace at the moment of the wrong answer read:
+   *
+   *     frames=4  main:2/complete  grnhse_iframe:40/loading
+   *
+   * The embed was attached, readable, and openly saying it was not done. That
+   * is the signal, and it was being ignored.
+   *
+   * AN UNREADABLE FRAME COUNTS AS SETTLED. A frame that will not answer must
+   * not be able to stall the run - that is the same rule `withBudget` exists
+   * for, and it is why a blocking script in a frame is a different case from
+   * this one and does not hold the wait open.
+   */
+  const allFramesLoaded = async (): Promise<boolean> => {
+    if (!isPage) return true;
+    for (const f of scope.frames()) {
+      const state = await withBudget(
+        () => f.evaluate(() => document.readyState),
+        FRAME_PROBE_MS,
+        "complete",
+      );
+      if (state === "loading") return false;
+    }
+    return true;
+  };
+
   let last = -1;
   let stableSince = 0;
   let latest: FormFrame = { scope, count: 0, counts: [] };
@@ -474,7 +516,11 @@ export async function findFormFrame(
       total = -1;
     }
 
-    if (total > 0 && total === last) {
+    // A steady count is necessary and NOT sufficient: a frame still parsing has
+    // a steady count of zero, and the host page around it has a steady count of
+    // its own. That combination is what returned a language picker as the
+    // application form, one live run in five.
+    if (total > 0 && total === last && (await allFramesLoaded())) {
       if (Date.now() - stableSince >= settleMs) return latest;
     } else {
       last = total;
@@ -951,7 +997,20 @@ export async function autofillApplication(
     // window, and is useless for actually applying - the filled form dies with
     // the process.
     headless: opts.headless === true,
-    viewport: { width: 1280, height: 1000 },
+    // `null` means "track the real window", and that matters only in headed
+    // mode - which is the mode a HUMAN then types into.
+    //
+    // A fixed viewport installs a device-metrics override, so the page is
+    // rendered at exactly 1280x1000 and scaled into whatever the window's
+    // content area actually is. Measured here: 1280x1000 emulated inside
+    // ~1288x1021 real, so every real click is scaled by ~1.02 vertically. Near
+    // the top of a page that is a pixel or two; on an application form several
+    // thousand pixels down, it is tens of pixels - enough to land beside the
+    // field being aimed at.
+    //
+    // Headless keeps the fixed size, because a dry run should measure the same
+    // form every time and nobody is clicking in it.
+    viewport: opts.headless === true ? { width: 1280, height: 1000 } : null,
     args: ["--window-size=1300,1050"],
   });
   const page = context.pages()[0] ?? (await context.newPage());
@@ -992,6 +1051,19 @@ export async function autofillApplication(
     if (chosen) {
       log.info(`Form found in ${describeFrame(chosen)}; also saw ${rest.map(describeFrame).join(", ")}`);
     }
+  }
+
+  // Land the human on the form. `revealLazyContent` deliberately stops at the
+  // bottom of the page, and on a careers page that is the footer - several
+  // thousand pixels past the fields they are here to check.
+  if (form.count > 0) {
+    await asFrame(form.scope)
+      .locator(CONTROL_SELECTOR)
+      .first()
+      .scrollIntoViewIfNeeded({ timeout: 3000 })
+      .catch(() => {
+        // Cosmetic. Never a reason to fail a run that filled a form.
+      });
   }
 
   // A resume tailored to THIS posting wins over anything generic in resumes/.
