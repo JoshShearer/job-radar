@@ -22,6 +22,7 @@ export type FieldIntent =
   | "country"
   | "state"
   | "city"
+  | "postal_code"
   | "location"
   | "linkedin"
   | "github"
@@ -65,13 +66,23 @@ export function normalizeLabel(raw: string): string {
  * sponsorship.
  */
 const RULES: ReadonlyArray<readonly [FieldIntent, RegExp]> = [
+  // SUFFIXES MATTER HERE. Every alternative is wrapped in a trailing `\b`, so a
+  // stem cannot match its own inflections: `pronoun` did not match "pronouns",
+  // and `self identif` could never match "self identify" or
+  // "self identification" at all - the boundary has to fall mid-word for those
+  // to match, which it cannot. Both were dead alternatives in a refusal.
+  //
+  // Found live: Samsara asks "Feel free to share your preferred name and
+  // pronouns (she/her, they/them, he/him, ze/zir etc.)", which fell through to
+  // `first_name` and got answered. Pronouns are gender self-disclosure, and
+  // whether to give them is the candidate's call, not this tool's.
   [
     "eeo",
-    /\b(gender identity|gender|racial|ethnic|ethnicity|race|sexual orientation|transgender|disability|chronic condition|veteran|armed forces|hispanic|latino|pronoun|self identif)\b/,
+    /\b(gender identity|gender|racial|ethnic|ethnicity|race|sexual orientation|transgender|disabilit\w*|chronic condition|veteran|armed forces|hispanic|latino|pronouns?|self[- ]?identif\w*)\b/,
   ],
   [
     "attestation",
-    /\b(i acknowledge|i certify|i confirm|i agree|i have read|acknowledge|acknowledgement|consent|privacy notice|terms and conditions|double check|ensuring accuracy|attest)\b/,
+    /\b(i acknowledge|i certify|i confirm|i agree|i have read|acknowledge\w*|consent\w*|privacy notice|terms and conditions|double check|ensuring accuracy|attest\w*)\b/,
   ],
   ["cover_letter", /cover letter/],
   ["resume", /\b(resume|cv|curriculum vitae)\b/],
@@ -104,6 +115,13 @@ const RULES: ReadonlyArray<readonly [FieldIntent, RegExp]> = [
   ["country", /\bcountr(y|ies)\b/],
   ["state", /\b(states?|province)\b/],
   ["city", /\bcity\b/],
+  // Before `location`, and that ordering is the whole point. Samsara asks
+  // "What is the zip code of your primary residence?", which matches
+  // /residence/ - so this landed in `location` and typed
+  // "Austin, Texas, United States" into a zip code box on a real application.
+  // A wrong answer is worse than a blank one; a wrong answer that looks
+  // deliberate is worse still.
+  ["postal_code", /\b(zip|postal)\s*code\b|\bpostcode\b|\bzip\b/],
   ["location", /\b(location|where are you based|currently based|residence)\b/],
   ["full_name", /^name$|^full name$|\byour name\b/],
 ];
@@ -240,6 +258,10 @@ export function decide(rawLabel: string, intent: FieldIntent, ctx: DecisionConte
         : { action: "skip", why: "identity.state is not set in personal.yaml", consequential: true };
     case "city":
       return required(p.identity.city, "identity.city");
+    case "postal_code":
+      // Not derivable from the city. Unset means unknown, and an invented
+      // postal code is a false statement on an employer's form.
+      return required(p.identity.postal_code, "identity.postal_code");
     case "location":
       return p.identity.city && p.identity.state
         ? {

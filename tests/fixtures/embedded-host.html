@@ -1,0 +1,141 @@
+<!doctype html>
+<!--
+  Fixture: a company careers page that EMBEDS its application form, for
+  tests/autofill.browser.test.ts.
+
+  PROVENANCE
+  This is a reconstruction, not a capture. It reproduces the two behaviours
+  measured on the live Samsara posting
+  (https://www.samsara.com/company/careers/roles/7847219?gh_jid=7847219) on
+  2026-08-17, and nothing else from that page - no markup, no scripts, no
+  analytics, no tokens:
+
+    before scrolling:  3 frames, main-frame controls = 2, no Greenhouse frame
+    after scrolling:   8 frames, grnhse_iframe -> 42 controls
+                       (job-boards.greenhouse.io/embed/job_app?for=samsara)
+
+  Two things follow from that measurement, and this fixture holds both:
+
+  1. THE FORM IS LAZY-MOUNTED. The iframe is not in the initial HTML. An
+     IntersectionObserver on a sentinel near the bottom creates it, so a driver
+     that never scrolls sees a page with no application form on it at all.
+
+  2. THE FORM IS IN A CHILD FRAME. Once mounted it is an <iframe> around
+     greenhouse-application.html, so every main-frame query - page.locator,
+     page.evaluate(document.querySelectorAll ...) - misses all of it.
+
+  THE DECOY MATTERS. The host page carries its own "Select region" combobox in
+  the footer, because that is the single control the real run found and
+  reported. A fix that merely finds SOME control would settle on this one and
+  report a filled form having filled a language picker. The test therefore
+  asserts the form frame is chosen over the host, not just that something was
+  found.
+
+  The mount is deliberately delayed past the observer callback. A form that
+  appears in the same tick the iframe is created would let a driver pass by
+  luck; the real embed takes hundreds of milliseconds to paint.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Senior Software Engineer - Connected Workflows | Careers</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    header, footer { background: #111; color: #fff; padding: 1rem 2rem; }
+    main { max-width: 760px; margin: 0 auto; padding: 2rem; }
+    .filler p { line-height: 1.7; color: #333; }
+    #application { background: #eef3fb; padding: 2rem 0; }
+    #embed_app { min-height: 120px; text-align: center; }
+    iframe { width: 100%; height: 1400px; border: 0; }
+    .spinner { color: #888; font-size: 2rem; letter-spacing: .3rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <strong>Careers</strong>
+</header>
+
+<main>
+  <h1>Senior Software Engineer - Connected Workflows</h1>
+  <p>Remote - US</p>
+
+  <!-- Filler so the sentinel starts well below the fold, as it does live. The
+       text is generic on purpose: no posting content is reproduced here. -->
+  <div class="filler">
+    <h2>About the role</h2>
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor
+      incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+      nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+    <p>Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+      fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+      culpa qui officia deserunt mollit anim id est laborum.</p>
+    <h2>What you will do</h2>
+    <p>Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium
+      doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore
+      veritatis et quasi architecto beatae vitae dicta sunt explicabo.</p>
+    <p>Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed
+      quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
+    <h2>Minimum requirements</h2>
+    <p>At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis
+      praesentium voluptatum deleniti atque corrupti quos dolores et quas molestias
+      excepturi sint occaecati cupiditate non provident.</p>
+    <p>Similique sunt in culpa qui officia deserunt mollitia animi, id est laborum et
+      dolorum fuga. Et harum quidem rerum facilis est et expedita distinctio.</p>
+    <h2>Compensation</h2>
+    <p>Nam libero tempore, cum soluta nobis est eligendi optio cumque nihil impedit quo
+      minus id quod maxime placeat facere possimus, omnis voluptas assumenda est.</p>
+    <p>Temporibus autem quibusdam et aut officiis debitis aut rerum necessitatibus saepe
+      eveniet ut et voluptates repudiandae sint et molestiae non recusandae.</p>
+    <h2>Benefits</h2>
+    <p>Itaque earum rerum hic tenetur a sapiente delectus, ut aut reiciendis voluptatibus
+      maiores alias consequatur aut perferendis doloribus asperiores repellat.</p>
+    <p>On the live page this section runs for several thousand pixels, which is why the
+      embed below is never in the initial viewport.</p>
+  </div>
+</main>
+
+<section id="application">
+  <h2 style="text-align:center">Job Application for: Senior Software Engineer - Connected Workflows</h2>
+  <!-- The observer watches this. Nothing below it exists until it is seen. -->
+  <div id="sentinel"></div>
+  <div id="embed_app"><div class="spinner">&bull;&bull;&bull;</div></div>
+</section>
+
+<footer>
+  <!-- THE DECOY. The one control the real run found and mistook for the form. -->
+  <label for="region">Select region</label>
+  <select id="region" name="region">
+    <option value="en-us">English (US)</option>
+    <option value="en-gb">English (UK)</option>
+    <option value="de">Deutsch</option>
+  </select>
+</footer>
+
+<script>
+  // Mirrors the live behaviour: the embed is created only once the sentinel
+  // scrolls into view, and paints a little after that.
+  var mounted = false;
+  var observer = new IntersectionObserver(function (entries) {
+    if (mounted) return;
+    for (var i = 0; i < entries.length; i++) {
+      if (!entries[i].isIntersecting) continue;
+      mounted = true;
+      observer.disconnect();
+      setTimeout(function () {
+        var host = document.getElementById('embed_app');
+        host.innerHTML = '';
+        var f = document.createElement('iframe');
+        f.name = 'grnhse_iframe';
+        f.id = 'grnhse_iframe';
+        f.src = 'greenhouse-application.html';
+        host.appendChild(f);
+      }, 350);
+      return;
+    }
+  });
+  observer.observe(document.getElementById('sentinel'));
+</script>
+
+</body>
+</html>

@@ -28,6 +28,9 @@ export const PersonalSchema = z.object({
     phone: z.string().default(""),
     city: z.string().default(""),
     state: z.string().default(""),
+    // Deliberately not derived from city: a postal code is a specific fact, and
+    // guessing one puts a false statement on an application.
+    postal_code: z.string().default(""),
     country: z.string().default("United States"),
   }),
   links: z

@@ -97,6 +97,30 @@ const L = {
   currentTitle: "Current/Most Recent Job Title",
 } as const;
 
+/**
+ * The prepared-pack answers, including four that must never be typed. Shared,
+ * because the second pass has to be proved safe on an embedded form too and a
+ * second copy would be free to drift away from this one.
+ */
+const PACK = {
+  formAnswers: [
+    { question: "Why do you want to work here?", answer: "Drafted answer about the product." },
+    {
+      question: "I certify that the information above is true and complete",
+      answer: "SHOULD NEVER BE TYPED INTO AN ATTESTATION",
+    },
+    {
+      question: "Describe a product you built from the ground up",
+      answer: "Drafted answer about a product built from scratch.",
+    },
+    {
+      question: "I acknowledge that the information provided is accurate",
+      answer: "SHOULD NEVER BE TYPED INTO AN ATTESTATION",
+    },
+    { question: "Email", answer: "SHOULD NEVER OVERWRITE A RULE-FILLED FIELD" },
+  ],
+} as unknown as ApplicationPack;
+
 const EEO_LABELS = [
   "How would you describe your gender identity? (mark all that apply)",
   "How would you describe your racial/ethnic background? (mark all that apply)",
@@ -537,7 +561,7 @@ describe("bot protection", () => {
         { waitUntil: "load" },
       );
       const started = Date.now();
-      expect(await settlePage(page)).toBe(0);
+      expect((await settlePage(page)).count).toBe(0);
       expect(Date.now() - started).toBeLessThan(8000); // not the 15s cap
     } finally {
       await page.close();
@@ -634,27 +658,8 @@ describe("the prepared-pack second pass", () => {
   let page: Page;
   let outcomes: FieldOutcome[];
 
-  const pack = {
-    formAnswers: [
-      { question: "Why do you want to work here?", answer: "Drafted answer about the product." },
-      {
-        question: "I certify that the information above is true and complete",
-        answer: "SHOULD NEVER BE TYPED INTO AN ATTESTATION",
-      },
-      {
-        question: "Describe a product you built from the ground up",
-        answer: "Drafted answer about a product built from scratch.",
-      },
-      {
-        question: "I acknowledge that the information provided is accurate",
-        answer: "SHOULD NEVER BE TYPED INTO AN ATTESTATION",
-      },
-      { question: "Email", answer: "SHOULD NEVER OVERWRITE A RULE-FILLED FIELD" },
-    ],
-  } as unknown as ApplicationPack;
-
   beforeAll(async () => {
-    ({ page, outcomes } = await run(pack));
+    ({ page, outcomes } = await run(PACK));
   }, 60_000);
 
   afterAll(async () => {
@@ -694,4 +699,182 @@ describe("the prepared-pack second pass", () => {
     expect(await page.locator("#attest_text").inputValue()).toBe("");
     expect(find(outcomes, L.attestText)).toMatchObject({ status: "needs-you" });
   });
+});
+
+// ---------------------------------------------------------------------------
+// JOB-18: a form the host page lazy-mounts into an iframe.
+//
+// Measured on https://www.samsara.com/company/careers/roles/7847219 :
+//   before scrolling: 3 frames, 2 main-frame controls, no Greenhouse frame
+//   after  scrolling: 8 frames, grnhse_iframe -> 42 controls
+//
+// The run against that page reported "Filled: 0 / For you: 0" and listed one
+// field, "Select region" - the host page's footer language picker. That output
+// is indistinguishable from a form with nothing to fill.
+//
+// These tests drive the same shape from file://, and they are not a rerun of
+// the direct-board suite for its own sake: every refusal is re-asserted HERE
+// because each one was reached through `page.locator` / `page.evaluate`, and
+// all of those now resolve against a different document.
+// ---------------------------------------------------------------------------
+describe("a form the page lazy-mounts into an iframe", () => {
+  const HOST = resolve(import.meta.dirname, "fixtures", "embedded-host.html");
+
+  let page: Page;
+  let outcomes: FieldOutcome[];
+  let form: Awaited<ReturnType<typeof settlePage>>;
+  /** The frame the form is in - what every assertion below must read. */
+  let formFrame: ReturnType<Page["frames"]>[number];
+
+  beforeAll(async () => {
+    page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    await page.goto(pathToFileURL(HOST).href, { waitUntil: "load" });
+    form = await settlePage(page);
+    outcomes = await fillForm(form.scope, personal, PACK, resume, MASTER_RESUME);
+    formFrame = page.frames().find((f) => f.name() === "grnhse_iframe")!;
+  }, 90_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  it("mounts the form only after the page is scrolled", async () => {
+    // Pins the premise. If the fixture ever stopped being lazy, every test
+    // below would still pass while testing nothing about lazy mounting.
+    const fresh = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    try {
+      await fresh.goto(pathToFileURL(HOST).href, { waitUntil: "load" });
+      await fresh.waitForTimeout(2000);
+      expect(fresh.frames().some((f) => f.name() === "grnhse_iframe")).toBe(false);
+      expect(await fresh.locator("input, textarea, select, [role='combobox']").count()).toBe(1);
+    } finally {
+      await fresh.close();
+    }
+  }, 60_000);
+
+  it("finds the embedded form rather than the host page's decoy control", () => {
+    // The host page has exactly one control, "Select region". Settling on it is
+    // the failure this whole issue is about, so "found something" is not the
+    // assertion - "found the RIGHT something" is.
+    expect(form.count).toBeGreaterThan(20);
+    expect(form.counts.map((c) => c.name)).toContain("grnhse_iframe");
+    expect(form.counts[0]!.name).toBe("grnhse_iframe");
+  });
+
+  it("reports the host page it passed over, so a wrong pick is visible", () => {
+    const host = form.counts.find((c) => c.name !== "grnhse_iframe");
+    expect(host).toBeDefined();
+    expect(host!.count).toBe(1); // the "Select region" decoy
+  });
+
+  it("fills the identity fields inside the frame", async () => {
+    expect(await formFrame.locator("#first_name").inputValue()).toBe("Ada");
+    expect(find(outcomes, L.firstName)).toMatchObject({ status: "filled" });
+  });
+
+  it("does not type into the host page", async () => {
+    // The decoy is still on its default. A driver that "found a form" on the
+    // host page would have changed this.
+    expect(await page.locator("#region").inputValue()).toBe("en-us");
+  });
+
+  it("attaches the resume through the frame", () => {
+    expect(find(outcomes, L.attach)).toMatchObject({ status: "filled" });
+  });
+
+  // --- The refusals, re-asserted against the embedded document -------------
+
+  it("never answers a demographic question, and says why", async () => {
+    // Asserted at the same strength as the direct-board suite, deliberately.
+    // A weaker version of this test - status alone, no intent, no reason -
+    // survived a mutant that answers EEO questions, because those controls are
+    // comboboxes and an unmatched combobox also fails to fill. "Not filled" and
+    // "refused" are different facts, and only the second one is the refusal.
+    for (const label of EEO_LABELS) {
+      const o = find(outcomes, label);
+      expect(o, `missing outcome for ${label}`).toBeDefined();
+      expect(o!.intent).toBe("eeo");
+      expect(o!.status).not.toBe("filled");
+      expect(o!.detail).toContain("demographic self-identification is yours");
+    }
+    // And nothing is selected in the DOM either.
+    const checked = await formFrame.locator("input[type=radio]:checked, input[type=checkbox]:checked").count();
+    expect(checked).toBe(0);
+    for (const id of ["4015790004", "4015786004", "4015785004", "4015783004", "4015781004", "4015780004"]) {
+      expect(await formFrame.locator(`[id="${id}"]`).inputValue()).toBe("");
+    }
+  });
+
+  it("never ticks a checkbox", async () => {
+    const consent = find(outcomes, L.consent);
+    expect(consent).toMatchObject({ status: "needs-you" });
+    expect(await formFrame.locator("#consent").isChecked()).toBe(false);
+  });
+
+  it("never affirms an attestation", async () => {
+    expect(find(outcomes, L.privacy)).toMatchObject({ status: "needs-you" });
+    expect(await formFrame.locator("#attest_text").inputValue()).toBe("");
+    expect(await formFrame.locator("#attest_input").inputValue()).toBe("");
+  });
+
+  it("never submits", async () => {
+    // The fixture's submit button records its own clicks.
+    expect(await formFrame.evaluate(() => (window as never as { __submitted?: boolean }).__submitted ?? false)).toBe(
+      false,
+    );
+  });
+
+  it("scopes each combobox to its own listbox inside the frame", () => {
+    // The phone-country picker keeps ~244 options mounted. A global option
+    // query returns that list whichever menu was opened. Getting a real
+    // country back here means aria-controls resolved in the right document.
+    const country = find(outcomes, L.country);
+    expect(country).toMatchObject({ status: "filled" });
+    expect(country!.detail).toContain("United States");
+  });
+
+  it("still reaches the prepared-pack second pass through the frame", async () => {
+    expect(await formFrame.locator("#describe_product").inputValue()).toBe(
+      "Drafted answer about a product built from scratch.",
+    );
+  });
+
+  it("captures what was typed, so answer-learning is not silently dead", async () => {
+    // snapshotFields reads [data-jr-idx], which is now written in the frame.
+    // Reading only the main frame would return an empty list forever: the
+    // feature would keep running, keep succeeding, and never learn anything.
+    const snapshot = await snapshotFields(page);
+    expect(snapshot.length).toBeGreaterThan(20);
+    expect(snapshot.find((f) => f.label.includes("First Name"))?.value).toBe("Ada");
+  });
+});
+
+describe("a bot challenge inside the embedded frame", () => {
+  const HOST = resolve(import.meta.dirname, "fixtures", "embedded-host.html");
+
+  it("stops the run even though the challenge is not in the main frame", async () => {
+    // Before JOB-18 the probes were main-frame only, so a challenge inside the
+    // embed could not match any BLOCKING_MARKER. The refusal did not weaken -
+    // it stopped existing, on exactly the boards that embed an ATS.
+    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    try {
+      await page.goto(pathToFileURL(HOST).href, { waitUntil: "load" });
+      const form = await settlePage(page);
+      const frame = page.frames().find((f) => f.name() === "grnhse_iframe")!;
+
+      await frame.evaluate(() => {
+        const f = document.createElement("iframe");
+        // Matches the blocking marker without loading anything.
+        f.src = "about:blank#recaptcha-bframe";
+        f.style.width = "300px";
+        f.style.height = "200px";
+        document.body.appendChild(f);
+      });
+
+      await expect(fillForm(form.scope, personal, null, resume)).rejects.toThrow(/active bot challenge/i);
+      expect(await frame.locator("#first_name").inputValue()).toBe("");
+    } finally {
+      await page.close();
+    }
+  }, 90_000);
 });
