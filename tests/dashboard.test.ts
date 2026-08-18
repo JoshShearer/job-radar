@@ -3,14 +3,21 @@ import { buildDashboard, bucketByWeek, formatRate, weekStart } from "../src/repo
 import type { SourcesConfig } from "../src/config/schema.js";
 import { GHOSTED_AFTER_DAYS, STALE_AFTER_DAYS } from "../src/model/status.js";
 import { MIN_SAMPLE } from "../src/stats/funnel.js";
-import { memoryRepo, seedJob, daysAgo } from "./helpers/db.js";
+import { memoryRepo, seedJob, daysBefore } from "./helpers/db.js";
 
 function sources(over: { remoteok?: boolean } = {}): SourcesConfig {
   return { watchlist: [], sources: { remoteok: { enabled: over.remoteok ?? false } } } as unknown as SourcesConfig;
 }
 
+/**
+ * The clock this whole file runs on. Every seeded age must be measured from
+ * THIS, not from the real clock - see `daysBefore` in helpers/db.
+ */
+const NOW = new Date("2026-08-14T00:00:00Z");
+const daysAgo = (days: number) => daysBefore(NOW, days);
+
 function page(repo: ReturnType<typeof memoryRepo>["repo"], srcs = sources()): string {
-  return buildDashboard({ repo, sources: srcs, now: new Date("2026-08-14T00:00:00Z") });
+  return buildDashboard({ repo, sources: srcs, now: NOW });
 }
 
 /**

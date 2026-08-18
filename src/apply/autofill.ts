@@ -1,4 +1,4 @@
-import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import { chromium, type BrowserContext, type Frame, type Locator, type Page } from "playwright";
 import { resolve } from "node:path";
 import { PROJECT_ROOT } from "../config/load.js";
 import { chooseResume, describeResumeChoice, type ResumeChoice } from "./resume-file.js";
@@ -50,6 +50,29 @@ export interface AutofillResult {
   screenshot: string | null;
   context: BrowserContext;
   page: Page;
+}
+
+/**
+ * Where the form actually is.
+ *
+ * A company that embeds its ATS on its own careers domain puts the entire
+ * application inside a child frame - measured on Samsara, 42 controls in
+ * `grnhse_iframe` and 2 on the host page. `page.locator` and
+ * `page.evaluate(document.querySelectorAll ...)` both read the MAIN frame only,
+ * so every stage of this file was blind to those 42: the settle wait, the
+ * enumeration, the `data-jr-idx` tagging, the combobox scoping, the filling.
+ * The run reported "Filled: 0", which is exactly what a form with nothing to
+ * fill reports.
+ *
+ * `Page` and `Frame` share the locator and evaluate API, and `page.mainFrame()`
+ * is a `Frame`, so taking a scope rather than a page costs nothing and leaves a
+ * direct board on precisely its old code path.
+ */
+export type FormScope = Page | Frame;
+
+/** `Page` has `mainFrame`; `Frame` does not. That is the whole discriminator. */
+export function asFrame(scope: FormScope): Frame {
+  return "mainFrame" in scope ? scope.mainFrame() : scope;
 }
 
 interface ControlInfo {
@@ -112,20 +135,92 @@ export async function detectChallenge(
   return null;
 }
 
-function pageProbes(page: Page) {
-  const visible = async (sel: string) => {
-    try {
-      return await page.locator(sel).first().isVisible({ timeout: 250 });
-    } catch {
+/**
+ * Probe every frame, not just the main one.
+ *
+ * This was main-frame only, and on an embedded form that silently disabled a
+ * refusal rather than degrading it. The reCAPTCHA an ATS embeds - badge AND
+ * challenge popup - is a child of the embed frame, so `iframe[src*='recaptcha']
+ * [src*='bframe']` could not match from the host page. An active challenge
+ * would not have stopped the run.
+ *
+ * Frames are re-read on every call because a challenge appears by attaching
+ * one; a list captured once would be the list from before it showed up.
+ *
+ * EVERY FRAME QUERY IS BOUNDED, because some frames never answer. Measured: a
+ * locator call against a challenge iframe hangs indefinitely - not slowly,
+ * indefinitely - while Playwright waits on an initial navigation that frame
+ * never completes. Unbounded, one such frame stalls the whole run before a
+ * single field is filled.
+ *
+ * Timing a frame out cannot weaken the refusal, and that is a property of WHERE
+ * the markers live, not a hope: every BLOCKING_MARKER is an element in an
+ * embedding document - `iframe[src*='recaptcha'][src*='bframe']` is the iframe
+ * TAG, which sits in the page or the form frame, both of which answer. The
+ * frame that stops answering is the challenge's own content, which is never
+ * where the evidence is. A frame that times out is remembered for the rest of
+ * the call so it costs one budget total rather than one per selector.
+ */
+const FRAME_PROBE_MS = 300;
+
+/**
+ * Run a frame query with a hard ceiling, returning `fallback` if it overruns.
+ *
+ * Not a nicety: a frame can hang a locator call forever (see above), and every
+ * loop in this file that walks `page.frames()` would inherit that. `Promise.race`
+ * rather than a Playwright timeout option because the hang is inside Playwright's
+ * own wait for the frame to become usable, which its per-call timeouts do not
+ * cut short.
+ */
+async function withBudget<T>(run: () => Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<{ timedOut: true }>((res) => {
+    timer = setTimeout(() => res({ timedOut: true }), ms);
+  });
+  try {
+    const result = await Promise.race([run().then((value) => ({ value })), budget]);
+    return "value" in result ? result.value : fallback;
+  } catch {
+    return fallback;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function pageProbes(scope: FormScope) {
+  const frames = () => {
+    const frame = asFrame(scope);
+    // Given a page, look everywhere. Given one frame, that frame is the whole
+    // question being asked. Playwright lists the main frame first, so the
+    // common case matches before any child frame is touched.
+    return "mainFrame" in scope ? scope.frames() : [frame];
+  };
+
+  // Frames that blew the budget once. Re-asking them costs the same 300ms and
+  // gets the same non-answer.
+  const unresponsive = new WeakSet<object>();
+
+  const bounded = async (f: Frame, run: () => Promise<boolean>): Promise<boolean> => {
+    if (unresponsive.has(f)) return false;
+    const answered = await withBudget(async () => ({ ok: await run() }), FRAME_PROBE_MS, null);
+    if (answered === null) {
+      unresponsive.add(f);
       return false;
     }
+    return answered.ok;
+  };
+
+  const visible = async (sel: string) => {
+    for (const f of frames()) {
+      if (await bounded(f, () => f.locator(sel).first().isVisible({ timeout: 250 }))) return true;
+    }
+    return false;
   };
   const present = async (sel: string) => {
-    try {
-      return (await page.locator(sel).count()) > 0;
-    } catch {
-      return false;
+    for (const f of frames()) {
+      if (await bounded(f, async () => (await f.locator(sel).count()) > 0)) return true;
     }
+    return false;
   };
   return { visible, present };
 }
@@ -135,9 +230,13 @@ function pageProbes(page: Page) {
  * Done in one pass in the page so we are not making a round trip per element,
  * and so label resolution can use the DOM relationships the browser already
  * has (aria-labelledby, label[for], ancestor <label>).
+ *
+ * Runs in the frame that holds the form. `document` inside `evaluate` is that
+ * frame's document, so the `data-jr-idx` attributes it writes and the locators
+ * that later read them are guaranteed to be talking about the same DOM.
  */
-async function enumerateControls(page: Page): Promise<ControlInfo[]> {
-  return page.evaluate((SELECTOR) => {
+async function enumerateControls(scope: FormScope): Promise<ControlInfo[]> {
+  return asFrame(scope).evaluate((SELECTOR) => {
     const out: Array<{
       idx: number;
       kind: string;
@@ -246,35 +345,145 @@ export const CONTROL_SETTLE_MS = 1200;
 export const CONTROL_WAIT_MS = 15000;
 
 export async function waitForControls(
-  page: Page,
+  scope: FormScope,
   opts: { timeoutMs?: number; settleMs?: number } = {},
 ): Promise<number> {
+  const found = await findFormFrame(scope, opts);
+  return found.count;
+}
+
+/**
+ * Scroll the whole document, so anything mounted on scroll gets mounted.
+ *
+ * Samsara's careers page does not create its application iframe until a
+ * sentinel enters the viewport. Before scrolling there is no form in the DOM at
+ * all - not an empty form, no form - so no amount of waiting finds one. The
+ * only report that came out of that run named the footer's language picker.
+ *
+ * Stepped rather than a single jump to the bottom, because an
+ * IntersectionObserver on a sentinel the viewport skips over never fires. Ends
+ * back at the top so the human is handed a browser showing the start of the
+ * form rather than the footer.
+ *
+ * Scrolling is ordinary use of an ordinary browser: it is what a person reading
+ * the posting does, and it is how the page is designed to be read. Nothing here
+ * is hidden from the site or presented as something it is not.
+ *
+ * THE LOOP RUNS IN NODE, AND EVERY `evaluate` BODY IS A BARE EXPRESSION. That
+ * is not style. Under tsx, esbuild's `keepNames` rewrites a named function -
+ * including `const sleep = (ms) => ...` - to call a `__name()` helper that does
+ * not exist in a browser, so the whole evaluate dies with
+ * `ReferenceError: __name is not defined`. The first version of this function
+ * did the loop page-side, threw on every real run, and had its error swallowed
+ * by a `.catch`, which is precisely how it reached a live posting reporting
+ * "Filled: 0". Vitest transpiles differently, so no test could have caught it.
+ * Keep page-side code to expressions with no named functions.
+ */
+export async function revealLazyContent(page: Page, opts: { stepPx?: number; pauseMs?: number } = {}): Promise<void> {
+  const stepPx = opts.stepPx ?? 600;
+  const pauseMs = opts.pauseMs ?? 100;
+  try {
+    for (let step = 0; step < 200; step++) {
+      const y = step * stepPx;
+      // Re-read the height each pass: revealing content makes the page taller,
+      // and a bound captured up front stops short of the new bottom.
+      const bottom = await page.evaluate(
+        () => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+      );
+      if (!bottom || y >= bottom) break;
+      await page.evaluate((top: number) => window.scrollTo(0, top), y);
+      await page.waitForTimeout(pauseMs);
+    }
+    await page.evaluate(() => window.scrollTo(0, 0));
+  } catch (err) {
+    // A page that refuses to be scripted is not a reason to abandon the run -
+    // the form may well be in the initial HTML - but it is never something to
+    // hide. Silence here is what shipped the bug this function exists to fix.
+    log.warn(`Could not scroll the page to reveal lazily-loaded content: ${(err as Error).message}`);
+  }
+}
+
+export interface FormFrame {
+  scope: FormScope;
+  count: number;
+  /** Every frame that had at least one control, richest first. For the report. */
+  counts: Array<{ name: string; url: string; count: number }>;
+}
+
+/**
+ * Find the frame the form is in, and wait for it to settle.
+ *
+ * Richest frame wins. A form frame dominates by an order of magnitude - 42
+ * against 2 on the measured page - and the alternative rules are worse:
+ * filling every frame would type into cookie banners and newsletter widgets,
+ * and taking the first non-empty frame would have settled on the host page's
+ * "Select region" picker and reported a filled form having filled a language
+ * menu. That specific wrong answer is what the fixture's decoy pins.
+ *
+ * The settle logic is unchanged and now applies to the TOTAL across frames, so
+ * an embed that mounts late is still waited for: the count rises from 1 to 33
+ * when the iframe paints, which resets the window exactly as a late burst
+ * within one document does.
+ *
+ * Given a bare frame, this is just the old single-scope wait.
+ */
+export async function findFormFrame(
+  scope: FormScope,
+  opts: { timeoutMs?: number; settleMs?: number } = {},
+): Promise<FormFrame> {
   const timeoutMs = opts.timeoutMs ?? CONTROL_WAIT_MS;
   const settleMs = opts.settleMs ?? CONTROL_SETTLE_MS;
   const deadline = Date.now() + timeoutMs;
+  const isPage = "mainFrame" in scope;
+  const page = isPage ? scope : scope.page();
+
+  const survey = async (): Promise<FormFrame> => {
+    // Re-read the frame list every pass. A lazily embedded form arrives as a
+    // NEW frame, so a list captured once can never contain it.
+    const frames = isPage ? scope.frames() : [scope];
+    const counts: FormFrame["counts"] = [];
+    let best: FormScope = scope;
+    let bestCount = 0;
+
+    for (const f of frames) {
+      // Bounded: a frame that never finishes navigating hangs this call
+      // forever, and one such frame on the page would mean no form is ever
+      // found. A frame that cannot answer contributes nothing.
+      const n = await withBudget(() => f.locator(CONTROL_SELECTOR).count(), FRAME_PROBE_MS, 0);
+      if (n === 0) continue;
+      counts.push({ name: f.name(), url: f.url(), count: n });
+      if (n > bestCount) {
+        bestCount = n;
+        best = f;
+      }
+    }
+    counts.sort((a, b) => b.count - a.count);
+    return { scope: best, count: bestCount, counts };
+  };
 
   let last = -1;
   let stableSince = 0;
+  let latest: FormFrame = { scope, count: 0, counts: [] };
 
   while (Date.now() < deadline) {
-    let count: number;
+    let total = -1;
     try {
-      count = await page.locator(CONTROL_SELECTOR).count();
+      latest = await survey();
+      total = latest.counts.reduce((sum, c) => sum + c.count, 0);
     } catch {
-      // Navigating or otherwise mid-flight; try again.
-      count = -1;
+      total = -1;
     }
 
-    if (count > 0 && count === last) {
-      if (Date.now() - stableSince >= settleMs) return count;
+    if (total > 0 && total === last) {
+      if (Date.now() - stableSince >= settleMs) return latest;
     } else {
-      last = count;
+      last = total;
       stableSince = Date.now();
     }
     await page.waitForTimeout(150);
   }
 
-  return Math.max(last, 0);
+  return latest;
 }
 
 /**
@@ -287,9 +496,26 @@ export async function waitForControls(
  * Polling rather than reading once at the end is deliberate. If they submit the
  * form, the page navigates and the answers are gone; the last good read taken
  * before that is exactly the snapshot worth keeping.
+ *
+ * Given a page this reads EVERY frame, because the `data-jr-idx` marks it looks
+ * for were written wherever the form turned out to be. Reading only the main
+ * frame would have quietly stopped answer-learning on embedded forms - the
+ * feature would still run, still succeed, and never capture anything.
  */
-export async function snapshotFields(page: Page): Promise<FieldSnapshot[]> {
-  const raw = await page.evaluate(() => {
+export async function snapshotFields(scope: FormScope): Promise<FieldSnapshot[]> {
+  const frames = "mainFrame" in scope ? scope.frames() : [scope];
+  const raw: Array<{ label: string; kind: string; value: string }> = [];
+  for (const f of frames) {
+    // Bounded for the same reason as everywhere else a frame list is walked:
+    // this is called on a poll while the human types, so a frame that hangs
+    // would stall every subsequent read, not just this one.
+    raw.push(...(await withBudget(() => readTaggedFields(f), FRAME_PROBE_MS, [])));
+  }
+  return raw.map((r) => ({ ...r, intent: classifyLabel(r.label) }));
+}
+
+function readTaggedFields(frame: Frame): Promise<Array<{ label: string; kind: string; value: string }>> {
+  return frame.evaluate(() => {
     const out: Array<{ label: string; kind: string; value: string }> = [];
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-jr-idx]"))) {
       const input = el as HTMLInputElement | HTMLTextAreaElement;
@@ -329,8 +555,6 @@ export async function snapshotFields(page: Page): Promise<FieldSnapshot[]> {
     }
     return out;
   });
-
-  return raw.map((r) => ({ ...r, intent: classifyLabel(r.label) }));
 }
 
 /**
@@ -342,11 +566,17 @@ export async function snapshotFields(page: Page): Promise<FieldSnapshot[]> {
  * seconds. `fillForm` re-checks and is what actually stops the run; this only
  * avoids pausing before it does.
  */
-export async function settlePage(page: Page): Promise<number> {
+export async function settlePage(page: Page): Promise<FormFrame> {
   const { visible, present } = pageProbes(page);
   const challenge = await detectChallenge(visible, present);
-  if (challenge?.kind === "blocking") return 0;
-  return waitForControls(page);
+  if (challenge?.kind === "blocking") return { scope: page, count: 0, counts: [] };
+
+  // Before waiting, make sure there is something to wait FOR. A form mounted on
+  // scroll does not exist until the page is scrolled, so polling a document
+  // that will never change on its own just burns the full 15s cap and then
+  // reports an empty form.
+  await revealLazyContent(page);
+  return findFormFrame(page);
 }
 
 /**
@@ -358,13 +588,18 @@ export async function settlePage(page: Page): Promise<number> {
  * therefore returns a country list no matter which dropdown you opened, and
  * happily "matches" against it. react-select points `aria-controls` at the
  * correct listbox once the menu opens; that is the only reliable handle.
+ *
+ * The menu is looked up in the SAME scope as the control. An embedded form
+ * renders its listbox inside the embed frame, so resolving `aria-controls`
+ * against the host page finds nothing at all.
  */
-async function openMenu(page: Page, control: Locator): Promise<Locator | null> {
+async function openMenu(scope: FormScope, control: Locator): Promise<Locator | null> {
+  const frame = asFrame(scope);
   await control.click({ timeout: 5000 });
   for (let i = 0; i < 20; i++) {
     const id = await control.getAttribute("aria-controls").catch(() => null);
-    if (id) return page.locator(`[id="${id}"]`);
-    await page.waitForTimeout(100);
+    if (id) return frame.locator(`[id="${id}"]`);
+    await frame.page().waitForTimeout(100);
   }
   return null;
 }
@@ -380,7 +615,10 @@ async function readOptions(menu: Locator): Promise<string[]> {
   return texts.map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
 }
 
-async function closeMenu(page: Page): Promise<void> {
+async function closeMenu(scope: FormScope): Promise<void> {
+  // Keyboard input is page-level and goes to whatever is focused, which is the
+  // control we just clicked, in whichever frame it lives.
+  const page = asFrame(scope).page();
   await page.keyboard.press("Escape").catch(() => {});
   await page.waitForTimeout(80);
 }
@@ -392,14 +630,15 @@ async function closeMenu(page: Page): Promise<void> {
  * answer a question whose correct response depends on what is offered.
  */
 async function selectFromCombobox(
-  page: Page,
+  scope: FormScope,
   control: Locator,
   desired: string,
   onOptions?: (options: string[]) => string | null,
 ): Promise<SelectResult> {
-  const menu = await openMenu(page, control);
+  const page = asFrame(scope).page();
+  const menu = await openMenu(scope, control);
   if (!menu) {
-    await closeMenu(page);
+    await closeMenu(scope);
     return { chosen: null, options: [] };
   }
 
@@ -419,7 +658,7 @@ async function selectFromCombobox(
 
   if (!match || isSubmitControl(match.option)) {
     await control.fill("").catch(() => {});
-    await closeMenu(page);
+    await closeMenu(scope);
     return { chosen: null, options: seen.length ? seen : options };
   }
 
@@ -427,7 +666,7 @@ async function selectFromCombobox(
   try {
     await target.click({ timeout: 3000 });
   } catch {
-    await closeMenu(page);
+    await closeMenu(scope);
     return { chosen: null, options: seen };
   }
   await page.waitForTimeout(120);
@@ -466,7 +705,12 @@ function offered(options: string[], limit = 8): string {
  * whole record of what happened.
  */
 export async function fillForm(
-  page: Page,
+  /**
+   * The page, or the frame the form was found in. Given a page this reads its
+   * main frame, which is what a direct ATS board needs; given the frame that
+   * `findFormFrame` chose, it reads the embedded form.
+   */
+  scope: FormScope,
   personal: Personal,
   pack: ApplicationPack | null,
   resume: ResumeChoice | null,
@@ -475,7 +719,11 @@ export async function fillForm(
   /** Path to a cover letter document, when one has been generated. */
   coverLetter?: string,
 ): Promise<FieldOutcome[]> {
-  const { visible, present } = pageProbes(page);
+  const frame = asFrame(scope);
+  // Challenge detection asks about the whole page even when filling one frame:
+  // a challenge that appears anywhere stops the run, and on an embedded form
+  // the reCAPTCHA is a sibling of the form rather than inside it.
+  const { visible, present } = pageProbes("mainFrame" in scope ? scope : frame.page());
   const challenge = await detectChallenge(visible, present);
   if (challenge?.kind === "blocking") {
     throw new Error(
@@ -484,7 +732,7 @@ export async function fillForm(
     );
   }
 
-  const controls = await enumerateControls(page);
+  const controls = await enumerateControls(frame);
   log.info(`Found ${controls.length} form controls`);
 
   const outcomes: FieldOutcome[] = [];
@@ -504,7 +752,7 @@ export async function fillForm(
     let intent = classifyLabel(c.label);
     if (intent === "unknown" && c.name) intent = classifyLabel(c.name);
 
-    const el = page.locator(`[data-jr-idx="${c.idx}"]`);
+    const el = frame.locator(`[data-jr-idx="${c.idx}"]`);
     const label = c.label || `(unlabelled ${c.kind})`;
 
     // Checkboxes on application forms are almost always consent or
@@ -580,7 +828,7 @@ export async function fillForm(
                   .selectOption({ label: decision.value })
                   .then(() => ({ chosen: decision.value, options: [] }))
                   .catch(() => ({ chosen: null, options: [] }))
-              : await selectFromCombobox(page, el, decision.value);
+              : await selectFromCombobox(frame, el, decision.value);
           outcomes.push(
             r.chosen
               ? { label, intent, status: "filled", detail: `${r.chosen} (${decision.why})` }
@@ -618,7 +866,7 @@ export async function fillForm(
           const m = chooseOption(want, seenOptions);
           if (m) chosen = await el.selectOption({ label: m.option }).then(() => m.option).catch(() => null);
         } else if (c.kind === "combobox") {
-          const r = await selectFromCombobox(page, el, decision.desired, resolve);
+          const r = await selectFromCombobox(frame, el, decision.desired, resolve);
           chosen = r.chosen;
           seenOptions = r.options;
         } else if (c.kind === "radio") {
@@ -664,7 +912,7 @@ export async function fillForm(
       const m = matchPreparedAnswer(c.label, pack.formAnswers);
       if (!m) continue;
       try {
-        await page.locator(`[data-jr-idx="${c.idx}"]`).fill(m.answer);
+        await frame.locator(`[data-jr-idx="${c.idx}"]`).fill(m.answer);
         const entry = outcomes.find((o) => o.label === c.label);
         const detail = `drafted answer to "${truncate(m.matched)}" - READ IT`;
         if (entry) {
@@ -717,7 +965,7 @@ export async function autofillApplication(
   // detectChallenge runs inside it before anything is typed, so waiting here
   // does not let a challenge page slip past - it only stops us reading a form
   // that has not been drawn yet.
-  const painted = await settlePage(page);
+  const form = await settlePage(page);
 
   // A closed posting is not an empty form. Greenhouse redirects a dead job to
   // the board root, which renders a real listings page and enumerates like one
@@ -734,15 +982,23 @@ export async function autofillApplication(
     );
   }
 
-  if (painted === 0) {
+  if (form.count === 0) {
     log.warn("No form controls appeared on this page. It may render the form behind a link or button.");
+  } else if (form.counts.length > 1) {
+    // Say which frame was picked and what the alternatives were. Choosing the
+    // richest frame is a heuristic, and a heuristic that picks wrong in silence
+    // is how "Filled: 1" ends up meaning "filled a language picker".
+    const [chosen, ...rest] = form.counts;
+    if (chosen) {
+      log.info(`Form found in ${describeFrame(chosen)}; also saw ${rest.map(describeFrame).join(", ")}`);
+    }
   }
 
   // A resume tailored to THIS posting wins over anything generic in resumes/.
   // The caller normally decides and hands over the whole choice; the fallback
   // is for programmatic callers, never a re-derivation of one that was passed.
   const outcomes = await fillForm(
-    page,
+    form.scope,
     personal,
     pack,
     opts.resume ?? chooseResume(),
@@ -759,6 +1015,12 @@ export async function autofillApplication(
   }
 
   return { url, outcomes, screenshot, context, page };
+}
+
+/** "grnhse_iframe (32 controls)", or the file name when a frame has no name. */
+function describeFrame(c: { name: string; url: string; count: number }): string {
+  const who = c.name || c.url.split("/").pop()?.split("?")[0] || "the page";
+  return `${who} (${c.count} control${c.count === 1 ? "" : "s"})`;
 }
 
 function truncate(s: string, n = 60): string {
