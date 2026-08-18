@@ -14,6 +14,7 @@ import { buildDailyReport, writeReport } from "./report/daily.js";
 import { writeHtmlReport } from "./report/html.js";
 import { buildDashboard, writeDashboard } from "./report/dashboard.js";
 import { loadPack, packDir, prepareApplication, renderPack, writePack } from "./analysis/prepare.js";
+import type { ApplicationPack } from "./analysis/application.js";
 import { loadPersonal, personalPath } from "./config/personal.js";
 import { autofillApplication, renderOutcomes, snapshotFields } from "./apply/autofill.js";
 import { capturableAnswers, saveAnswers, type FieldSnapshot } from "./apply/learn.js";
@@ -30,6 +31,7 @@ import { scaffoldResume } from "./resume/init.js";
 import { importResume } from "./resume/import.js";
 import { matchResumeToJob } from "./resume/requirements.js";
 import { enforceProvenance, tailorResume, TailorSchema } from "./resume/tailor.js";
+import { decideReuse, hashFile, readStamps, writeStamp } from "./apply/reuse.js";
 import {
   composeResume,
   renderMatchReport,
@@ -199,7 +201,12 @@ program
   .option("--effort <level>", "reasoning effort (default high - this one is worth the tokens)")
   .option("--open", "open the generated pack in your browser", false)
   .option("--stale-ok", "prepare even if the posting looks closed", false)
-  .action(async (jobId: string, opts: { model?: string; effort?: string; open: boolean; staleOk: boolean }) => {
+  .option("--force", "regenerate the pack even if one for this posting already exists", false)
+  .action(
+    async (
+      jobId: string,
+      opts: { model?: string; effort?: string; open: boolean; staleOk: boolean; force: boolean },
+    ) => {
     const profile = loadProfile();
     await withRepo("apply", async (repo) => {
       const job = repo.get(jobId);
@@ -219,13 +226,40 @@ program
         log.warn("This job has not been analyzed yet. Run `analyze` first for a much better package.");
       }
 
-      const { pack, usage } = await prepareApplication(job, profile, {
-        // Defaults higher than the analysis stage: this output is read closely
-        // by a human and acted on, so it is worth more thinking than a triage
-        // pass over hundreds of postings.
-        model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
-        effort: opts.effort ?? "high",
+      // Same reasoning as `resume tailor`: a re-run of the chain must not pay
+      // for the pack again, and the cover note is the part that would silently
+      // change underneath a letter already read. See src/apply/reuse.ts.
+      const saved = loadPack(job);
+      const reuse = decideReuse({
+        artifactExists: saved !== null,
+        stamp: readStamps(packDir(job)).pack,
+        descriptionHash: job.descriptionHash,
+        resumeHash: hashFile(resumePath()),
+        force: opts.force,
       });
+
+      let pack: ApplicationPack;
+      let usage: Awaited<ReturnType<typeof prepareApplication>>["usage"] | null = null;
+      if (reuse.reuse && saved) {
+        log.info(reuse.why);
+        pack = saved;
+      } else {
+        if (!reuse.reuse && saved) log.info(reuse.why);
+        const fresh = await prepareApplication(job, profile, {
+          // Defaults higher than the analysis stage: this output is read closely
+          // by a human and acted on, so it is worth more thinking than a triage
+          // pass over hundreds of postings.
+          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+          effort: opts.effort ?? "high",
+        });
+        pack = fresh.pack;
+        usage = fresh.usage;
+        writeStamp(packDir(job), "pack", {
+          descriptionHash: job.descriptionHash,
+          resumeHash: hashFile(resumePath()),
+          generatedAt: new Date().toISOString(),
+        });
+      }
 
       const markdown = renderPack(job, pack, profile);
       const { dir, md, html } = writePack(job, markdown, pack);
@@ -273,7 +307,9 @@ program
       log.info(`  html     : ${html}`);
       if (coverPdf) log.info(`  cover    : ${basename(coverPdf)}  <- autofill attaches this`);
       log.info(
-        `  tokens   : ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`,
+        usage
+          ? `  tokens   : ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`
+          : `  tokens   : none - reused the saved pack. \`--force\` to regenerate.`,
       );
       log.info(
         nextStatus
@@ -430,7 +466,9 @@ resumeCmd
   .option("--effort <level>", "reasoning effort (default high)")
   .option("--no-pdf", "skip PDF generation")
   .option("--stale-ok", "prepare even if the posting looks closed", false)
-  .action(async (jobId: string, opts: { model?: string; effort?: string; pdf: boolean; staleOk: boolean }) => {
+  .option("--force", "re-select bullets even if a plan for this posting already exists", false)
+  .action(
+    async (jobId: string, opts: { model?: string; effort?: string; pdf: boolean; staleOk: boolean; force: boolean }) => {
     const resume = loadResume();
     const errors = lintResume(resume).filter((i) => i.level === "error");
     if (errors.length) {
@@ -457,10 +495,42 @@ resumeCmd
       const match = matchResumeToJob(resume, job.descriptionClean, bullets);
       log.info(`Requirement coverage: ${match.requiredCoverage}% required, ${match.preferredCoverage}% preferred`);
 
-      const { plan, violations, reverted, usage } = await tailorResume(resume, job, match, {
-        model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
-        effort: opts.effort ?? "high",
+      // Re-running the chain must not silently pay again, and must not silently
+      // hand back a DIFFERENT resume for the same posting - which selection
+      // would, being a model decision. See src/apply/reuse.ts.
+      const planFile = resolve(packDir(job), "resume-plan.json");
+      const resumeHash = hashFile(resumePath());
+      const savedPlan = existsSync(planFile)
+        ? TailorSchema.safeParse(JSON.parse(readFileSync(planFile, "utf8")))
+        : null;
+      const reuse = decideReuse({
+        artifactExists: savedPlan?.success === true,
+        stamp: readStamps(packDir(job)).resumePlan,
+        descriptionHash: job.descriptionHash,
+        resumeHash,
+        force: opts.force,
       });
+
+      let plan: Awaited<ReturnType<typeof tailorResume>>["plan"];
+      let violations: Awaited<ReturnType<typeof tailorResume>>["violations"];
+      let reverted: Awaited<ReturnType<typeof tailorResume>>["reverted"];
+      let usage: Awaited<ReturnType<typeof tailorResume>>["usage"] | null = null;
+
+      if (reuse.reuse && savedPlan?.success) {
+        log.info(reuse.why);
+        plan = savedPlan.data;
+        // Provenance is re-checked on every reuse, never assumed to still hold:
+        // the master resume may have moved under a citation that was valid when
+        // the plan was made.
+        ({ violations, reverted } = enforceProvenance(resume, plan));
+      } else {
+        if (!reuse.reuse && savedPlan?.success) log.info(reuse.why);
+        const fresh = await tailorResume(resume, job, match, {
+          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+          effort: opts.effort ?? "high",
+        });
+        ({ plan, violations, reverted, usage } = fresh);
+      }
 
       const composed = composeResume(resume, plan);
       const contact = buildContactLine();
@@ -480,7 +550,14 @@ resumeCmd
       // Persisted so layout can be iterated on with `resume render`, which
       // costs nothing. Without it, fixing a margin means paying for the whole
       // selection again and risking a different resume.
-      writeFileSync(resolve(dir, "resume-plan.json"), JSON.stringify(plan, null, 2), "utf8");
+      if (usage) {
+        writeFileSync(resolve(dir, "resume-plan.json"), JSON.stringify(plan, null, 2), "utf8");
+        writeStamp(dir, "resumePlan", {
+          descriptionHash: job.descriptionHash,
+          resumeHash,
+          generatedAt: new Date().toISOString(),
+        });
+      }
 
       let pdf: string | null = null;
       if (opts.pdf) {
@@ -495,7 +572,11 @@ resumeCmd
       console.log("");
       log.info(`Written to ${dir}`);
       if (pdf) log.info(`  ${basename(pdf)}  <- autofill attaches this automatically`);
-      log.info(`  tokens: ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`);
+      log.info(
+        usage
+          ? `  tokens: ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`
+          : `  tokens: none - reused the saved plan. \`--force\` to re-select.`,
+      );
 
       if (violations.length) {
         console.log("");
