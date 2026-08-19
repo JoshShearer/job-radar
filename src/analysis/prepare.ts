@@ -26,7 +26,7 @@ export async function prepareApplication(
   job: EnrichedJob,
   profile: CareerProfile,
   opts: { model: string; effort: string },
-): Promise<{ pack: ApplicationPack; usage: { input: number; cacheRead: number; output: number } }> {
+): Promise<{ pack: ApplicationPack; usage: { input: number; cacheWrite: number; cacheRead: number; output: number } }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
 
@@ -113,6 +113,7 @@ Return only the structured object.`;
     pack: parsed.data,
     usage: {
       input: response.usage.input_tokens,
+      cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
       cacheRead: response.usage.cache_read_input_tokens ?? 0,
       output: response.usage.output_tokens,
     },
