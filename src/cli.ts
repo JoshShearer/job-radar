@@ -9,7 +9,7 @@ import { closeDb, openDb } from "./db/index.js";
 import { JobRepo } from "./db/repo.js";
 import { runIngest } from "./pipeline/ingest.js";
 import { runScoring } from "./pipeline/rescore.js";
-import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL } from "./analysis/analyzer.js";
+import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL, PACK_MODEL } from "./analysis/analyzer.js";
 import { buildDailyReport, writeReport } from "./report/daily.js";
 import { writeHtmlReport } from "./report/html.js";
 import { buildDashboard, writeDashboard } from "./report/dashboard.js";
@@ -203,10 +203,11 @@ program
   .option("--open", "open the generated pack in your browser", false)
   .option("--stale-ok", "prepare even if the posting looks closed", false)
   .option("--force", "regenerate the pack even if one for this posting already exists", false)
+  .option("--full", "also generate outreach drafts, interview prep and a negotiation strategy", false)
   .action(
     async (
       jobId: string,
-      opts: { model?: string; effort?: string; open: boolean; staleOk: boolean; force: boolean },
+      opts: { model?: string; effort?: string; open: boolean; staleOk: boolean; force: boolean; full: boolean },
     ) => {
     const profile = loadProfile();
     await withRepo("apply", async (repo) => {
@@ -237,6 +238,7 @@ program
         descriptionHash: job.descriptionHash,
         resumeHash: hashFile(resumePath()),
         force: opts.force,
+        wantFull: opts.full,
       });
 
       let pack: ApplicationPack;
@@ -247,11 +249,12 @@ program
       } else {
         if (!reuse.reuse && saved) log.info(reuse.why);
         const fresh = await prepareApplication(job, profile, {
-          // Defaults higher than the analysis stage: this output is read closely
-          // by a human and acted on, so it is worth more thinking than a triage
-          // pass over hundreds of postings.
-          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+          // Effort stays high: this output is read closely by a human and acted
+          // on. The saving comes from the model tier and from not generating
+          // later-stage sections, not from thinking less about the ones kept.
+          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL,
           effort: opts.effort ?? "high",
+          full: opts.full,
         });
         pack = fresh.pack;
         usage = fresh.usage;
@@ -259,6 +262,7 @@ program
           descriptionHash: job.descriptionHash,
           resumeHash: hashFile(resumePath()),
           generatedAt: new Date().toISOString(),
+          full: opts.full === true,
         });
       }
 
@@ -307,7 +311,7 @@ program
       log.info(`  markdown : ${md}`);
       log.info(`  html     : ${html}`);
       if (coverPdf) log.info(`  cover    : ${basename(coverPdf)}  <- autofill attaches this`);
-      const packModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL;
+      const packModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL;
       log.info(
         usage
           ? `  spend    : ${describeSpend(usage, packModel)}`

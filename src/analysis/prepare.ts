@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CareerProfile } from "../config/schema.js";
 import type { EnrichedJob } from "../model/job.js";
-import { ApplicationPackSchema, APPLICATION_JSON_SCHEMA, type ApplicationPack } from "./application.js";
+import { ApplicationPackSchema, applicationJsonSchema, type ApplicationPack } from "./application.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateWords } from "../lib/html.js";
 import { formatSalary } from "../lib/salary.js";
@@ -25,7 +25,7 @@ export const APPLICATIONS_DIR = resolve(PROJECT_ROOT, "applications");
 export async function prepareApplication(
   job: EnrichedJob,
   profile: CareerProfile,
-  opts: { model: string; effort: string },
+  opts: { model: string; effort: string; full?: boolean },
 ): Promise<{ pack: ApplicationPack; usage: { input: number; cacheWrite: number; cacheRead: number; output: number } }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
@@ -81,8 +81,12 @@ Hard constraints, which matter more than polish:
 - Never invent a person's name. outreachMessages target role titles only.
 - Never claim he has used the company's product, read their engineering blog, or inspected their site unless the posting itself establishes it.
 - The cover note and outreach must reference something concrete and real from the posting. No "I'd love to connect", no fake familiarity, no flattery.
-- openDecisions is for genuine tradeoffs only he can resolve - travel, level, location, contract terms. Be direct; do not soften a real problem.
-- Compensation: he is told never to be given a bare "ask for exactly $X". Give target, anchor, walk-away, and whether to ask for their range first, with the reasoning.
+${
+    opts.full === true
+      ? `- openDecisions is for genuine tradeoffs only he can resolve - travel, level, location, contract terms. Be direct; do not soften a real problem.
+- Compensation: he is told never to be given a bare "ask for exactly $X". Give target, anchor, walk-away, and whether to ask for their range first, with the reasoning.`
+      : `- This is the SUBMIT-NOW package. Outreach drafts, interview prep and negotiation strategy are not being asked for and must not be smuggled into other fields - do not append them to the cover note or the form answers. Spend the effort on the cover note, the form answers and doNotClaim instead.`
+  }
 
 Return only the structured object.`;
 
@@ -92,7 +96,7 @@ Return only the structured object.`;
     system: [{ type: "text", text: buildSystemPrompt(profile), cache_control: { type: "ephemeral" } }],
     output_config: {
       effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
-      format: { type: "json_schema", schema: APPLICATION_JSON_SCHEMA as unknown as Record<string, unknown> },
+      format: { type: "json_schema", schema: applicationJsonSchema(opts.full === true) },
     },
     messages: [{ role: "user", content: userPrompt }],
   });
@@ -135,12 +139,14 @@ export function renderPack(job: EnrichedJob, pack: ApplicationPack, profile: Car
   L.push("```");
   L.push("");
 
-  L.push("## Decide these first");
-  L.push("");
-  L.push("Nothing below is worth doing until these are settled.");
-  L.push("");
-  for (const d of pack.openDecisions.slice(0, 6)) L.push(`- [ ] ${d}`);
-  L.push("");
+  if (pack.openDecisions?.length) {
+    L.push("## Decide these first");
+    L.push("");
+    L.push("Nothing below is worth doing until these are settled.");
+    L.push("");
+    for (const d of pack.openDecisions.slice(0, 6)) L.push(`- [ ] ${d}`);
+    L.push("");
+  }
 
   L.push("## The frame");
   L.push("");
@@ -192,62 +198,68 @@ export function renderPack(job: EnrichedJob, pack: ApplicationPack, profile: Car
     }
   }
 
-  L.push("## Outreach");
-  L.push("");
-  L.push(
-    "Titles only - find the actual people yourself. **Send nothing without reading it first.** " +
-      "The analysis was explicit that a cold application here is weak on its own.",
-  );
-  L.push("");
-  for (const o of pack.outreachMessages.slice(0, 3)) {
-    L.push(`### ${o.targetTitle} (${o.channel})`);
+  if (pack.outreachMessages?.length) {
+    L.push("## Outreach");
     L.push("");
-    L.push(o.message);
+    L.push(
+      "Titles only - find the actual people yourself. **Send nothing without reading it first.** " +
+        "The analysis was explicit that a cold application here is weak on its own.",
+    );
+    L.push("");
+    for (const o of pack.outreachMessages.slice(0, 3)) {
+      L.push(`### ${o.targetTitle} (${o.channel})`);
+      L.push("");
+      L.push(o.message);
+      L.push("");
+    }
+  }
+
+  if (c) {
+    L.push("## Compensation");
+    L.push("");
+    L.push(`| | |`);
+    L.push(`|---|---|`);
+    L.push(`| **Ask for their range first** | ${c.askForTheirRangeFirst ? "Yes" : "No"} |`);
+    L.push(`| **Target** | ${c.targetNumber} |`);
+    L.push(`| **Anchor** | ${c.anchorNumber} |`);
+    L.push(`| **Walk away** | ${c.walkAway} |`);
+    L.push("");
+    L.push(c.reasoning);
+    L.push("");
+    L.push("**What to say:**");
+    L.push("");
+    L.push("> " + c.suggestedWording.split("\n").join("\n> "));
     L.push("");
   }
 
-  L.push("## Compensation");
-  L.push("");
-  L.push(`| | |`);
-  L.push(`|---|---|`);
-  L.push(`| **Ask for their range first** | ${c.askForTheirRangeFirst ? "Yes" : "No"} |`);
-  L.push(`| **Target** | ${c.targetNumber} |`);
-  L.push(`| **Anchor** | ${c.anchorNumber} |`);
-  L.push(`| **Walk away** | ${c.walkAway} |`);
-  L.push("");
-  L.push(c.reasoning);
-  L.push("");
-  L.push("**What to say:**");
-  L.push("");
-  L.push("> " + c.suggestedWording.split("\n").join("\n> "));
-  L.push("");
-
-  L.push("## Interview prep");
-  L.push("");
-  L.push("**Likely questions:**");
-  L.push("");
-  for (const q of pack.interviewPrep.likelyQuestions.slice(0, 10)) L.push(`- ${q}`);
-  L.push("");
-  L.push("**Stories to have ready:**");
-  L.push("");
-  for (const s of pack.interviewPrep.storiesToPrepare.slice(0, 7)) L.push(`- ${s}`);
-  L.push("");
-  L.push("**Ask them:**");
-  L.push("");
-  for (const q of pack.interviewPrep.questionsToAskThem.slice(0, 7)) L.push(`- ${q}`);
-  L.push("");
+  if (pack.interviewPrep) {
+    L.push("## Interview prep");
+    L.push("");
+    L.push("**Likely questions:**");
+    L.push("");
+    for (const q of pack.interviewPrep!.likelyQuestions.slice(0, 10)) L.push(`- ${q}`);
+    L.push("");
+    L.push("**Stories to have ready:**");
+    L.push("");
+    for (const s of pack.interviewPrep!.storiesToPrepare.slice(0, 7)) L.push(`- ${s}`);
+    L.push("");
+    L.push("**Ask them:**");
+    L.push("");
+    for (const q of pack.interviewPrep!.questionsToAskThem.slice(0, 7)) L.push(`- ${q}`);
+    L.push("");
+  }
 
   L.push("---");
   L.push("");
   L.push("## Submit checklist");
   L.push("");
-  L.push("- [ ] Open decisions above are resolved");
+  if (pack.openDecisions?.length) L.push("- [ ] Open decisions above are resolved");
   L.push("- [ ] Resume edited and exported to PDF");
   L.push("- [ ] Cover note read end to end and edited into your own voice");
   L.push("- [ ] Nothing in the application claims anything from the Do NOT claim list");
   L.push(`- [ ] Submitted at ${job.applicationUrl ?? job.sourceUrl}`);
   L.push(`- [ ] \`npm run cli -- status ${job.id} APPLIED\``);
-  L.push("- [ ] Outreach sent (separately, after the application lands)");
+  if (pack.outreachMessages?.length) L.push("- [ ] Outreach sent (separately, after the application lands)");
   L.push("");
   L.push(
     `_Prepared ${new Date().toISOString()} for ${profile.identity.name}. ` +

@@ -168,3 +168,35 @@ describe("hashing the master resume", () => {
     expect(hashFile(resolve(tmpdir(), "job-radar-does-not-exist.yaml"))).toBe("");
   });
 });
+
+describe("asking for more than was saved", () => {
+  // JOB-23. `apply` defaults to a submit-now pack and generates outreach,
+  // interview prep and negotiation strategy only under `--full`. Reusing a
+  // core pack for a `--full` request would hand back a document missing the
+  // exact sections just asked for, and report it as a successful reuse.
+  it("regenerates when --full is asked for and the saved pack is core", () => {
+    const d = decideReuse({ ...base, stamp: stamp({ full: false }), wantFull: true });
+    expect(d.reuse).toBe(false);
+    expect(d.why).toMatch(/--full/);
+  });
+
+  it("treats a stamp written before --full existed as core", () => {
+    // `full` is absent on older stamps. Reading that as "core" can only cause
+    // a regeneration, which is the safe direction.
+    const { full: _omit, ...noFullFlag } = stamp();
+    const d = decideReuse({ ...base, stamp: noFullFlag as Stamp, wantFull: true });
+    expect(d.reuse).toBe(false);
+  });
+
+  it("reuses a full pack for a full request", () => {
+    expect(decideReuse({ ...base, stamp: stamp({ full: true }), wantFull: true }).reuse).toBe(true);
+  });
+
+  it("reuses a full pack for a core request, rather than paying to generate less", () => {
+    expect(decideReuse({ ...base, stamp: stamp({ full: true }), wantFull: false }).reuse).toBe(true);
+  });
+
+  it("still reuses a core pack for a core request", () => {
+    expect(decideReuse({ ...base, stamp: stamp({ full: false }), wantFull: false }).reuse).toBe(true);
+  });
+});

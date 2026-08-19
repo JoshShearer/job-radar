@@ -54,31 +54,61 @@ export const ApplicationPackSchema = z.object({
         message: z.string().describe("Under 120 words. References something real about the role or company."),
       }),
     )
-    ,
-  compensationStrategy: z.object({
-    askForTheirRangeFirst: z.boolean(),
-    reasoning: z.string(),
-    targetNumber: z.string(),
-    anchorNumber: z.string(),
-    walkAway: z.string(),
-    suggestedWording: z.string().describe("What to actually say when the number comes up."),
-  }),
-  interviewPrep: z.object({
-    likelyQuestions: z.array(z.string()),
-    storiesToPrepare: z
-      .array(z.string())
-      .describe("STAR stories drawn ONLY from the candidate's real, stated history."),
-    questionsToAskThem: z.array(z.string()),
-  }),
+    .describe("Cold outreach drafts. Role titles only, never a person's name.")
+    .optional(),
+  compensationStrategy: z
+    .object({
+      askForTheirRangeFirst: z.boolean(),
+      reasoning: z.string(),
+      targetNumber: z.string(),
+      anchorNumber: z.string(),
+      walkAway: z.string(),
+      suggestedWording: z.string().describe("What to actually say when the number comes up."),
+    })
+    .optional(),
+  interviewPrep: z
+    .object({
+      likelyQuestions: z.array(z.string()),
+      storiesToPrepare: z
+        .array(z.string())
+        .describe("STAR stories drawn ONLY from the candidate's real, stated history."),
+      questionsToAskThem: z.array(z.string()),
+    })
+    .optional(),
   openDecisions: z
     .array(z.string())
-    .describe("Things the HUMAN must decide before submitting. Be direct about real tradeoffs."),
+    .describe("Things the HUMAN must decide before submitting. Be direct about real tradeoffs.")
+    .optional(),
+  // NEVER optional, in either variant. This is the list of things that must
+  // not be claimed on the application; a cheaper pack is still a pack that
+  // cannot make a false statement.
   doNotClaim: z
     .array(z.string())
     .describe("Requirements in the posting the candidate cannot evidence and must not imply they have."),
 });
 
 export type ApplicationPack = z.infer<typeof ApplicationPackSchema>;
+
+/**
+ * Sections that belong to a later stage than "submit this application".
+ *
+ * Outreach drafts, interview prep and a negotiation strategy are useful, and
+ * none of them is useful at the moment of filling in a form. Together they are
+ * about half of what the model generates, and OUTPUT is where the money goes:
+ * one measured pack was 4,281 tokens in and 8,675 out, ten times more spent on
+ * output than input at Opus rates.
+ *
+ * So they are opt-in (`apply --full`) rather than always-on. Not hidden at
+ * render time - a section that is rendered-but-not-shown has already been paid
+ * for. They are removed from the schema, which is what actually stops them
+ * being written.
+ */
+export const LATER_STAGE_SECTIONS = [
+  "outreachMessages",
+  "compensationStrategy",
+  "interviewPrep",
+  "openDecisions",
+] as const;
 
 /** JSON Schema mirror, for structured output. */
 export const APPLICATION_JSON_SCHEMA = {
@@ -171,3 +201,26 @@ export const APPLICATION_JSON_SCHEMA = {
   ],
   additionalProperties: false,
 } as const;
+
+/**
+ * The schema to ask for. `full` decides whether the later-stage sections are
+ * requested at all.
+ *
+ * Both variants keep `additionalProperties: false` and an accurate `required`
+ * list, so the core pack is as strictly validated as the full one - this trades
+ * scope for cost, never rigour. The Zod schema marks the same four optional, so
+ * a core pack loads and re-validates exactly like a full one.
+ */
+export function applicationJsonSchema(full: boolean): Record<string, unknown> {
+  if (full) return APPLICATION_JSON_SCHEMA as unknown as Record<string, unknown>;
+
+  const drop = new Set<string>(LATER_STAGE_SECTIONS);
+  const properties = Object.fromEntries(
+    Object.entries(APPLICATION_JSON_SCHEMA.properties).filter(([k]) => !drop.has(k)),
+  );
+  return {
+    ...APPLICATION_JSON_SCHEMA,
+    properties,
+    required: APPLICATION_JSON_SCHEMA.required.filter((k) => !drop.has(k)),
+  };
+}

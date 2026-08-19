@@ -11,6 +11,21 @@ import { log } from "../lib/log.js";
 import { estimateCostUsd, PRICING } from "../lib/cost.js";
 
 export const DEFAULT_MODEL = "claude-opus-5";
+
+/**
+ * The model that writes the application pack.
+ *
+ * Cheaper than DEFAULT_MODEL on purpose. The pack is prose - a cover note,
+ * drafted form answers, a positioning frame - and prose is where a Sonnet-tier
+ * model is closest to an Opus-tier one. It is also the single largest output in
+ * the tool (~6,000 tokens per job plus thinking), and output is where the money
+ * goes, so this is the one call where the tier actually shows up on a bill.
+ *
+ * `resume tailor` deliberately stays on DEFAULT_MODEL: it decides which bullets
+ * are true of this candidate for this posting, and being wrong there is a
+ * correctness problem, not a style one.
+ */
+export const PACK_MODEL = "claude-sonnet-5";
 export const DEFAULT_EFFORT = "medium";
 
 export interface AnalyzeOptions {
