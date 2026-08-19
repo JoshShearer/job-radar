@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { SCHEMA_SQL } from "../../src/db/schema.js";
+import { applyColumnMigrations } from "../../src/db/index.js";
 import { JobRepo } from "../../src/db/repo.js";
 import { normalizeForIdentity } from "../../src/lib/hash.js";
 
@@ -15,6 +16,9 @@ import { normalizeForIdentity } from "../../src/lib/hash.js";
 export function memoryRepo(): { repo: JobRepo; db: Database.Database } {
   const db = new Database(":memory:");
   db.exec(SCHEMA_SQL);
+  // Migrations too, or tests run against a different schema than production
+  // and any query touching a migrated column fails only in tests.
+  applyColumnMigrations(db);
   return { repo: new JobRepo(db), db };
 }
 
