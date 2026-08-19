@@ -118,6 +118,50 @@ sources:
       - { token: affirm, company: Affirm }
       - { token: coinbase, company: Coinbase }
 
+      # -- Added 2026-08-19: data infra and developer platforms ----------
+      # The board list, not the analysis budget, was the binding constraint:
+      # 118 new postings across the previous 103 boards produced zero jobs
+      # above the analysis threshold. Every token below returned HTTP 200 with
+      # a non-empty job list via `discover` on 2026-08-19.
+      - { token: fivetran, company: Fivetran }
+      - { token: cockroachlabs, company: "Cockroach Labs" }
+      - { token: clickhouse, company: ClickHouse }
+      - { token: grafanalabs, company: "Grafana Labs" }
+      - { token: honeycomb, company: Honeycomb }
+      - { token: axiom, company: Axiom }
+
+      # -- Added 2026-08-19: content platforms and product analytics -----
+      - { token: contentstack, company: Contentstack }
+      - { token: pendo, company: Pendo }
+
+      # -- Added 2026-08-19: proptech and hardware ------------------------
+      - { token: homeward, company: Homeward }
+      - { token: ownwell, company: Ownwell }
+      - { token: formlabs, company: Formlabs }
+
+      # -- Added 2026-08-19: AI product companies -------------------------
+      - { token: anthropic, company: Anthropic }
+      - { token: typeface, company: Typeface }
+      - { token: assemblyai, company: AssemblyAI }
+      - { token: togetherai, company: "Together AI" }
+      - { token: scaleai, company: "Scale AI" }
+      - { token: imbue, company: Imbue }
+      - { token: cresta, company: Cresta }
+      - { token: comet, company: Comet }
+
+      # -- Added 2026-08-19: integration platforms ------------------------
+      # Integration and automation vendors run large Solutions Engineering and
+      # Forward Deployed organisations, which is where the Valin technical
+      # sales record is evidence rather than an aside.
+      - { token: make, company: Make }
+      - { token: workato, company: Workato }
+      - { token: celigo, company: Celigo }
+
+      # -- Added 2026-08-19: Austin --------------------------------------
+      - { token: selffinancial, company: "Self Financial" }
+      - { token: aceable, company: Aceable }
+      - { token: osano, company: Osano }
+
   # ---- Lever ------------------------------------------------------------
   # Public postings API: https://api.lever.co/v0/postings/<token>?mode=json
   lever:
@@ -140,6 +184,14 @@ sources:
       - { token: brilliant, company: Brilliant }
       - { token: ro, company: Ro }
       - { token: tala, company: Tala }
+
+      # -- Added 2026-08-19 ----------------------------------------------
+      - { token: metabase, company: Metabase }
+      - { token: contentsquare, company: Contentsquare }
+      - { token: quantummetric, company: "Quantum Metric" }
+      - { token: cherre, company: Cherre }
+      - { token: entrata, company: Entrata }
+      - { token: everlywell, company: Everlywell }
 
   # ---- Ashby ------------------------------------------------------------
   # Public posting API: https://api.ashbyhq.com/posting-api/job-board/<token>
@@ -196,6 +248,44 @@ sources:
 
       # -- Lane 4: 3D / spatial -----------------------------------------
       - { token: shapr3d, company: "Shapr3D" }
+
+      # -- Added 2026-08-19: data infra and developer platforms ----------
+      - { token: airbyte, company: Airbyte }
+      - { token: hex, company: Hex }
+      - { token: prefect, company: Prefect }
+      - { token: astronomer, company: Astronomer }
+      - { token: materialize, company: Materialize }
+      - { token: confluent, company: Confluent }
+      - { token: checkly, company: Checkly }
+
+      # -- Added 2026-08-19: content platforms and analytics -------------
+      - { token: sitecore, company: Sitecore }
+      - { token: fullstory, company: FullStory }
+
+      # -- Added 2026-08-19: industrial IoT ------------------------------
+      - { token: litmus, company: Litmus }
+      - { token: hivemq, company: HiveMQ }
+
+      # -- Added 2026-08-19: AI product companies ------------------------
+      - { token: perplexity, company: Perplexity }
+      - { token: harvey, company: Harvey }
+      - { token: writer, company: Writer }
+      - { token: runway, company: Runway }
+      - { token: elevenlabs, company: ElevenLabs }
+      - { token: synthesia, company: Synthesia }
+      - { token: deepgram, company: Deepgram }
+      - { token: cohere, company: Cohere }
+      - { token: decagon, company: Decagon }
+      - { token: abridge, company: Abridge }
+      - { token: langfuse, company: Langfuse }
+
+      # -- Added 2026-08-19: integration platforms -----------------------
+      - { token: zapier, company: Zapier }
+      - { token: merge, company: Merge }
+      - { token: paragon, company: Paragon }
+      - { token: nango, company: Nango }
+      - { token: n8n, company: n8n }
+      - { token: inngest, company: Inngest }
 
   # ---- RemoteOK ---------------------------------------------------------
   # Public JSON feed: https://remoteok.com/api

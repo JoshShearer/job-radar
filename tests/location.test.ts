@@ -140,3 +140,55 @@ describe("findAuthBlockers", () => {
     expect(findAuthBlockers("We sponsor visas.", blockers)).toEqual([]);
   });
 });
+
+describe("a country is not a worksite", () => {
+  // JOB-21. `classifyRemote` ended with "any non-empty location is onsite",
+  // so a posting whose only stated location was "United States" was called
+  // onsite and then rejected for not being Austin. Measured on the real index:
+  // 149 postings thrown away that way, the third-largest rejection reason.
+  //
+  // A whole country names no worksite. The honest answer is that the location
+  // is not stated precisely enough to judge, which `assessLocation` already
+  // handles by accepting it with a "needs a human check" warning.
+
+  it("does not call a country-scope location onsite", () => {
+    for (const loc of ["United States", "USA", "US", "North America", "Americas", "Nationwide", "Global", "Worldwide"]) {
+      expect(classifyRemote(loc), loc).not.toBe("onsite");
+    }
+  });
+
+  it("lets a US-scope posting through the filter instead of rejecting it", () => {
+    const v = assessLocation("United States", PREFS);
+    expect(v.acceptable).toBe(true);
+    expect(v.geoBlocked).toBe(false);
+  });
+
+  it("still treats a named city as onsite", () => {
+    // The fix must not turn every unlabeled posting into "unknown" - a city is
+    // a worksite, and an onsite role in the wrong city is still a rejection.
+    // Austin, Houston and Columbus all CONTAIN the scope token "us". The
+    // scope regex must be anchored to the whole string, or every one of them
+    // becomes "unknown" - including the candidate's own metro, which would
+    // silently stop rejecting onsite roles anywhere in the world.
+    for (const loc of [
+      "San Francisco", "New York, NY", "Boston, MA", "London", "Singapore", "Toronto, Canada",
+      "Austin, TX", "Houston, TX", "Columbus, OH",
+    ]) {
+      expect(classifyRemote(loc), loc).toBe("onsite");
+    }
+    expect(assessLocation("San Francisco", PREFS).acceptable).toBe(false);
+  });
+
+  it("keeps rejecting a non-US country even though it names no city", () => {
+    // Singapore and London are city-states/cities, but the general worry is a
+    // country-only foreign posting. It must not become acceptable.
+    for (const loc of ["Germany", "India", "Canada"]) {
+      expect(assessLocation(loc, PREFS).acceptable, loc).toBe(false);
+    }
+  });
+
+  it("does not disturb an explicit remote or hybrid signal", () => {
+    expect(classifyRemote("Remote - United States")).toBe("remote");
+    expect(classifyRemote("Hybrid - United States")).toBe("hybrid");
+  });
+});

@@ -99,7 +99,7 @@ export interface TailorResult {
   violations: Violation[];
   /** Rewrites that failed provenance and were reverted to the master wording. */
   reverted: string[];
-  usage: { input: number; cacheRead: number; output: number };
+  usage: { input: number; cacheWrite: number; cacheRead: number; output: number };
 }
 
 export async function tailorResume(
@@ -200,6 +200,7 @@ Return only the structured object.`;
     reverted,
     usage: {
       input: response.usage.input_tokens,
+      cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
       cacheRead: response.usage.cache_read_input_tokens ?? 0,
       output: response.usage.output_tokens,
     },

@@ -9,7 +9,7 @@ import { closeDb, openDb } from "./db/index.js";
 import { JobRepo } from "./db/repo.js";
 import { runIngest } from "./pipeline/ingest.js";
 import { runScoring } from "./pipeline/rescore.js";
-import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL } from "./analysis/analyzer.js";
+import { runAnalysis, DEFAULT_EFFORT, DEFAULT_MODEL, PACK_MODEL } from "./analysis/analyzer.js";
 import { buildDailyReport, writeReport } from "./report/daily.js";
 import { writeHtmlReport } from "./report/html.js";
 import { buildDashboard, writeDashboard } from "./report/dashboard.js";
@@ -32,6 +32,7 @@ import { importResume } from "./resume/import.js";
 import { matchResumeToJob } from "./resume/requirements.js";
 import { enforceProvenance, tailorResume, TailorSchema } from "./resume/tailor.js";
 import { decideReuse, hashFile, readStamps, writeStamp } from "./apply/reuse.js";
+import { describeSpend, estimateCostUsd } from "./lib/cost.js";
 import {
   composeResume,
   renderMatchReport,
@@ -202,10 +203,11 @@ program
   .option("--open", "open the generated pack in your browser", false)
   .option("--stale-ok", "prepare even if the posting looks closed", false)
   .option("--force", "regenerate the pack even if one for this posting already exists", false)
+  .option("--full", "also generate outreach drafts, interview prep and a negotiation strategy", false)
   .action(
     async (
       jobId: string,
-      opts: { model?: string; effort?: string; open: boolean; staleOk: boolean; force: boolean },
+      opts: { model?: string; effort?: string; open: boolean; staleOk: boolean; force: boolean; full: boolean },
     ) => {
     const profile = loadProfile();
     await withRepo("apply", async (repo) => {
@@ -236,6 +238,7 @@ program
         descriptionHash: job.descriptionHash,
         resumeHash: hashFile(resumePath()),
         force: opts.force,
+        wantFull: opts.full,
       });
 
       let pack: ApplicationPack;
@@ -246,11 +249,12 @@ program
       } else {
         if (!reuse.reuse && saved) log.info(reuse.why);
         const fresh = await prepareApplication(job, profile, {
-          // Defaults higher than the analysis stage: this output is read closely
-          // by a human and acted on, so it is worth more thinking than a triage
-          // pass over hundreds of postings.
-          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+          // Effort stays high: this output is read closely by a human and acted
+          // on. The saving comes from the model tier and from not generating
+          // later-stage sections, not from thinking less about the ones kept.
+          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL,
           effort: opts.effort ?? "high",
+          full: opts.full,
         });
         pack = fresh.pack;
         usage = fresh.usage;
@@ -258,6 +262,7 @@ program
           descriptionHash: job.descriptionHash,
           resumeHash: hashFile(resumePath()),
           generatedAt: new Date().toISOString(),
+          full: opts.full === true,
         });
       }
 
@@ -306,10 +311,11 @@ program
       log.info(`  markdown : ${md}`);
       log.info(`  html     : ${html}`);
       if (coverPdf) log.info(`  cover    : ${basename(coverPdf)}  <- autofill attaches this`);
+      const packModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL;
       log.info(
         usage
-          ? `  tokens   : ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`
-          : `  tokens   : none - reused the saved pack. \`--force\` to regenerate.`,
+          ? `  spend    : ${describeSpend(usage, packModel)}`
+          : `  spend    : $0.00 - reused the saved pack. \`--force\` to regenerate.`,
       );
       log.info(
         nextStatus
@@ -325,7 +331,12 @@ program
         child.unref();
       }
 
-      return { ok: true, dir };
+      return {
+        ok: true,
+        dir,
+        reused: !usage,
+        ...(usage ? { ...usage, estimatedCostUsd: estimateCostUsd(usage, packModel) } : { estimatedCostUsd: 0 }),
+      };
     });
   });
 
@@ -572,10 +583,11 @@ resumeCmd
       console.log("");
       log.info(`Written to ${dir}`);
       if (pdf) log.info(`  ${basename(pdf)}  <- autofill attaches this automatically`);
+      const tailorModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL;
       log.info(
         usage
-          ? `  tokens: ${usage.input} in / ${usage.cacheRead} cached / ${usage.output} out`
-          : `  tokens: none - reused the saved plan. \`--force\` to re-select.`,
+          ? `  spend : ${describeSpend(usage, tailorModel)}`
+          : `  spend : $0.00 - reused the saved plan. \`--force\` to re-select.`,
       );
 
       if (violations.length) {
@@ -598,7 +610,15 @@ resumeCmd
         for (const d of plan.doNotClaim) console.log(`  - ${d}`);
       }
 
-      return { ok: true, dir };
+      // Recorded so `stats` can total real spend later. This used to return
+      // {ok, dir} and nothing else, which is how 30 runs of the most expensive
+      // command in the tool cost money without leaving a trace.
+      return {
+        ok: true,
+        dir,
+        reused: !usage,
+        ...(usage ? { ...usage, estimatedCostUsd: estimateCostUsd(usage, tailorModel) } : { estimatedCostUsd: 0 }),
+      };
     });
   });
 
@@ -968,6 +988,40 @@ program
       log.info(`  dashboard : ${dashFile}`);
       log.info(`  open it   : npm run cli -- open`);
       return { jobCount, file, htmlFile, dashFile };
+    });
+  });
+
+// ---- spend ----------------------------------------------------------------
+
+program
+  .command("spend")
+  .description("What this tool has cost, by command and by day. Reads the run log; no network.")
+  .option("-d, --days <n>", "how many days back", "30")
+  .action(async (opts: { days: string }) => {
+    await withRepo("spend", (repo) => {
+      const days = Number(opts.days) || 30;
+      const rows = repo.spendByCommand(days);
+      const total = rows.reduce((sum, r) => sum + r.usd, 0);
+
+      if (!rows.length) {
+        console.log("No recorded spend. Note that runs before this command existed recorded none.");
+        return { total: 0 };
+      }
+
+      console.log("");
+      console.log(`${"COMMAND".padEnd(16)} ${"RUNS".padStart(5)} ${"PAID".padStart(5)} ${"USD".padStart(9)}`);
+      console.log("-".repeat(40));
+      for (const r of rows) {
+        console.log(
+          `${r.command.padEnd(16)} ${String(r.runs).padStart(5)} ${String(r.paid).padStart(5)} ${`$${r.usd.toFixed(2)}`.padStart(9)}`,
+        );
+      }
+      console.log("-".repeat(40));
+      console.log(`${"TOTAL".padEnd(16)} ${"".padStart(5)} ${"".padStart(5)} ${`$${total.toFixed(2)}`.padStart(9)}`);
+      console.log("");
+      console.log(`Last ${days} days. "PAID" counts runs that actually called a model;`);
+      console.log(`the rest reused what was already on disk and cost nothing.`);
+      return { total };
     });
   });
 

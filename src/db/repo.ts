@@ -469,6 +469,36 @@ export class JobRepo {
   }
 
   /**
+   * Recorded spend per command.
+   *
+   * Reads the run log rather than any provider API: this is what THIS tool
+   * believes it spent, which is the number a person can act on. Runs that
+   * reused a saved document report a real zero, and are counted separately so
+   * "30 runs" never reads as "30 charges".
+   */
+  spendByCommand(days: number): Array<{ command: string; runs: number; paid: number; usd: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT command,
+                COUNT(*) AS runs,
+                SUM(CASE WHEN COALESCE(json_extract(stats_json,'$.estimatedCostUsd'),0) > 0 THEN 1 ELSE 0 END) AS paid,
+                SUM(COALESCE(json_extract(stats_json,'$.estimatedCostUsd'),0)) AS usd
+         FROM runs
+         WHERE started_at >= datetime('now', ?)
+         GROUP BY command
+         HAVING usd > 0
+         ORDER BY usd DESC`,
+      )
+      .all(`-${Math.max(1, Math.floor(days))} days`) as Array<{
+      command: string;
+      runs: number;
+      paid: number;
+      usd: number;
+    }>;
+    return rows;
+  }
+
+  /**
    * Everything live and waiting on someone, most recently moved first.
    *
    * The daily slate deliberately shows only NEW jobs, so an application
