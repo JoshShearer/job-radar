@@ -44,6 +44,12 @@ export interface Stamp {
   /** Hash of the master resume file when this artifact was generated. */
   resumeHash: string;
   generatedAt: string;
+  /**
+   * Was this generated with the later-stage sections? Only meaningful for the
+   * pack. Absent on stamps written before `--full` existed, which is read as
+   * "core" - the safe direction, since it can only cause a regeneration.
+   */
+  full?: boolean;
 }
 
 export type Stamps = Partial<Record<Artifact, Stamp>>;
@@ -84,6 +90,8 @@ export interface ReuseInput {
   descriptionHash: string;
   resumeHash: string;
   force: boolean;
+  /** Caller is asking for the later-stage sections this time. */
+  wantFull?: boolean;
 }
 
 export interface ReuseDecision {
@@ -111,6 +119,17 @@ export function decideReuse(input: ReuseInput): ReuseDecision {
       resumeChanged: false,
     };
   }
+  // Asking for more than what was saved is not a cache hit. Reusing a core
+  // pack for `--full` would silently hand back a document missing the exact
+  // sections that were just asked for, and report it as reused.
+  if (input.wantFull && !input.stamp.full) {
+    return {
+      reuse: false,
+      why: "--full asked for sections the saved pack does not have - regenerating",
+      resumeChanged: false,
+    };
+  }
+
   if (input.stamp.descriptionHash !== input.descriptionHash) {
     return {
       reuse: false,

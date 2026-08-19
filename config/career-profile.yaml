@@ -364,8 +364,25 @@ hard_exclude_titles:
   - network engineer
   - database administrator
   - technical writer
-  - sales engineer
-  - solutions architect
+  # NOT excluded, deliberately: `sales engineer` and `solutions architect`.
+  #
+  # They were on this list, and between them they rejected 220+ postings
+  # outright. That is backwards for this candidate. Six years as a Sales
+  # Engineer / Account Manager at Valin is the single most differentiated
+  # thing in the record - a genuine quota-carrying technical sales career
+  # alongside current production engineering is scarce, and it is exactly what
+  # a pre-sales org is hiring for.
+  #
+  # The tell was that `solutions engineer` was never on this list, and every
+  # Solutions Engineer posting that reached the analyzer came back `apply` or
+  # `apply_and_outreach` - Algolia, Sanity, LangChain. The same roles titled
+  # "Sales Engineer" or "Solutions Architect" were being thrown away before
+  # anything looked at them.
+  #
+  # The lane risk is real and is handled where it belongs: the analyzer says
+  # plainly when a role is quota-adjacent field engineering rather than product
+  # engineering. That is a judgement for a human reading a ranked list, not a
+  # reason to make the roles invisible.
   - recruiter
   - designer
   - product manager

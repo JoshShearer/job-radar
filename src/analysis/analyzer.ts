@@ -8,7 +8,24 @@ import { buildSystemPrompt, buildUserPrompt } from "./prompt.js";
 import { sha256 } from "../lib/hash.js";
 import { log } from "../lib/log.js";
 
+import { estimateCostUsd, PRICING } from "../lib/cost.js";
+
 export const DEFAULT_MODEL = "claude-opus-5";
+
+/**
+ * The model that writes the application pack.
+ *
+ * Cheaper than DEFAULT_MODEL on purpose. The pack is prose - a cover note,
+ * drafted form answers, a positioning frame - and prose is where a Sonnet-tier
+ * model is closest to an Opus-tier one. It is also the single largest output in
+ * the tool (~6,000 tokens per job plus thinking), and output is where the money
+ * goes, so this is the one call where the tier actually shows up on a bill.
+ *
+ * `resume tailor` deliberately stays on DEFAULT_MODEL: it decides which bullets
+ * are true of this candidate for this posting, and being wrong there is a
+ * correctness problem, not a style one.
+ */
+export const PACK_MODEL = "claude-sonnet-5";
 export const DEFAULT_EFFORT = "medium";
 
 export interface AnalyzeOptions {
@@ -35,24 +52,12 @@ export interface AnalyzeSummary {
 }
 
 /** Anthropic prompt-cache multipliers relative to the base input rate. */
-const CACHE_WRITE_MULTIPLIER = 1.25;
-const CACHE_READ_MULTIPLIER = 0.1;
+
 
 /**
- * Published per-million-token rates, used only to print a running cost
- * estimate so the operator can see what a pass costs before scaling it up.
- * Unknown models fall back to Opus-tier pricing so the estimate errs high.
- */
-const PRICING: Record<string, { input: number; output: number }> = {
-  "claude-opus-5": { input: 5, output: 25 },
-  "claude-opus-4-8": { input: 5, output: 25 },
-  "claude-sonnet-5": { input: 3, output: 15 },
-  "claude-haiku-4-5": { input: 1, output: 5 },
-};
-
-/**
- * The LLM stage. This is the only place in the pipeline that costs money, so
- * everything here is built around not spending it twice:
+ * The triage LLM stage. NOT the only place that spends: `resume tailor` and
+ * `apply` each cost more per job than this does, and for a long time they
+ * reported nothing. Everything here is built around not spending twice:
  *
  *   - Deterministic prefilters run first; only jobs above `minFit` that passed
  *     hard filters are eligible.
@@ -151,12 +156,15 @@ export async function runAnalysis(
     }
   }
 
-  const price = PRICING[opts.model] ?? PRICING["claude-opus-5"]!;
-  summary.estimatedCostUsd =
-    (summary.inputTokens / 1_000_000) * price.input +
-    (summary.cacheCreationTokens / 1_000_000) * price.input * CACHE_WRITE_MULTIPLIER +
-    (summary.cacheReadTokens / 1_000_000) * price.input * CACHE_READ_MULTIPLIER +
-    (summary.outputTokens / 1_000_000) * price.output;
+  summary.estimatedCostUsd = estimateCostUsd(
+    {
+      input: summary.inputTokens,
+      cacheWrite: summary.cacheCreationTokens,
+      cacheRead: summary.cacheReadTokens,
+      output: summary.outputTokens,
+    },
+    opts.model,
+  );
 
   if (summary.analyzed > 1 && summary.cacheReadTokens === 0) {
     // Caching is the mechanism that makes analysing a large slate affordable.

@@ -54,6 +54,22 @@ const NON_US_REGION_RE =
 const US_SCOPE_RE =
   /\b(us|u\.s\.|u\.s|usa|united states|north america|americas|nam|worldwide|anywhere|global|remote global)\b/i;
 
+/**
+ * Locations that name a country, a continent, or nothing narrower.
+ *
+ * Anchored on purpose: this must match a location that is ONLY scope, never
+ * one that also names a city. "United States" matches; "Austin, United States"
+ * does not, and stays onsite.
+ *
+ * Non-US countries are deliberately absent. "Germany" with no other signal is
+ * still best read as onsite in Germany, and reading it as unknown would make it
+ * acceptable to someone who cannot work there.
+ */
+const SCOPE_WORDS =
+  "united states|usa|u\\.s\\.a\\.?|u\\.s\\.?|us|north america|americas|nam|nationwide|" +
+  "global|worldwide|anywhere|multiple locations|various locations|remote";
+const SCOPE_ONLY_RE = new RegExp(`^(?:${SCOPE_WORDS})(?:\\s*[,/&()-]+\\s*(?:${SCOPE_WORDS}))*$`, "i");
+
 /** Normalize whitespace/punctuation in a raw location string. */
 export function cleanLocation(raw: string | null | undefined): string {
   if (!raw) return "";
@@ -95,6 +111,20 @@ export function classifyRemote(
   if (HYBRID_RE.test(head)) return "hybrid";
   if (REMOTE_RE.test(head)) return "remote";
   if (ONSITE_RE.test(head)) return "onsite";
+
+  // A COUNTRY IS NOT A WORKSITE.
+  //
+  // This used to fall straight through to "onsite" for any non-empty string,
+  // so a posting whose only stated location was "United States" was called
+  // onsite and then rejected for not being Austin. Measured on the real index:
+  // 149 postings discarded that way, the third-largest rejection reason behind
+  // two genuine ones.
+  //
+  // "Unknown" is the honest answer, not a lenient one: the posting has not said
+  // where the work happens, and `assessLocation` already treats that as
+  // "acceptable, needs a human check" rather than as permission. A named city
+  // still means onsite, so an onsite role in the wrong city is still rejected.
+  if (SCOPE_ONLY_RE.test(loc.trim())) return "unknown";
 
   if (loc.trim().length > 0) return "onsite";
   return "unknown";
