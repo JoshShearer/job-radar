@@ -499,6 +499,31 @@ export class JobRepo {
   }
 
   /**
+   * How many unanalyzed jobs sit just below a threshold, and how high the best
+   * of them scores.
+   *
+   * Exists because "nothing above the threshold" and "nothing worth looking at"
+   * are different statements, and the tool reported the first as if it meant
+   * the second. With the gate at 55 and the whole remaining pool topping out at
+   * 44, `analyze` said "nothing to analyze" every time - which reads as an
+   * exhausted index rather than a gate set above what the scorer produces.
+   */
+  belowThreshold(minFit: number): { count: number; best: number | null } {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count, MAX(COALESCE(raw_fit_score, fit_score)) AS best
+         FROM jobs
+         WHERE analysis_json IS NULL
+           AND filter_passed = 1
+           AND fit_score IS NOT NULL
+           AND COALESCE(raw_fit_score, fit_score) < ?
+           AND status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')`,
+      )
+      .get(minFit) as { count: number; best: number | null };
+    return { count: row?.count ?? 0, best: row?.best ?? null };
+  }
+
+  /**
    * Everything live and waiting on someone, most recently moved first.
    *
    * The daily slate deliberately shows only NEW jobs, so an application
