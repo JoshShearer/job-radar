@@ -58,7 +58,15 @@ const COLUMN_MIGRATIONS: { table: string; column: string; definition: string }[]
   { table: "jobs", column: "raw_fit_score", definition: "REAL" },
 ];
 
-function applyColumnMigrations(db: DB): void {
+/**
+ * Exported so tests build the SAME schema production uses.
+ *
+ * `tests/helpers/db.ts` applied SCHEMA_SQL alone, so every in-memory test ran
+ * against a database missing every migrated column. Any query touching one
+ * failed with "no such column" in tests while working fine in production -
+ * which is backwards, and meant `needingAnalysis` had no test at all.
+ */
+export function applyColumnMigrations(db: DB): void {
   for (const m of COLUMN_MIGRATIONS) {
     const cols = db.prepare(`PRAGMA table_info(${m.table})`).all() as { name: string }[];
     if (cols.some((c) => c.name === m.column)) continue;

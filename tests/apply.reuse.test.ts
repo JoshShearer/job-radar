@@ -200,3 +200,36 @@ describe("asking for more than was saved", () => {
     expect(decideReuse({ ...base, stamp: stamp({ full: false }), wantFull: false }).reuse).toBe(true);
   });
 });
+
+describe("writing a stamp for a job that has never been prepared", () => {
+  // A real regression, found by running `apply --full` across seven new jobs:
+  // every one paid for the model call and then died with ENOENT, because
+  // `apply` writes the stamp immediately after the call but `writePack` is
+  // what creates the directory. It survived because it was only ever exercised
+  // on jobs that already had a directory.
+  //
+  // Spending and then discarding the result is the worst outcome this file can
+  // produce, so the guarantee is tested here rather than at the call site.
+  it("creates the directory instead of throwing", () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "job-radar-newdir-"));
+    const dir = resolve(parent, "never-prepared-job");
+    try {
+      expect(existsSync(dir)).toBe(false);
+      expect(() => writeStamp(dir, "pack", stamp())).not.toThrow();
+      expect(readStamps(dir).pack).toEqual(stamp());
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("creates nested paths that do not exist at all", () => {
+    const parent = mkdtempSync(resolve(tmpdir(), "job-radar-nested-"));
+    const dir = resolve(parent, "a", "b", "c");
+    try {
+      writeStamp(dir, "resumePlan", stamp());
+      expect(readStamps(dir).resumePlan).toEqual(stamp());
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+});

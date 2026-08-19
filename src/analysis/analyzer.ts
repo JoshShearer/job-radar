@@ -87,7 +87,20 @@ export async function runAnalysis(
   };
 
   if (candidates.length === 0) {
-    log.info("Nothing to analyze: no unanalyzed jobs above the fit threshold.");
+    // Say what the gate is holding back, not just that it held. Reporting only
+    // "nothing to analyze" made an over-set threshold look like an exhausted
+    // index, and that misreading cost a real afternoon.
+    const below = repo.belowThreshold(opts.minFit);
+    if (below.count > 0) {
+      log.info(
+        `Nothing above the fit threshold of ${opts.minFit}, but ${below.count} unanalyzed job(s) sit below it` +
+          (below.best !== null ? `, the best scoring ${Math.round(below.best)}` : "") +
+          `. Lower the bar with \`--min-fit\` for this pass, or change \`analysis_threshold\` in ` +
+          `config/career-profile.yaml if the gate is wrong rather than the jobs.`,
+      );
+    } else {
+      log.info("Nothing to analyze: every job that passed filters has already been analyzed.");
+    }
     return summary;
   }
 

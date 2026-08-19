@@ -162,6 +162,46 @@ sources:
       - { token: aceable, company: Aceable }
       - { token: osano, company: Osano }
 
+      # -- Added 2026-08-19 (round 2): voice AI ---------------------------
+      # Deepgram scored highest in the whole index after round 1, so this
+      # group is its immediate neighbourhood - several are named as Deepgram
+      # customers in their own posting.
+      - { token: speechmatics, company: Speechmatics }
+      - { token: otter, company: "Otter.ai" }
+      - { token: humeai, company: "Hume AI" }
+
+      # -- Added 2026-08-19 (round 2): AI infrastructure ------------------
+      - { token: beam, company: Beam }
+      - { token: labelbox, company: Labelbox }
+
+      # -- Added 2026-08-19 (round 2): data infrastructure ----------------
+      # ClickHouse and Fivetran both landed near the top after round 1.
+      - { token: starburst, company: Starburst }
+      - { token: dremio, company: Dremio }
+      - { token: singlestore, company: SingleStore }
+      - { token: yugabyte, company: Yugabyte }
+      - { token: imply, company: Imply }
+      - { token: sigmacomputing, company: "Sigma Computing" }
+
+      # -- Added 2026-08-19 (round 2): developer platforms ----------------
+      - { token: encore, company: Encore }
+      - { token: stackblitz, company: StackBlitz }
+      - { token: datadog, company: Datadog }
+      - { token: newrelic, company: "New Relic" }
+
+      # -- Added 2026-08-19 (round 2): growth and marketing engineering ---
+      # Chosen for the marketing-site engineering roles these companies run,
+      # which is where the technical-SEO and headless-CMS record is evidence
+      # rather than an aside.
+      - { token: duda, company: Duda }
+      - { token: apolloio, company: "Apollo.io" }
+      - { token: salesloft, company: Salesloft }
+      - { token: keystone, company: Keystone }
+
+      # -- Added 2026-08-19 (round 2): AI product -------------------------
+      - { token: parloa, company: Parloa }
+      - { token: intercom, company: Intercom }
+
   # ---- Lever ------------------------------------------------------------
   # Public postings API: https://api.lever.co/v0/postings/<token>?mode=json
   lever:
@@ -192,6 +232,14 @@ sources:
       - { token: cherre, company: Cherre }
       - { token: entrata, company: Entrata }
       - { token: everlywell, company: Everlywell }
+
+      # -- Added 2026-08-19 (round 2) -------------------------------------
+      - { token: sesame, company: Sesame }
+      - { token: tinybird, company: Tinybird }
+      - { token: porter, company: Porter }
+      - { token: logrocket, company: LogRocket }
+      - { token: outreach, company: Outreach }
+      - { token: netomi, company: Netomi }
 
   # ---- Ashby ------------------------------------------------------------
   # Public posting API: https://api.ashbyhq.com/posting-api/job-board/<token>
@@ -286,6 +334,46 @@ sources:
       - { token: nango, company: Nango }
       - { token: n8n, company: n8n }
       - { token: inngest, company: Inngest }
+
+      # -- Added 2026-08-19 (round 2): voice AI ---------------------------
+      - { token: vapi, company: Vapi }
+      - { token: livekit, company: LiveKit }
+      - { token: bland, company: Bland }
+      - { token: cartesia, company: Cartesia }
+      - { token: rime, company: Rime }
+      - { token: gladia, company: Gladia }
+      - { token: granola, company: Granola }
+      - { token: phonic, company: Phonic }
+      - { token: suno, company: Suno }
+
+      # -- Added 2026-08-19 (round 2): AI infrastructure ------------------
+      - { token: runpod, company: RunPod }
+
+      # -- Added 2026-08-19 (round 2): data infrastructure ----------------
+      - { token: influxdata, company: InfluxData }
+      - { token: datafold, company: Datafold }
+      - { token: atlan, company: Atlan }
+      - { token: omni, company: Omni }
+
+      # -- Added 2026-08-19 (round 2): platform and observability ---------
+      - { token: signoz, company: SigNoz }
+      - { token: doppler, company: Doppler }
+      - { token: infisical, company: Infisical }
+
+      # -- Added 2026-08-19 (round 2): growth and marketing engineering ---
+      - { token: demandbase, company: Demandbase }
+      - { token: mutiny, company: Mutiny }
+      - { token: hockeystack, company: HockeyStack }
+      - { token: commonroom, company: "Common Room" }
+
+      # -- Added 2026-08-19 (round 2): AI product -------------------------
+      - { token: gorgias, company: Gorgias }
+      - { token: kustomer, company: Kustomer }
+      - { token: dust, company: Dust }
+      - { token: credal, company: Credal }
+      - { token: relevanceai, company: "Relevance AI" }
+      - { token: mem0, company: Mem0 }
+      - { token: letta, company: Letta }
 
   # ---- RemoteOK ---------------------------------------------------------
   # Public JSON feed: https://remoteok.com/api

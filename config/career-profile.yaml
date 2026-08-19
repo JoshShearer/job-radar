@@ -447,8 +447,32 @@ scoring:
   freshness_full_days: 7
   freshness_zero_days: 45
   freshness_max_points: 10
-  # Minimum fit score to be eligible for LLM analysis (cost control).
-  analysis_threshold: 55
+  # Minimum RAW fit score to be eligible for LLM analysis (cost control).
+  #
+  # Lowered 55 -> 35 on 2026-08-19 against measured data, not intuition. Hit
+  # rate by raw band, over 270 analyzed jobs - "hit" meaning the analyst came
+  # back `apply` or `apply_and_outreach`:
+  #
+  #     raw 55+     81 analyzed   12 apply   14.8%
+  #     raw 45-54   60 analyzed    6 apply   10.0%
+  #     raw 35-44   77 analyzed    5 apply    6.5%
+  #     raw 25-34   39 analyzed    1 apply    2.6%
+  #
+  # At 55 the two middle bands were never eligible, and they contain real
+  # roles: Vercel Site Engineer (raw 54 -> fit 84, apply_and_outreach),
+  # Hightouch Web Engineer (52 -> 72, apply), Twilio Applied Research (47 ->
+  # 70, apply), Render Growth (36 -> 73, apply). Resend Product Engineer scored
+  # raw 21 and came back a 72-fit apply, which is the clearest statement
+  # available that this prefilter ranks better than it gates.
+  #
+  # 35 is where the rate is still meaningfully above the 25-34 band. Going
+  # lower is defensible but costs roughly $0.04/job for a 2.6% hit rate.
+  #
+  # SPEND IS BOUNDED BY `--limit`, NOT BY THIS NUMBER. The threshold decides
+  # what is eligible; the limit decides what is paid for. Lowering it widens
+  # the pool that `analyze` can choose from in ROI order, it does not widen a
+  # single pass.
+  analysis_threshold: 35
   # Minimum fit score to appear in the daily report at all.
   report_threshold: 45
 
