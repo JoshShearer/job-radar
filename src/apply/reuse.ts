@@ -32,7 +32,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /** Which generated artifact a stamp describes. */
@@ -74,6 +74,18 @@ export function readStamps(dir: string): Stamps {
 }
 
 export function writeStamp(dir: string, artifact: Artifact, stamp: Stamp): void {
+  // Create the directory rather than assume a caller made it first.
+  //
+  // `apply` writes this stamp immediately after the model call and BEFORE
+  // `writePack` creates the directory, so on any job that had never been
+  // prepared before, the whole command paid for the pack and then died with
+  // ENOENT, saving nothing. It only ever got tested on jobs that already had a
+  // directory, which is exactly why it survived.
+  //
+  // Spending money and then throwing away the result is the single worst
+  // failure this file can have, so the fix belongs here - where it holds for
+  // every caller and every call order - not in one call site.
+  mkdirSync(dir, { recursive: true });
   const next: Stamps = { ...readStamps(dir), [artifact]: stamp };
   writeFileSync(stampPath(dir), `${JSON.stringify(next, null, 2)}\n`, "utf8");
 }
