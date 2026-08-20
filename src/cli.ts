@@ -1027,6 +1027,12 @@ program
       console.log("");
       console.log(`Last ${days} days. "PAID" counts runs that actually called a model;`);
       console.log(`the rest reused what was already on disk and cost nothing.`);
+      // The run log is not the bill. Cost logging for resume-tailor and apply
+      // only began 2026-08-19 (70 earlier paid runs recorded $0), and API use
+      // outside this tool never reaches the log at all. Presenting these
+      // figures as the whole bill is how a $17 day went unexplained.
+      console.log(`Figures are lower bounds: tailor/apply cost logging began 2026-08-19,`);
+      console.log(`and API use outside this tool is not recorded here.`);
       return { total };
     });
   });
