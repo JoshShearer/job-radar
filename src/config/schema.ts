@@ -112,6 +112,15 @@ export const CareerProfileSchema = z.object({
     unexplored_bonus: z.number().nonnegative(),
     cold_penalty: z.number().nonnegative(),
   }),
+  // Two-tier analysis: a cheap verdict for everything, a dossier for the few.
+  analysis_detail: z.object({
+    /** Off until the agreement benchmark passes. See JOB-31. */
+    two_stage: z.boolean(),
+    /** Recommendations that always earn the full dossier. */
+    dossier_for: z.array(z.string()).min(1),
+    /** Fit at or above this earns a dossier regardless of the recommendation. */
+    dossier_min_fit: z.number().min(0).max(100),
+  }),
   // When a sweep may conclude a posting has left its board.
   parking: z.object({
     /** Days a posting must go unseen while its own board keeps being swept. */

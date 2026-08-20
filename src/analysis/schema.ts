@@ -106,3 +106,46 @@ export function buildAnalysisJsonSchema(laneKeys: readonly string[]) {
     additionalProperties: false,
   };
 }
+
+/**
+ * Fields the TRIAGE call asks for.
+ *
+ * 77% of paid analyses end in "skip" (314 of 406), and the schema forced a
+ * full dossier for every one of them - up to 8 strengths, 8 risks, 8 missing
+ * requirements, salary reasoning, outreach targets. Output tokens are ~70% of
+ * the bill. Measured over the 406 stored analyses, these six fields are 25.9%
+ * of the output bytes, so the dossier is roughly three quarters of what is
+ * being paid for on a verdict nobody reads.
+ *
+ * `reasoningSummary` stays in the triage set on purpose. It is the one thing a
+ * person actually reads on a skip, and it is one sentence.
+ *
+ * `salaryClassification` stays because it is a four-value enum - it costs
+ * almost nothing and it is used for ranking. `salaryReasoning`, the prose that
+ * explains it, is dossier-only.
+ */
+export const TRIAGE_FIELDS = [
+  "fitScore",
+  "applicationRoi",
+  "lane",
+  "recommendation",
+  "salaryClassification",
+  "reasoningSummary",
+] as const;
+
+/**
+ * The cheap first pass: a verdict and one sentence, nothing else.
+ *
+ * Derived from the full schema rather than written separately, so a field
+ * description or an enum can never drift between the two forms. That drift is
+ * exactly what JOB-29 was about.
+ */
+export function buildTriageJsonSchema(laneKeys: readonly string[]) {
+  const full = buildAnalysisJsonSchema(laneKeys);
+  const keep = new Set<string>(TRIAGE_FIELDS);
+  return {
+    ...full,
+    properties: Object.fromEntries(Object.entries(full.properties).filter(([k]) => keep.has(k))),
+    required: full.required.filter((k) => keep.has(k)),
+  };
+}
