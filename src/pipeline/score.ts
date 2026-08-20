@@ -4,6 +4,7 @@ import type { Priority } from "../model/status.js";
 import { assessCompensation, formatSalary, type CompAssessment } from "../lib/salary.js";
 import { searchable } from "../lib/html.js";
 import { normalizeForIdentity } from "../lib/hash.js";
+import { matchesTerm } from "../lib/terms.js";
 
 /**
  * Deterministic, explainable scoring.
@@ -59,8 +60,8 @@ export function scoreJob(
 
   for (const signal of profile.signals) {
     const term = signal.term.toLowerCase();
-    const inTitle = titleText.includes(term);
-    const inBody = bodyText.includes(term);
+    const inTitle = matchesTerm(titleText, term);
+    const inBody = matchesTerm(bodyText, term);
     if (!inTitle && !inBody) continue;
 
     // Take the stronger of the two placements rather than summing, so a term
@@ -74,7 +75,7 @@ export function scoreJob(
   const titleMatches: string[] = [];
   for (const [laneKey, titles] of Object.entries(profile.target_titles)) {
     for (const t of titles) {
-      if (titleText.includes(t.toLowerCase())) {
+      if (matchesTerm(titleText, t.toLowerCase())) {
         titleMatches.push(t);
         laneScores.set(laneKey, (laneScores.get(laneKey) ?? 0) + profile.scoring.title_match_bonus);
         break; // one bonus per lane, not per matching phrase
@@ -85,7 +86,7 @@ export function scoreJob(
   // ---- 3. Combination bonuses (the differentiation engine) -----------------
   const combosMatched: { name: string; why: string; bonus: number }[] = [];
   for (const combo of profile.combos) {
-    const allPresent = combo.all.every((term) => allText.includes(term.toLowerCase()));
+    const allPresent = combo.all.every((term) => matchesTerm(allText, term.toLowerCase()));
     if (!allPresent) continue;
     combosMatched.push({ name: combo.name, why: combo.why, bonus: combo.bonus });
     laneScores.set(combo.lane, (laneScores.get(combo.lane) ?? 0) + combo.bonus);
@@ -96,10 +97,10 @@ export function scoreJob(
   let negativeTotal = 0;
   for (const neg of profile.negative_signals) {
     const term = neg.term.toLowerCase();
-    if (!allText.includes(term)) continue;
+    if (!matchesTerm(allText, term)) continue;
     // Weight it up when the unwanted technology is in the title - that means
     // it is the job, not an adjacent nice-to-have.
-    const points = titleText.includes(term) ? neg.weight * 2 : neg.weight;
+    const points = matchesTerm(titleText, term) ? neg.weight * 2 : neg.weight;
     negatives.push({ term: neg.term.trim(), points });
     negativeTotal += points;
   }
