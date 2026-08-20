@@ -99,6 +99,24 @@ function validateProfileCoherence(p: CareerProfile): void {
     if (!laneKeys.includes(key)) errors.push(`target_titles has unknown lane key "${key}"`);
   }
 
+  // `other` is the analyst's escape hatch for a role that fits no configured
+  // lane, and the analysis schema appends it to whatever config defines. A
+  // lane literally called `other` would collide with that: the enum would
+  // carry it twice and "fits no lane" would become indistinguishable from
+  // "fits the lane named other".
+  if (laneKeys.includes("other"))
+    errors.push('lanes must not define a lane named "other" - it is reserved for the analyst\'s "no lane fits" answer');
+
+  // Lane keys reach the model as JSON Schema enum values and come back as
+  // database column values. A key with whitespace or quoting in it survives
+  // neither cleanly, and the failure is silent - the analyst returns something
+  // that does not match and the lane is quietly wrong, which is the same class
+  // of bug as the hardcoded enum this check accompanies.
+  for (const key of laneKeys) {
+    if (!/^[a-z0-9_]+$/.test(key))
+      errors.push(`lane key "${key}" must be lowercase letters, digits and underscores only`);
+  }
+
   const roiSum = Object.values(p.roi.weights).reduce((a, b) => a + b, 0);
   if (Math.abs(roiSum - 1) > 0.05)
     errors.push(`roi.weights sum to ${roiSum.toFixed(2)}, expected ~1.00`);

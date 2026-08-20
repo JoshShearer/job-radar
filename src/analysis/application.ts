@@ -22,9 +22,13 @@ export const ApplicationPackSchema = z.object({
   positioningStatement: z
     .string()
     .describe("2-3 sentences: the single frame this whole application should be built around."),
-  resumeVariant: z
-    .enum(["full_stack", "growth_seo", "ai_product", "proptech_3d"])
-    .describe("Which base resume variant to start from."),
+  // `string`, not an enum, for the same reason `Analysis.lane` is: the valid
+  // set lives in config/career-profile.yaml and is not knowable at compile
+  // time. This schema also re-validates packs read back from disk, and the
+  // enum that used to be here listed `proptech_3d` - a key no lane has ever
+  // had - so saved packs must stay readable while the model is constrained by
+  // the JSON schema below.
+  resumeVariant: z.string().describe("Which base resume variant to start from."),
   resumeVariantReason: z.string().describe("Why that variant, in one or two sentences."),
   summaryRewrite: z
     .string()
@@ -110,12 +114,21 @@ export const LATER_STAGE_SECTIONS = [
   "openDecisions",
 ] as const;
 
-/** JSON Schema mirror, for structured output. */
-export const APPLICATION_JSON_SCHEMA = {
+/**
+ * JSON Schema mirror, for structured output.
+ *
+ * `resumeVariant`'s enum is filled in from config by `applicationJsonSchema`.
+ * The list hardcoded here previously was `["full_stack", "growth_seo",
+ * "ai_product", "proptech_3d"]`, which had drifted twice over: it never
+ * learned about `solutions_eng`, and `proptech_3d` is not a lane key at all -
+ * the config calls that lane `spatial_iot`. So the model was being offered one
+ * option that could never be right and denied one that often was.
+ */
+const APPLICATION_JSON_SCHEMA = {
   type: "object",
   properties: {
     positioningStatement: { type: "string" },
-    resumeVariant: { type: "string", enum: ["full_stack", "growth_seo", "ai_product", "proptech_3d"] },
+    resumeVariant: { type: "string" },
     resumeVariantReason: { type: "string" },
     summaryRewrite: { type: "string" },
     resumeEdits: {
@@ -211,12 +224,14 @@ export const APPLICATION_JSON_SCHEMA = {
  * scope for cost, never rigour. The Zod schema marks the same four optional, so
  * a core pack loads and re-validates exactly like a full one.
  */
-export function applicationJsonSchema(full: boolean): Record<string, unknown> {
-  if (full) return APPLICATION_JSON_SCHEMA as unknown as Record<string, unknown>;
-
-  const drop = new Set<string>(LATER_STAGE_SECTIONS);
+export function applicationJsonSchema(full: boolean, laneKeys: readonly string[]): Record<string, unknown> {
+  const drop = full ? new Set<string>() : new Set<string>(LATER_STAGE_SECTIONS);
   const properties = Object.fromEntries(
-    Object.entries(APPLICATION_JSON_SCHEMA.properties).filter(([k]) => !drop.has(k)),
+    Object.entries(APPLICATION_JSON_SCHEMA.properties)
+      .filter(([k]) => !drop.has(k))
+      // The lane list comes from config, so it is injected here rather than
+      // written into the constant above.
+      .map(([k, v]) => (k === "resumeVariant" ? [k, { ...v, enum: [...laneKeys] }] : [k, v])),
   );
   return {
     ...APPLICATION_JSON_SCHEMA,

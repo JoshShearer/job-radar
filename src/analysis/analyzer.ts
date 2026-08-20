@@ -1,9 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CareerProfile } from "../config/schema.js";
 import type { Analysis, EnrichedJob } from "../model/job.js";
-import { AnalysisSchema } from "../model/job.js";
+import { analysisSchemaFor } from "../model/job.js";
 import type { JobRepo } from "../db/repo.js";
-import { ANALYSIS_JSON_SCHEMA } from "./schema.js";
+import { buildAnalysisJsonSchema } from "./schema.js";
 import { buildSystemPrompt, buildUserPrompt } from "./prompt.js";
 import { sha256 } from "../lib/hash.js";
 import { log } from "../lib/log.js";
@@ -134,6 +134,11 @@ export async function runAnalysis(
     return summary;
   }
 
+  // The lane set the analyst is allowed to choose from, straight from config.
+  // It is part of `profile`, so it is already inside `profileVersion` and
+  // therefore inside the cache key: adding a lane invalidates cached analyses
+  // that could not have known about it, which is exactly right.
+  const laneKeys = Object.keys(profile.lanes);
   const profileVersion = sha256(JSON.stringify(profile)).slice(0, 12);
   const systemPrompt = buildSystemPrompt(profile);
 
@@ -192,7 +197,7 @@ export async function runAnalysis(
       break;
     }
     try {
-      const result = await analyzeOne(client, systemPrompt, job, opts);
+      const result = await analyzeOne(client, systemPrompt, job, opts, laneKeys);
       repo.saveAnalysis(job.id, result.analysis, opts.model);
       const key = repo.cacheKey(job.descriptionHash, job.title, job.company, opts.model, profileVersion);
       repo.putCachedAnalysis(key, job.descriptionHash, opts.model, result.analysis, {
@@ -300,6 +305,12 @@ async function analyzeOne(
   systemPrompt: string,
   job: EnrichedJob,
   opts: AnalyzeOptions,
+  /**
+   * Lanes this profile defines, in config order. Passed down rather than read
+   * from a module constant so that adding a lane in YAML needs no TypeScript
+   * edit - which is the whole point of JOB-29.
+   */
+  laneKeys: readonly string[],
 ): Promise<OneResult> {
   const deterministicNote = [
     `Fit score: ${job.fitScore ?? "n/a"} / Application ROI: ${job.applicationRoi ?? "n/a"} / Lane: ${job.lane ?? "n/a"}`,
@@ -332,7 +343,7 @@ async function analyzeOne(
       ...(supportsEffort(opts.model) ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
       format: {
         type: "json_schema",
-        schema: ANALYSIS_JSON_SCHEMA as unknown as Record<string, unknown>,
+        schema: buildAnalysisJsonSchema(laneKeys) as unknown as Record<string, unknown>,
       },
     },
     messages: [{ role: "user", content: buildUserPrompt(job, deterministicNote) }],
@@ -354,7 +365,7 @@ async function analyzeOne(
 
   // Structured outputs constrain the shape, but we validate anyway: nothing
   // unvalidated is allowed into the database.
-  const parsed = AnalysisSchema.safeParse(raw);
+  const parsed = analysisSchemaFor(laneKeys).safeParse(raw);
   if (!parsed.success) {
     throw new Error(
       `Response failed schema validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
