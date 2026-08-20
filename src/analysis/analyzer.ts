@@ -73,7 +73,13 @@ export async function runAnalysis(
   profile: CareerProfile,
   opts: AnalyzeOptions,
 ): Promise<AnalyzeSummary> {
-  const candidates = repo.needingAnalysis(opts.minFit, opts.limit);
+  const candidates = repo.needingAnalysis(opts.minFit, opts.limit, {
+    perCompanyCap: profile.analysis_diversity.per_company_cap,
+    backfillCap: profile.analysis_diversity.per_company_backfill_cap,
+    coldAfter: profile.analysis_diversity.cold_after,
+    unexploredBonus: profile.analysis_diversity.unexplored_bonus,
+    coldPenalty: profile.analysis_diversity.cold_penalty,
+  });
   const summary: AnalyzeSummary = {
     considered: candidates.length,
     analyzed: 0,
