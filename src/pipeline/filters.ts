@@ -4,6 +4,7 @@ import { assessCompensation, annualize } from "../lib/salary.js";
 import { findAuthBlockers } from "../lib/location.js";
 import { isBelowSenior } from "../lib/seniority.js";
 import { locationVerdictFor } from "./normalize.js";
+import { matchesTerm } from "../lib/terms.js";
 
 /**
  * Hard filters.
@@ -29,7 +30,7 @@ export function applyFilters(job: NormalizedJob, profile: CareerProfile): Filter
   // 1. Wrong specialty, stated in the title.
   for (const term of profile.hard_exclude_titles) {
     const t = term.trim().toLowerCase();
-    if (t && title.includes(t)) {
+    if (t && matchesTerm(title, t)) {
       reasons.push(`Title indicates a different specialty ("${term}").`);
       break;
     }
@@ -59,7 +60,7 @@ export function applyFilters(job: NormalizedJob, profile: CareerProfile): Filter
   // 5. Mandatory domain experience we do not have (research ML, clearances).
   for (const phrase of profile.hard_exclude_description) {
     const p = phrase.trim().toLowerCase();
-    if (p && body.includes(p)) {
+    if (p && matchesTerm(body, p)) {
       reasons.push(`Requires domain experience outside the profile ("${phrase}").`);
       break;
     }
