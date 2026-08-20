@@ -206,6 +206,9 @@ It derives plausible board tokens from the name (handling multi-word names, doma
 | `JOB_RADAR_PROFILE` / `JOB_RADAR_SOURCES` | Config path overrides |
 | `JOB_RADAR_REPORTS` | Report output directory |
 | `JOB_RADAR_CONTACT` | Appended to the outbound User-Agent so source operators can reach you |
+| `JOB_RADAR_GMAIL_CLIENT_ID` | Gmail OAuth client, for `inbox`. Scope `gmail.readonly` |
+| `JOB_RADAR_GMAIL_CLIENT_SECRET` | Gmail OAuth client secret |
+| `JOB_RADAR_GMAIL_REFRESH_TOKEN` | Gmail refresh token. Read-only; nothing is ever sent |
 
 ---
 
@@ -213,6 +216,9 @@ It derives plausible board tokens from the name (handling multi-word names, doma
 
 ```bash
 npm run cli -- ingest                      # fetch, normalize, dedupe, store
+npm run cli -- inbox                       # read application mail, report status changes
+npm run cli -- inbox --apply               # ...and record them
+npm run cli -- inbox-review                # mail that was ambiguous or unmatched
 npm run cli -- ingest --source ashby lever # restrict to specific sources
 npm run cli -- score                       # re-filter and re-score everything
 npm run cli -- analyze --limit 10          # Claude analysis on the top unanalyzed jobs
@@ -514,7 +520,29 @@ NEW → REVIEWED → SAVED/APPLY → APPLIED → CONTACTED → SCREEN
     (or SKIPPED / REJECTED / WITHDRAWN / GHOSTED)
 ```
 
-Two of those transitions happen without you typing anything: `apply` advances a job to `APPLY`, and `autofill` offers to record `APPLIED` after you close the browser. Neither ever moves a job backwards, and neither ever sets a terminal outcome. `SCREEN`, `REJECTED`, `GHOSTED` and the rest describe what an employer did, and only you can say what that was.
+Two of those transitions happen without you typing anything: `apply` advances a job to `APPLY`, and `autofill` offers to record `APPLIED` after you close the browser. Neither ever moves a job backwards, and neither ever sets a terminal outcome.
+
+### Reading what the employer said
+
+`inbox` closes the loop the other way, from application mail:
+
+```bash
+npm run cli -- inbox                 # report what it would change, write nothing
+npm run cli -- inbox --apply         # record the status changes
+npm run cli -- inbox-review          # mail it refused to act on
+```
+
+It is **read-only on the mailbox.** The Gmail scope is `gmail.readonly`, the only verbs used against Gmail are `GET`, and there is no code path that sends, replies, labels, archives or deletes. This feature reads mail; it never writes any.
+
+Three refusals shape it:
+
+- **Ambiguity goes to review, never to a guess.** A rejection from a company where three applications are in flight identifies a *company*, not a job. Choosing the most recent would silently close two live applications, so it goes to `inbox-review` instead. Only an email that names one title outright resolves.
+- **Classification is deterministic.** Reading a rejection is parsing, not judgement, so it is phrase matching that can be audited when a status change looks wrong — never a model call. An email carrying two verdicts at once ("rejected for the Staff role, invited for the Senior role") is ambiguous by construction.
+- **`GHOSTED` is not parsed.** No email ever says you are being ghosted; it is the *absence* of mail. So it is a sweep over elapsed time in the daily pass, measured from the last contact rather than from the application, so a job mid-conversation is never ghosted for having been applied to a while ago.
+
+Without Gmail credentials, point `inbox.eml_dir` at a directory of `.eml` files (or pass `--eml <dir>`) to see exactly what the classifier would do to real mail before aiming it at a live mailbox.
+
+`SCREEN`, `REJECTED`, `GHOSTED` and the rest describe what an employer did. `inbox` records the ones an employer put in writing; anything it cannot read unambiguously is still yours to say.
 
 The rest is deliberately low-friction rather than automatic:
 

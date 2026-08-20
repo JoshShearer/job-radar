@@ -163,6 +163,32 @@ CREATE INDEX IF NOT EXISTS idx_interviews_company ON interviews(company);
 CREATE INDEX IF NOT EXISTS idx_interviews_job     ON interviews(job_id);
 
 -- One row per pipeline run, for operational visibility and funnel math.
+-- Application mail that has been seen, and what was done about it.
+--
+-- Every row is kept, including the ones that resolved to nothing. An email
+-- that could not be matched is the review queue; an email that was matched is
+-- the audit trail for a status change nobody made by hand.
+CREATE TABLE IF NOT EXISTS email_events (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id     TEXT NOT NULL UNIQUE,
+  source         TEXT NOT NULL,
+  from_address   TEXT NOT NULL,
+  subject        TEXT NOT NULL,
+  received_at    TEXT NOT NULL,
+  -- Comma-separated kinds from classifyEmail. More than one means ambiguous.
+  kinds          TEXT NOT NULL,
+  evidence       TEXT,
+  -- matched | ambiguous | unmatched | ignored
+  resolution     TEXT NOT NULL,
+  job_id         TEXT,
+  -- Status this email caused, or NULL when it caused none.
+  applied_status TEXT,
+  note           TEXT,
+  seen_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_events_job ON email_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_email_events_res ON email_events(resolution);
+
 CREATE TABLE IF NOT EXISTS runs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   command     TEXT NOT NULL,
