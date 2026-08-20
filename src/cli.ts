@@ -71,6 +71,7 @@ import { scanInbox } from "./inbox/scan.js";
 import { GmailSource, EmlDirectorySource } from "./inbox/source.js";
 import { ghostable } from "./inbox/ghost.js";
 import { scoreSources } from "./stats/sources.js";
+import { resolveAnalyzeOptions } from "./analysis/budget.js";
 
 // Must run before any command reads process.env for credentials or overrides.
 loadEnvFile();
@@ -177,20 +178,14 @@ program
   .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; includeEvergreen: boolean; twoStage: boolean; dryRun: boolean }) => {
     const profile = loadProfile();
     await withRepo("analyze", async (repo) => {
-      const summary = await runAnalysis(repo, profile, {
-        limit: Number(opts.limit) || 10,
-        // No config default. Selection is by rank; an absolute floor is an
-        // explicit per-pass choice, not a standing setting nobody re-derives.
-        minFit: parseNumericFlag(opts.minFit, "--min-fit"),
-        model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
-        effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
-        // Parsed strictly, not with `|| default`. A mistyped ceiling must not
-        // fall through to "no ceiling" - see src/lib/options.ts.
-        maxSpendUsd: parseNonNegativeFlag(opts.maxSpend, "--max-spend") ?? profile.scoring.max_spend_per_run_usd,
-        includeEvergreen: opts.includeEvergreen,
-        twoStage: opts.twoStage || undefined,
-        dryRun: opts.dryRun,
-      });
+      const summary = await runAnalysis(
+        repo,
+        profile,
+        resolveAnalyzeOptions(opts, profile, {
+          model: process.env.JOB_RADAR_MODEL,
+          effort: process.env.JOB_RADAR_EFFORT,
+        }),
+      );
       console.log("");
       console.log(
         `Considered ${summary.considered} | analyzed ${summary.analyzed} | from cache ${summary.fromCache} | failed ${summary.failed}`,
@@ -1004,12 +999,19 @@ program
       let scoreSummary = runScoring(repo, profile, db);
 
       if (opts.analyze) {
-        const analysis = await runAnalysis(repo, profile, {
-          limit: Number(opts.analyzeLimit) || 8,
-          model: process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
-          effort: process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
-          dryRun: false,
-        });
+        // The same resolver the `analyze` command uses, and that is the fix
+        // rather than a tidy-up: this call site used to omit maxSpendUsd
+        // entirely, so `shouldStopForBudget` saw undefined and the daily pass
+        // ran with NO CEILING - unattended, on a timer, which is the one place
+        // nobody is watching.
+        const analysis = await runAnalysis(
+          repo,
+          profile,
+          resolveAnalyzeOptions({ limit: opts.analyzeLimit }, profile, {
+            model: process.env.JOB_RADAR_MODEL,
+            effort: process.env.JOB_RADAR_EFFORT,
+          }, 8),
+        );
         log.info(
           `Analysis: ${analysis.analyzed} new, ${analysis.fromCache} cached, ~$${analysis.estimatedCostUsd.toFixed(3)}`,
         );
