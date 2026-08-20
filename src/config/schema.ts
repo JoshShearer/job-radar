@@ -73,6 +73,14 @@ export const CareerProfileSchema = z.object({
     freshness_full_days: z.number().positive(),
     freshness_zero_days: z.number().positive(),
     freshness_max_points: z.number().nonnegative(),
+    /**
+     * Age past which a posting is furniture, not an opening. Excluded from
+     * recommendations and from paid analysis unless `--include-evergreen`.
+     */
+    evergreen_days: z.number().positive(),
+    /** A posting newer than this gets `analysis_fresh_bonus` when analyze picks. */
+    analysis_fresh_days: z.number().positive(),
+    analysis_fresh_bonus: z.number().nonnegative(),
     report_threshold: z.number().min(0).max(100),
     /**
      * Hard ceiling on estimated spend for one `analyze` pass, in USD.

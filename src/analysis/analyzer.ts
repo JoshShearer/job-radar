@@ -38,6 +38,13 @@ export interface AnalyzeOptions {
    * shape. Set only by an explicit `--min-fit` on one pass.
    */
   minFit?: number | null;
+  /**
+   * Consider postings past `evergreen_days` as well.
+   *
+   * Off by default. An evergreen posting is excluded from recommendations, so
+   * analyzing one buys a verdict nothing will act on.
+   */
+  includeEvergreen?: boolean;
   model: string;
   effort: string;
   dryRun: boolean;
@@ -94,6 +101,12 @@ export async function runAnalysis(
     coldAfter: profile.analysis_diversity.cold_after,
     unexploredBonus: profile.analysis_diversity.unexplored_bonus,
     coldPenalty: profile.analysis_diversity.cold_penalty,
+    freshDays: profile.scoring.analysis_fresh_days,
+    freshBonus: profile.scoring.analysis_fresh_bonus,
+    // Do not pay to analyze a posting that will not be recommended.
+    // `--include-evergreen` lifts both at once, deliberately: the two
+    // decisions are the same decision.
+    evergreenDays: opts.includeEvergreen ? null : profile.scoring.evergreen_days,
   }, opts.minFit);
   const summary: AnalyzeSummary = {
     considered: candidates.length,
