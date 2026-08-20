@@ -381,8 +381,34 @@ sources:
   # listings must link back to https://remoteok.com with a followed link and
   # name Remote OK as the source. The generated report does this automatically
   # (src/report/daily.ts). If you remove that attribution, disable this source.
+  #
+  # DISABLED 2026-08-20, on the scorecard rather than on a hunch. Measured over
+  # 273 postings:
+  #
+  #     source       in  passed  pass%  analyzed  sel%  applies
+  #     greenhouse 7590    1077    14%       259  24.0%      17
+  #     ashby      4101     403    10%       133  33.0%      14
+  #     remoteok    273     227    83%         6   2.6%       0
+  #
+  # The zero applies is NOT the reason. Six analyses at a baseline apply rate
+  # around 8% would show zero most of the time; retiring on that would be
+  # punishing a board for being unlucky.
+  #
+  # The reason is the two columns either side of it. RemoteOK's postings clear
+  # the filters at 83% - six times the rate of either productive source,
+  # because they are generic remote listings that trip no exclusion - and then
+  # 2.6% of them ever rank high enough to be worth analysing, against 24% and
+  # 33%. It fills the pool without competing in it, and because selection is by
+  # rank it can never accumulate a fair apply sample to be judged on properly.
+  #
+  # JOB-36 adds a third data point: half its catalogue turns over every sweep,
+  # because the feed is a rolling window rather than a board.
+  #
+  # Re-enable by flipping this to true. The attribution code in
+  # src/report/daily.ts stays either way - postings already ingested from here
+  # are still in the index and still carry the requirement.
   remoteok:
-    enabled: true
+    enabled: false
 
 # Companies worth watching that have no public feed on any of the three ATS
 # platforms above, or that you want to reach through a human rather than an

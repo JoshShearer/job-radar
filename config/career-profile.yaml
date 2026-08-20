@@ -638,6 +638,39 @@ scoring:
   # on a credit-card statement. Override per run with `--max-spend`.
   max_spend_per_run_usd: 1.50
 
+# When a job source has earned retirement, and when its record is too thin to
+# say anything at all.
+#
+# Boards were added because the companies seemed interesting, not because they
+# post roles that match. `job-radar sources` turns that into a measurement.
+source_policy:
+  # Analyses a source needs before a zero-apply record is evidence.
+  #
+  # This is the guard against the obvious mistake. At the observed baseline
+  # apply rate of about 8%, six analyses returning zero applies is the expected
+  # outcome roughly 60% of the time. It is not a bad source, it is a small
+  # number, and retiring on it would punish a board for being unlucky.
+  #
+  # 30 puts the chance of a genuinely average source showing zero at about 8%.
+  min_analyzed_for_verdict: 30
+  # Apply rate below this, WITH enough analyses behind it, is a retirement case.
+  # The observed baseline is ~8%; half of that is a real underperformer.
+  retire_below_apply_rate: 0.04
+  # Share of a source's FILTER-PASSING jobs that ever get analysed. The least
+  # obvious column and the most informative: selection is by rank, so this
+  # measures whether a source's jobs can compete once they are in the pool. A
+  # source that passes everything and is never selected inflates the pool
+  # without contributing to it.
+  watch_below_selection_rate: 0.10
+  # Filter-passing jobs a source needs before its SELECTION rate is evidence.
+  #
+  # A separate, much lower bar than min_analyzed_for_verdict, because selection
+  # evidence is FREE. Analysing costs money, so a source whose jobs never rank
+  # can sit at "insufficient data" forever - which is precisely the condition
+  # the selection rate is measuring. Judging it on how its jobs rank escapes
+  # that trap without spending anything.
+  min_passed_for_selection_verdict: 100
+
 # Reading application mail, so the funnel has real outcomes in it.
 #
 # The tracker showed 43 applications and zero results - not because nothing
