@@ -549,37 +549,35 @@ scoring:
   # paid for. Raising it does not cut the bill - it changes which jobs the same
   # money is spent on.
   #
-  # Re-derived on 2026-08-20, after JOB-28 removed the substring pollution.
+  # `analysis_threshold` USED TO LIVE HERE. It is gone on purpose - do not add
+  # it back expecting it to do anything.
   #
-  # The 60 that sat here was measured on scores where 982 of 1,590
-  # filter-passing jobs carried phantom "rag" credit and 773 were docked for
-  # Rust because they said "trusted". Re-scored clean, the whole pool sits
-  # lower: only 9 unanalyzed jobs clear 60 and the highest raw score among them
-  # is 68. Leaving the gate there starves the pipeline - the documented
-  # "exhausted index" failure, where analyze reports nothing to do and the
-  # message is describing the gate rather than the jobs.
-  #
-  # Hit rate by CLEAN raw band, 406 analyzed jobs:
+  # It gated eligibility for paid analysis on an absolute keyword score, and
+  # that score is not accurate enough to gate on. Mean absolute error against
+  # the analyst is 26.6 points on a 0-100 scale, and measured over 406 analyzed
+  # jobs the hit rate is not even monotonic through the middle of the range:
   #
   #     raw 90+      25 analyzed    8 apply   32.0%
   #     raw 75-89    13 analyzed    2 apply   15.4%
   #     raw 60-74    59 analyzed    4 apply    6.8%
   #     raw 50-59    77 analyzed    5 apply    6.5%
-  #     raw 40-49    86 analyzed    7 apply    8.1%
+  #     raw 40-49    86 analyzed    7 apply    8.1%   <- beats both bands above
   #     raw 30-39    85 analyzed    3 apply    3.5%
   #
-  # Read that gradient carefully: below 75 it is not monotonic. The 40-49 band
-  # (8.1%) beats both 50-59 (6.5%) and 60-74 (6.8%). A cumulative table hides
-  # this, because the average at any cutoff is dominated by the 90+ band. So
-  # raising the gate from 45 to 60 does not buy a better hit rate - it just
-  # removes jobs, and the band it removes is one of the better ones.
+  # The rank is reliable even where the score is not, so `analyze` now takes
+  # the top K by rank and the gate is retired. Spend is bounded directly by
+  # `--limit` and `max_spend_per_run_usd` rather than by proxy, and eligibility
+  # is bounded by the filters, which encode the constraints that are actually
+  # real (salary floor, location, seniority).
   #
-  # That non-monotonicity IS the finding: an absolute keyword score is not
-  # reliable enough to gate on in the 40-75 range. 45 is chosen to keep a
-  # working pool (52 eligible unanalyzed jobs) rather than because 45 is
-  # meaningful. JOB-32 retires this gate for rank-based selection, which is the
-  # actual fix; this value only has to keep the funnel alive until then.
-  analysis_threshold: 45
+  # This also removes a failure mode that cost a real afternoon: with the gate
+  # set above what the scorer could produce, `analyze` reported an exhausted
+  # index while the index was full, and the response was to add 55 job boards
+  # that were never the constraint.
+  #
+  # `--min-fit` still exists for one-off use. It is a deliberate human choice
+  # for a single pass, not a standing default nobody re-derives.
+  #
   # Minimum fit score to appear in the daily report at all.
   report_threshold: 45
 

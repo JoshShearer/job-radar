@@ -73,7 +73,6 @@ export const CareerProfileSchema = z.object({
     freshness_full_days: z.number().positive(),
     freshness_zero_days: z.number().positive(),
     freshness_max_points: z.number().nonnegative(),
-    analysis_threshold: z.number().min(0).max(100),
     report_threshold: z.number().min(0).max(100),
     /**
      * Hard ceiling on estimated spend for one `analyze` pass, in USD.

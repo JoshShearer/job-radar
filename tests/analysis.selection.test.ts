@@ -36,7 +36,7 @@ describe("needingAnalysis company diversity", () => {
     for (let i = 0; i < 20; i += 1) {
       seedJob(db, { id: `hog${i}`, company: "Hogzilla", applicationRoi: 90 - i, fitScore: 80 });
     }
-    const picked = repo.needingAnalysis(0, 10, DIVERSITY);
+    const picked = repo.needingAnalysis(10, DIVERSITY);
     expect(picked.length).toBe(DIVERSITY.backfillCap);
   });
 
@@ -53,7 +53,7 @@ describe("needingAnalysis company diversity", () => {
     }
     seedJob(db, { id: "other", company: "Smallco", applicationRoi: 10, fitScore: 20 });
 
-    const picked = repo.needingAnalysis(0, 10, DIVERSITY);
+    const picked = repo.needingAnalysis(10, DIVERSITY);
     const fromHog = picked.filter((j) => j.company === "Hogzilla").length;
     expect(fromHog).toBeLessThanOrEqual(DIVERSITY.backfillCap);
     expect(fromHog).toBeGreaterThan(DIVERSITY.perCompanyCap); // backfill did run
@@ -67,7 +67,7 @@ describe("needingAnalysis company diversity", () => {
     for (let i = 0; i < 10; i += 1) {
       seedJob(db, { id: `co${i}`, company: `Company${i}`, applicationRoi: 85, fitScore: 78 });
     }
-    const picked = repo.needingAnalysis(0, 10, DIVERSITY);
+    const picked = repo.needingAnalysis(10, DIVERSITY);
     const companies = new Set(picked.map((j) => j.company));
     expect(companies.size).toBeGreaterThanOrEqual(6);
   });
@@ -79,7 +79,7 @@ describe("needingAnalysis company diversity", () => {
     seedJob(db, { id: "known-next", company: "Known", applicationRoi: 60, fitScore: 60 });
     seedJob(db, { id: "fresh", company: "Unseen", applicationRoi: 60, fitScore: 60 });
 
-    const picked = repo.needingAnalysis(0, 1, DIVERSITY);
+    const picked = repo.needingAnalysis(1, DIVERSITY);
     expect(picked[0]!.company).toBe("Unseen");
   });
 
@@ -96,7 +96,7 @@ describe("needingAnalysis company diversity", () => {
     seedJob(db, { id: "strong", company: "Known", applicationRoi: 70, fitScore: 70 });
     seedJob(db, { id: "weak-fresh", company: "Unseen", applicationRoi: 40, fitScore: 40 });
 
-    const picked = repo.needingAnalysis(0, 1, DIVERSITY);
+    const picked = repo.needingAnalysis(1, DIVERSITY);
     expect(picked[0]!.id).toBe("strong");
   });
 
@@ -113,7 +113,7 @@ describe("needingAnalysis company diversity", () => {
     markAnalyzed(db, "warm-seen", "apply");
     seedJob(db, { id: "warm-next", company: "WarmCo", applicationRoi: 55, fitScore: 55 });
 
-    const picked = repo.needingAnalysis(0, 1, DIVERSITY);
+    const picked = repo.needingAnalysis(1, DIVERSITY);
     expect(picked[0]!.company).toBe("WarmCo");
   });
 
@@ -126,7 +126,75 @@ describe("needingAnalysis company diversity", () => {
     seedJob(db, { id: "cold-next", company: "ColdCo", applicationRoi: 60, fitScore: 60 });
 
     // Nothing else to spend on: the cold company must still be reachable.
-    const picked = repo.needingAnalysis(0, 5, DIVERSITY);
+    const picked = repo.needingAnalysis(5, DIVERSITY);
     expect(picked.map((j) => j.id)).toContain("cold-next");
+  });
+});
+
+/**
+ * Selection is by RANK, not by an absolute score.
+ *
+ * The gate these replace was fed from `scoring.analysis_threshold`, which was
+ * retired: the keyword engine's absolute score has a mean absolute error of
+ * 26.6 points against the analyst, and its hit rate is not even monotonic
+ * through the middle of the range. A gate set above what the scorer could
+ * produce also made `analyze` claim an exhausted index while the index was
+ * full.
+ */
+describe("needingAnalysis rank-based selection", () => {
+  it("returns work when every candidate scores low, instead of refusing", () => {
+    // The failure this replaces: a threshold of 60 against a pool topping out
+    // at 44 reported "nothing to analyze" and read as an exhausted index.
+    const { repo, db } = memoryRepo();
+    for (let i = 0; i < 5; i += 1) {
+      seedJob(db, { id: `low${i}`, company: `Co${i}`, applicationRoi: 12 - i, fitScore: 9 });
+    }
+    const picked = repo.needingAnalysis(5, DIVERSITY);
+    expect(picked.length).toBe(5);
+  });
+
+  it("orders by rank, best first", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "mid", company: "Beta", applicationRoi: 50, fitScore: 40 });
+    seedJob(db, { id: "best", company: "Alpha", applicationRoi: 90, fitScore: 40 });
+    seedJob(db, { id: "worst", company: "Gamma", applicationRoi: 10, fitScore: 40 });
+    const picked = repo.needingAnalysis(3, DIVERSITY);
+    expect(picked.map((j) => j.id)).toEqual(["best", "mid", "worst"]);
+  });
+
+  it("takes the top K and leaves the rest, so spend is bounded by limit", () => {
+    const { repo, db } = memoryRepo();
+    for (let i = 0; i < 30; i += 1) {
+      seedJob(db, { id: `j${i}`, company: `Co${i}`, applicationRoi: i, fitScore: 50 });
+    }
+    const picked = repo.needingAnalysis(4, DIVERSITY);
+    expect(picked.length).toBe(4);
+    // The four highest-ranked, not an arbitrary four.
+    expect(picked.map((j) => j.id)).toEqual(["j29", "j28", "j27", "j26"]);
+  });
+
+  it("still honours an explicit floor when one is passed", () => {
+    // `--min-fit` remains available as a deliberate per-pass choice.
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "high", company: "Alpha", applicationRoi: 50, fitScore: 80 });
+    seedJob(db, { id: "low", company: "Beta", applicationRoi: 90, fitScore: 20 });
+    const picked = repo.needingAnalysis(10, DIVERSITY, 50);
+    expect(picked.map((j) => j.id)).toEqual(["high"]);
+  });
+
+  it("treats an explicit floor of 0 as a floor, not as absent", () => {
+    // `0` is falsy; if the optional parameter were tested for truthiness
+    // instead of nullness, a deliberate `--min-fit 0` would silently behave
+    // the same as no flag. Here they agree, but the distinction must hold.
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "a", company: "Alpha", applicationRoi: 50, fitScore: 0 });
+    expect(repo.needingAnalysis(10, DIVERSITY, 0).map((j) => j.id)).toEqual(["a"]);
+  });
+
+  it("returns nothing only when there is genuinely nothing left", () => {
+    const { repo, db } = memoryRepo();
+    const id = seedJob(db, { company: "Alpha", applicationRoi: 90, fitScore: 90 });
+    markAnalyzed(db, id, "skip");
+    expect(repo.needingAnalysis(10, DIVERSITY)).toHaveLength(0);
   });
 });
