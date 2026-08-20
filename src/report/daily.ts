@@ -245,7 +245,16 @@ export function buildDailyReport(input: ReportInput): { markdown: string; jobCou
   L.push("");
 
   // Attribution required by the Remote OK API terms. See sources/remoteok.ts.
-  if (sources.sources.remoteok.enabled) {
+  //
+  // Gated on whether a Remote OK posting is actually IN this report, not on
+  // whether the source is currently enabled. Those came apart the moment the
+  // source was disabled in JOB-37: 273 Remote OK postings stay in the index
+  // and can still be recommended, so keying on `enabled` would have published
+  // their listings with the attribution silently removed. Their terms are
+  // about displaying the listings, not about fetching them.
+  const showsRemoteOk =
+    sources.sources.remoteok.enabled || slate.some((j) => j.source === "remoteok");
+  if (showsRemoteOk) {
     L.push("---");
     L.push("");
     L.push(
