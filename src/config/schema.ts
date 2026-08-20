@@ -112,6 +112,13 @@ export const CareerProfileSchema = z.object({
     unexplored_bonus: z.number().nonnegative(),
     cold_penalty: z.number().nonnegative(),
   }),
+  // When a source has earned retirement, and when the record is too thin to say.
+  source_policy: z.object({
+    min_analyzed_for_verdict: z.number().int().positive(),
+    retire_below_apply_rate: z.number().min(0).max(1),
+    watch_below_selection_rate: z.number().min(0).max(1),
+    min_passed_for_selection_verdict: z.number().int().positive(),
+  }),
   // Reading application mail. Read-only; nothing is ever sent.
   inbox: z.object({
     /** Gmail search that scopes the scan to application mail. */

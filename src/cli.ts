@@ -69,6 +69,7 @@ import { benchmarkTriage } from "./analysis/benchmark.js";
 import { scanInbox } from "./inbox/scan.js";
 import { GmailSource, EmlDirectorySource } from "./inbox/source.js";
 import { ghostable } from "./inbox/ghost.js";
+import { scoreSources } from "./stats/sources.js";
 
 // Must run before any command reads process.env for credentials or overrides.
 loadEnvFile();
@@ -1828,8 +1829,54 @@ program
 
 program
   .command("sources")
-  .description("Health-check every configured source endpoint")
-  .action(async () => {
+  .description("Per-source scorecard, then a health check of every configured endpoint")
+  .option("--no-check", "skip the live endpoint check and print only the scorecard")
+  .action(async (opts: { check: boolean }) => {
+    const profile = loadProfile();
+    // Scorecard first: it comes from the database, costs nothing, and answers
+    // the question people actually open this command for. The live check that
+    // follows walks a hundred boards and takes a while.
+    await withRepo("sources", (repo) => {
+      const scored = scoreSources(repo.sourceScorecard(), {
+        minAnalyzedForVerdict: profile.source_policy.min_analyzed_for_verdict,
+        retireBelowApplyRate: profile.source_policy.retire_below_apply_rate,
+        watchBelowSelectionRate: profile.source_policy.watch_below_selection_rate,
+        minPassedForSelectionVerdict: profile.source_policy.min_passed_for_selection_verdict,
+      });
+      console.log("");
+      console.log("SOURCE SCORECARD");
+      console.log("-".repeat(104));
+      console.log(
+        `${"source".padEnd(11)} ${"in".padStart(6)} ${"passed".padStart(7)} ${"pass%".padStart(6)} ` +
+          `${"analyzed".padStart(8)} ${"sel%".padStart(6)} ${"applies".padStart(7)} ${"apply%".padStart(7)}  VERDICT`,
+      );
+      for (const r of scored) {
+        console.log(
+          `${r.source.padEnd(11)} ${String(r.ingested).padStart(6)} ${String(r.passed).padStart(7)} ` +
+            `${(r.passRate * 100).toFixed(0).padStart(5)}% ${String(r.analyzed).padStart(8)} ` +
+            `${(r.selectionRate * 100).toFixed(1).padStart(5)}% ${String(r.applies).padStart(7)} ` +
+            `${(r.applyRate * 100).toFixed(1).padStart(6)}%  ${r.verdict.toUpperCase()}`,
+        );
+        console.log(`${" ".repeat(12)}${r.why}`);
+      }
+      console.log("");
+      console.log(
+        `sel% is the share of a source's FILTER-PASSING jobs that ever ranked high enough to`,
+      );
+      console.log(
+        `analyse. A source that passes everything and is never selected inflates the pool.`,
+      );
+      const retire = scored.filter((r) => r.verdict === "retire");
+      if (retire.length) {
+        console.log("");
+        console.log(
+          `Retire ${retire.map((r) => r.source).join(", ")}: set enabled: false in config/sources.yaml.`,
+        );
+      }
+      return { sources: scored.length };
+    });
+
+    if (!opts.check) return;
     const config = loadSources();
     const endpoints = listBoardEndpoints(config);
     const fetcher = new PoliteFetcher({

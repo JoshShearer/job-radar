@@ -94,3 +94,33 @@ describe("Remote OK attribution", () => {
     expect(report(repo, sources({ remoteok: false }))).not.toContain("remoteok.com");
   });
 });
+
+describe("Remote OK attribution survives the source being disabled", () => {
+  /**
+   * JOB-37 disabled the remoteok source on the scorecard. 273 of its postings
+   * remain in the index and can still be recommended, and their terms are
+   * about DISPLAYING listings, not about fetching them - so attribution keyed
+   * on `enabled` would have published them with the credit silently removed.
+   */
+  it("credits Remote OK when one of its postings is in the report, source disabled", () => {
+    const { repo, db } = memoryRepo();
+    const id = seedJob(db, { company: "Somewhere", applicationRoi: 90, fitScore: 90, priority: "A" });
+    db.prepare("UPDATE jobs SET source = 'remoteok' WHERE id = ?").run(id);
+
+    const md = report(repo, sources({ remoteok: false }));
+    expect(md).toContain("remoteok.com");
+  });
+
+  it("still credits Remote OK while the source is enabled", () => {
+    const { repo } = memoryRepo();
+    expect(report(repo, sources({ remoteok: true }))).toContain("remoteok.com");
+  });
+
+  it("does not credit Remote OK when it is disabled and none of its postings appear", () => {
+    // The attribution is a condition of displaying their listings, not a
+    // permanent footer.
+    const { repo, db } = memoryRepo();
+    seedJob(db, { company: "Somewhere", applicationRoi: 90, fitScore: 90, priority: "A" });
+    expect(report(repo, sources({ remoteok: false }))).not.toContain("remoteok.com");
+  });
+});

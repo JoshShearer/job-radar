@@ -845,6 +845,28 @@ export class JobRepo {
       .all(...IN_FLIGHT_STATUSES) as never;
   }
 
+  /** The per-source funnel: in, passed, analyzed, applies out. */
+  sourceScorecard(): Array<{
+    source: string; ingested: number; passed: number; analyzed: number;
+    applies: number; appliedTo: number; closed: number;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT source,
+                COUNT(*) AS ingested,
+                SUM(CASE WHEN filter_passed = 1 THEN 1 ELSE 0 END) AS passed,
+                SUM(CASE WHEN analysis_json IS NOT NULL THEN 1 ELSE 0 END) AS analyzed,
+                SUM(CASE WHEN json_extract(analysis_json,'$.recommendation')
+                              IN ('apply','apply_and_outreach') THEN 1 ELSE 0 END) AS applies,
+                SUM(CASE WHEN status IN ('APPLIED','SCREEN','INTERVIEW','FINAL','OFFER')
+                         THEN 1 ELSE 0 END) AS appliedTo,
+                SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed
+           FROM jobs
+          GROUP BY source`,
+      )
+      .all() as never;
+  }
+
   allSightings(): Array<{ id: string; source: string; lastSeen: string | null }> {
     return this.db
       .prepare("SELECT id, source, last_seen AS lastSeen FROM jobs")
