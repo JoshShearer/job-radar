@@ -56,6 +56,14 @@ const COLUMN_MIGRATIONS: { table: string; column: string; definition: string }[]
   // The uncalibrated deterministic score, kept so calibration can be
   // recomputed later without re-deriving it.
   { table: "jobs", column: "raw_fit_score", definition: "REAL" },
+  // Failed analysis attempts. Without these a malformed response was refused
+  // correctly and then forgotten: the job stayed eligible, got re-selected on
+  // the next pass, and was paid for again. The reason existed only as a warn
+  // line in a console that had already scrolled away.
+  { table: "jobs", column: "analysis_failures", definition: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "jobs", column: "analysis_failure_reason", definition: "TEXT" },
+  { table: "jobs", column: "analysis_failure_kind", definition: "TEXT" },
+  { table: "jobs", column: "analysis_failed_at", definition: "TEXT" },
 ];
 
 /**

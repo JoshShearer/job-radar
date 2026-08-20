@@ -15,6 +15,11 @@ import { IN_FLIGHT_STATUSES, type Priority, type Status } from "../model/status.
  * testable without a config file on disk.
  */
 export interface AnalysisDiversity {
+  /**
+   * Attempts a job gets before it stops being offered for paid analysis.
+   * Null means no limit, which is what the code did before this existed.
+   */
+  maxAttempts: number | null;
   perCompanyCap: number;
   backfillCap: number;
   coldAfter: number;
@@ -245,8 +250,18 @@ export class JobRepo {
         to_hash: job.descriptionHash,
       });
       // Content moved, so any cached analysis no longer describes this job.
+      //
+      // The failure record is cleared with it, and that is the point rather
+      // than tidiness: a posting whose description changed is a different
+      // input. Whatever made the model choke on the old text may be gone, so
+      // a job parked after two failures earns a fresh pair of attempts.
       this.db
-        .prepare("UPDATE jobs SET analysis_json = NULL, analyzed_at = NULL, scored_at = NULL WHERE id = ?")
+        .prepare(
+          `UPDATE jobs SET analysis_json = NULL, analyzed_at = NULL, scored_at = NULL,
+             analysis_failures = 0, analysis_failure_reason = NULL,
+             analysis_failure_kind = NULL, analysis_failed_at = NULL
+           WHERE id = ?`,
+        )
         .run(existing.id);
     }
     if (salaryChanged) {
@@ -462,8 +477,10 @@ export class JobRepo {
    * default nobody re-derives.
    */
   needingAnalysis(limit: number, diversity: AnalysisDiversity, minFit?: number | null): EnrichedJob[] {
-    const { perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty, freshDays, freshBonus, evergreenDays } =
-      diversity;
+    const {
+      perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty,
+      freshDays, freshBonus, evergreenDays, maxAttempts,
+    } = diversity;
 
     // Eligibility is gated on the RAW deterministic score, not the calibrated
     // one. Calibration deliberately scales scores down, so gating on the
@@ -503,6 +520,10 @@ export class JobRepo {
             -- unknown age is not old age.
             AND (? IS NULL OR j.date_posted IS NULL
                  OR julianday('now') - julianday(j.date_posted) <= ?)
+            -- A job that has already failed this many times is not bought
+            -- again. If the failure is deterministic for this posting, paying
+            -- for it a third time cannot end differently.
+            AND (? IS NULL OR COALESCE(j.analysis_failures, 0) < ?)
           ORDER BY (
             j.application_roi
             + CASE WHEN cs.analyzed IS NULL THEN ? ELSE 0 END
@@ -522,6 +543,8 @@ export class JobRepo {
         minFit ?? null,
         evergreenDays,
         evergreenDays,
+        maxAttempts,
+        maxAttempts,
         unexploredBonus,
         coldAfter,
         coldPenalty,
@@ -598,6 +621,78 @@ export class JobRepo {
       return n;
     });
     return run(ids);
+  }
+
+  /**
+   * Record that an analysis attempt failed.
+   *
+   * Stored rather than logged because the console is not a database. Ten
+   * failures cost roughly $0.46 and recurred, and the reasons existed only as
+   * warn lines that were gone the moment the run ended - so nothing could say
+   * whether they were the same failure ten times or ten different ones.
+   */
+  recordAnalysisFailure(jobId: string, kind: string, reason: string, spendsAttempt = true): number {
+    // The reason and kind are always stored - an API failure is still worth
+    // seeing in `failures`. The COUNTER is what decides re-eligibility, so it
+    // moves only when the failure is about this posting.
+    //
+    // Splitting these is load-bearing, not tidiness. With a single counter the
+    // log said "not counted against the job" while `needingAnalysis` counted
+    // it anyway, so a couple of dropped connections would have parked a
+    // perfectly analysable job while insisting it had not.
+    this.db
+      .prepare(
+        `UPDATE jobs SET
+           analysis_failures = COALESCE(analysis_failures, 0) + ?,
+           analysis_failure_kind = ?,
+           analysis_failure_reason = ?,
+           analysis_failed_at = ?
+         WHERE id = ?`,
+      )
+      .run(spendsAttempt ? 1 : 0, kind, reason.slice(0, 500), new Date().toISOString(), jobId);
+    const row = this.db.prepare("SELECT analysis_failures AS n FROM jobs WHERE id = ?").get(jobId) as
+      | { n: number }
+      | undefined;
+    return row?.n ?? 0;
+  }
+
+  /**
+   * Jobs that have failed analysis, newest first. Queryable, which was the point.
+   *
+   * Includes jobs whose only failures were API-level, so `analysis_failures`
+   * can legitimately read 0 here - the row exists because something went wrong,
+   * not because the job spent an attempt.
+   */
+  analysisFailures(limit = 50): Array<{
+    id: string;
+    company: string;
+    title: string;
+    failures: number;
+    kind: string | null;
+    reason: string | null;
+    failedAt: string | null;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT id, company, title,
+                COALESCE(analysis_failures, 0) AS failures,
+                analysis_failure_kind AS kind,
+                analysis_failure_reason AS reason,
+                analysis_failed_at AS failedAt
+           FROM jobs
+          WHERE analysis_failed_at IS NOT NULL
+          ORDER BY analysis_failed_at DESC
+          LIMIT ?`,
+      )
+      .all(limit) as Array<{
+      id: string;
+      company: string;
+      title: string;
+      failures: number;
+      kind: string | null;
+      reason: string | null;
+      failedAt: string | null;
+    }>;
   }
 
   allSightings(): Array<{ id: string; source: string; lastSeen: string | null }> {

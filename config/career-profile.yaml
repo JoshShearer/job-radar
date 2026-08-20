@@ -553,6 +553,24 @@ scoring:
   # Median posting age at apply was 55 days, which is where that showed up.
   analysis_fresh_days: 21
   analysis_fresh_bonus: 12
+
+  # Failed analysis attempts before a job stops being offered for paid
+  # analysis. A malformed response was refused correctly and then forgotten,
+  # so the job stayed eligible, got re-selected next pass, and was paid for
+  # again - 10 failures on the books, roughly $0.46, recurring.
+  #
+  # 2, not 1: the observed failure rate is a steady 3-5% across days and runs
+  # (3 of 100 on 08-14; 1, 2, 2 and 2 across four separate runs on 08-19), which
+  # is the shape of an occasional bad response rather than a posting the model
+  # cannot handle. One retry costs about $0.05 and is worth it; a third cannot
+  # end differently if the failure is deterministic for that posting.
+  #
+  # API failures do not count against this - see countsAgainstJob. A dropped
+  # connection is not evidence about the posting.
+  #
+  # The counter resets when the description changes, because that is a
+  # different input and deserves fresh attempts.
+  analysis_max_attempts: 2
   # Minimum RAW fit score to be eligible for LLM analysis (cost control).
   #
   # Lowered 55 -> 35 on 2026-08-19 against measured data, not intuition. Hit

@@ -187,6 +187,19 @@ program
       console.log(
         `Considered ${summary.considered} | analyzed ${summary.analyzed} | from cache ${summary.fromCache} | failed ${summary.failed}`,
       );
+      const kinds = Object.entries(summary.failureKinds);
+      if (kinds.length) {
+        // Aggregate, because "3 failures" never said whether it was one bug
+        // three times or three different postings.
+        console.log(`Failures by kind: ${kinds.map(([k, n]) => `${k} ${n}`).join(", ")}.`);
+        console.log(`  \`job-radar failures\` shows the reasons, which are now stored per job.`);
+      }
+      if (summary.parkedAfterFailure) {
+        console.log(
+          `${summary.parkedAfterFailure} job(s) reached the attempt limit and will not be offered again ` +
+            `until their posting changes.`,
+        );
+      }
       if (summary.analyzed > 0) {
         const cacheTotal = summary.cacheReadTokens + summary.cacheCreationTokens;
         const hitRate = cacheTotal > 0 ? Math.round((summary.cacheReadTokens / cacheTotal) * 100) : 0;
@@ -1037,6 +1050,43 @@ program
       console.log(`Figures are lower bounds: tailor/apply cost logging began 2026-08-19,`);
       console.log(`and API use outside this tool is not recorded here.`);
       return { total };
+    });
+  });
+
+// ---- failures ---------------------------------------------------------------
+
+program
+  .command("failures")
+  .description("Jobs whose analysis failed, with the reason and attempt count")
+  .option("-l, --limit <n>", "how many to show", "30")
+  .action(async (opts: { limit: string }) => {
+    const profile = loadProfile();
+    await withRepo("failures", (repo) => {
+      const rows = repo.analysisFailures(Number(opts.limit) || 30);
+      if (rows.length === 0) {
+        console.log("No recorded analysis failures.");
+        return { count: 0 };
+      }
+      const budget = profile.scoring.analysis_max_attempts;
+      console.log("");
+      console.log(`${"ID".padEnd(13)} ${"N".padStart(2)} ${"KIND".padEnd(13)} ${"WHEN".padEnd(11)} COMPANY / REASON`);
+      console.log("-".repeat(120));
+      for (const r of rows) {
+        const parked = r.failures >= budget ? " [PARKED]" : "";
+        console.log(
+          `${r.id.padEnd(13)} ${String(r.failures).padStart(2)} ${(r.kind ?? "-").padEnd(13)} ` +
+            `${(r.failedAt ?? "").slice(0, 10).padEnd(11)} ${r.company}${parked}`,
+        );
+        console.log(`${" ".repeat(14)}${(r.reason ?? "").slice(0, 100)}`);
+      }
+      const byKind = new Map<string, number>();
+      for (const r of rows) byKind.set(r.kind ?? "unknown", (byKind.get(r.kind ?? "unknown") ?? 0) + 1);
+      console.log("");
+      console.log(`By kind: ${[...byKind].map(([k, n]) => `${k} ${n}`).join(", ")}.`);
+      console.log(
+        `A job at ${budget} attempts is not offered for paid analysis again until its posting changes.`,
+      );
+      return { count: rows.length };
     });
   });
 
