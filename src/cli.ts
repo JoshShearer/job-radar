@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readApplicationHistory, describeHistory } from "./apply/history.js";
 import { parseNonNegativeFlag, parseNumericFlag } from "./lib/options.js";
 import { Command } from "commander";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1058,13 +1059,25 @@ program
       const newest = newestBySource(repo.allSightings());
       const stale = new Set(jobs.filter((j) => isStale({ id: j.id, source: j.source, lastSeen: j.lastSeen }, newest)).map((j) => j.id));
 
+      // Work already done, read from disk rather than from `status`. `autofill`
+      // will not write APPLIED without an explicit human yes, so a job whose
+      // form was filled days ago still reads APPLY here - and this listing kept
+      // offering those back as fresh. Four of them went out on one list under a
+      // heading claiming they were companies never applied to.
+      const worked = new Map<string, string>();
+      for (const j of jobs) {
+        const line = describeHistory(readApplicationHistory(packDir(j)));
+        if (line) worked.set(j.id, line);
+      }
+
       console.log("");
       console.log(
         `${"ID".padEnd(13)} ${"ROI".padStart(3)} ${"FIT".padStart(3)} ${"P".padStart(1)} ${"COMP".padEnd(7)} ${"COMPANY".padEnd(20)} TITLE`,
       );
       console.log("-".repeat(120));
       for (const j of jobs) {
-        const mark = stale.has(j.id) ? " [CLOSED?]" : "";
+        const done = worked.get(j.id);
+        const mark = (stale.has(j.id) ? " [CLOSED?]" : "") + (done ? ` [${done}]` : "");
         console.log(
           `${j.id.padEnd(13)} ${String(j.applicationRoi ?? "-").padStart(3)} ${String(j.fitScore ?? "-").padStart(3)} ` +
             `${(j.priority ?? "-").padStart(1)} ${(j.compensationBand ?? "-").padEnd(7)} ` +
@@ -1077,6 +1090,13 @@ program
         console.log(
           `${stale.size} marked [CLOSED?]: the board was swept more recently than the posting was last seen on it. ` +
             `\`ingest\` to re-check.`,
+        );
+      }
+      const filled = [...worked.values()].filter((v) => v.startsWith("FORM ALREADY")).length;
+      if (filled) {
+        console.log(
+          `${filled} marked [FORM ALREADY FILLED]: a browser was driven at that employer's form on that date. ` +
+            `That is not proof you submitted - \`status <id> APPLIED\` if you did.`,
         );
       }
       return { count: jobs.length };
