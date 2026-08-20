@@ -143,7 +143,7 @@ describe("parked postings leave the pools", () => {
     seedJob(db, { id: "open", company: "Beta", applicationRoi: 10, fitScore: 10, status: "NEW" });
     const picked = repo.needingAnalysis(10, {
       perCompanyCap: 2, backfillCap: 3, coldAfter: 6, unexploredBonus: 8, coldPenalty: 15,
-      freshDays: 21, freshBonus: 12, evergreenDays: null,
+      freshDays: 21, freshBonus: 12, evergreenDays: null, maxAttempts: 2,
     });
     expect(picked.map((j) => j.id)).toEqual(["open"]);
   });

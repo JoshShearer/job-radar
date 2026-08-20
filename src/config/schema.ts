@@ -81,6 +81,8 @@ export const CareerProfileSchema = z.object({
     /** A posting newer than this gets `analysis_fresh_bonus` when analyze picks. */
     analysis_fresh_days: z.number().positive(),
     analysis_fresh_bonus: z.number().nonnegative(),
+    /** Failed analysis attempts a job gets before it stops being offered. */
+    analysis_max_attempts: z.number().int().positive(),
     report_threshold: z.number().min(0).max(100),
     /**
      * Hard ceiling on estimated spend for one `analyze` pass, in USD.

@@ -9,6 +9,7 @@ import { sha256 } from "../lib/hash.js";
 import { log } from "../lib/log.js";
 
 import { estimateCostUsd, PRICING } from "../lib/cost.js";
+import { classifyAnalysisFailure, countsAgainstJob } from "./failures.js";
 
 export const DEFAULT_MODEL = "claude-opus-5";
 
@@ -38,6 +39,8 @@ export interface AnalyzeOptions {
    * shape. Set only by an explicit `--min-fit` on one pass.
    */
   minFit?: number | null;
+  /** Override the configured attempt budget for this pass. */
+  maxAttempts?: number | null;
   /**
    * Consider postings past `evergreen_days` as well.
    *
@@ -71,6 +74,10 @@ export interface AnalyzeSummary {
   estimatedCostUsd: number;
   /** True when the pass ended on the spend ceiling rather than the job list. */
   stoppedOnBudget?: boolean;
+  /** Failures this pass, by kind. Makes "how many were truncation?" answerable. */
+  failureKinds: Record<string, number>;
+  /** Jobs that reached the attempt limit in this pass and will not be re-offered. */
+  parkedAfterFailure: number;
 }
 
 /** Anthropic prompt-cache multipliers relative to the base input rate. */
@@ -107,6 +114,7 @@ export async function runAnalysis(
     // `--include-evergreen` lifts both at once, deliberately: the two
     // decisions are the same decision.
     evergreenDays: opts.includeEvergreen ? null : profile.scoring.evergreen_days,
+    maxAttempts: profile.scoring.analysis_max_attempts,
   }, opts.minFit);
   const summary: AnalyzeSummary = {
     considered: candidates.length,
@@ -118,6 +126,8 @@ export async function runAnalysis(
     cacheReadTokens: 0,
     outputTokens: 0,
     estimatedCostUsd: 0,
+    failureKinds: {},
+    parkedAfterFailure: 0,
   };
 
   if (candidates.length === 0) {
@@ -239,7 +249,37 @@ export async function runAnalysis(
       );
     } catch (err) {
       summary.failed++;
-      log.warn(`  analysis failed for ${job.company} - ${job.title}: ${(err as Error).message}`);
+      const message = (err as Error).message;
+      const kind = classifyAnalysisFailure(message);
+
+      // Recorded, not just logged. The console is not a database: ten failures
+      // costing roughly $0.46 recurred precisely because the reason was gone
+      // the moment the run ended.
+      //
+      // An API failure is about the network or the account, not this posting,
+      // so it is stored for visibility but does not spend the job's attempts.
+      // Otherwise two dropped connections would park a perfectly analysable job.
+      const counted = countsAgainstJob(kind);
+      let attempts = 0;
+      try {
+        attempts = repo.recordAnalysisFailure(job.id, kind, message, counted);
+      } catch (recordErr) {
+        log.warn(`  could not record the failure: ${(recordErr as Error).message}`);
+      }
+      const budget = opts.maxAttempts ?? profile.scoring.analysis_max_attempts;
+      const parked = counted && attempts >= budget;
+
+      summary.failureKinds[kind] = (summary.failureKinds[kind] ?? 0) + 1;
+      if (parked) summary.parkedAfterFailure++;
+
+      log.warn(
+        `  analysis failed for ${job.company} - ${job.title} [${kind}]: ${message}` +
+          (parked
+            ? ` -- attempt ${attempts} of ${budget}; not offering this job again until its posting changes.`
+            : counted
+              ? ` -- attempt ${attempts} of ${budget}.`
+              : ` -- not counted against the job; this is an API failure, not a posting problem.`),
+      );
     }
   }
 
@@ -309,6 +349,15 @@ export function shouldStopForBudget(spentUsd: number, ceilingUsd: number | undef
  * guessing wrong in that direction is one 400 rather than silently dropping
  * the setting on every call.
  */
+/**
+ * Output ceiling for one analysis.
+ *
+ * Named so the truncation message can quote it. A response that hits this stops
+ * mid-object and arrives as unparseable JSON, which is why `stop_reason` is
+ * checked before the parse rather than after it.
+ */
+export const MAX_OUTPUT_TOKENS = 16000;
+
 export function supportsEffort(model: string): boolean {
   return !/^claude-haiku/.test(model);
 }
@@ -336,7 +385,7 @@ async function analyzeOne(
 
   const response = await client.messages.create({
     model: opts.model,
-    max_tokens: 16000,
+    max_tokens: MAX_OUTPUT_TOKENS,
     // The system prefix is identical for every job in the run, so caching it
     // makes the marginal cost of each additional job close to the description
     // itself. Verify with usage.cache_read_input_tokens > 0 after the first call.
@@ -364,6 +413,21 @@ async function analyzeOne(
 
   if (response.stop_reason === "refusal") {
     throw new Error("Model declined to analyze this posting.");
+  }
+
+  // Say "truncated" rather than letting it surface as a JSON parse error.
+  //
+  // A response cut off at max_tokens IS invalid JSON, so without this the two
+  // are indistinguishable in the record - and they call for opposite responses.
+  // Truncation is a setting to raise or an output schema to shrink; malformed
+  // JSON from a constrained decode is a model problem. This was the leading
+  // hypothesis for the recorded failures and nothing could confirm or refute
+  // it, because no reason was ever stored.
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `Response hit max_tokens (${MAX_OUTPUT_TOKENS}) and was truncated mid-object. ` +
+        `Raise the ceiling or shrink the output schema.`,
+    );
   }
 
   const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;

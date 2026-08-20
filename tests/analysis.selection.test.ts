@@ -24,6 +24,7 @@ const DIVERSITY: AnalysisDiversity = {
   freshDays: 21,
   freshBonus: 12,
   evergreenDays: null,
+  maxAttempts: 2,
 };
 
 /** Mark a job analyzed with a given recommendation, the way the analyzer does. */
