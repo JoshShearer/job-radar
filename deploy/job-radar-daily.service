@@ -1,0 +1,72 @@
+[Unit]
+Description=Job Radar daily pass (backup, ingest, score, ghost sweep, briefing)
+Documentation=https://github.com/JoshShearer/job-radar
+# Boards are on the internet; without this the timer fires at boot and every
+# source fails before the network is up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/Dev/job-radar
+
+# PINNED NODE, rewritten by deploy/install-timer.sh to whatever `node` resolves
+# to in your shell at install time.
+#
+# This is not a nicety. systemd user units do not source a shell profile, so a
+# version manager like nvm is invisible to them and the unit gets whatever
+# /usr/bin/node happens to be. On this machine that was Node 18 against a shell
+# running Node 24, and the first unattended run died on
+# "Playwright requires Node.js 20 or higher" - a failure that cannot be
+# reproduced from a terminal, because a terminal has the right node.
+#
+# Consequence worth knowing: this pins an nvm version path, so upgrading Node
+# breaks the timer until install-timer.sh is re-run. The installer is
+# idempotent for exactly that reason.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# BACKUP FIRST, then the pass. The order is the point: if a run corrupts
+# something or a schema migration goes wrong, the copy taken moments earlier is
+# the one you want. Backing up afterwards would preserve the damage.
+#
+# `--keep 14` bounds it. The database is 238MB, so an unpruned daily copy is
+# about 7GB a month on the same disk as the thing being protected.
+ExecStart=/usr/bin/env npm run --silent cli -- backup --keep 14
+
+# The whole pass: ingest, score, the GHOSTED sweep, and the briefing.
+#
+# `--analyze` is deliberately ABSENT, so this schedule costs nothing to run.
+# Everything here is free; only the analysis stage spends money.
+#
+# TO TURN PAID ANALYSIS ON, add `-- --analyze`:
+#
+#     ExecStart=/usr/bin/env npm run --silent radar -- --analyze
+#
+# then `systemctl --user daemon-reload`. Spend is bounded by
+# `scoring.max_spend_per_run_usd` in config/career-profile.yaml, checked before
+# the call that would cross it, so an unattended run cannot cost more than that
+# ceiling however many jobs arrive overnight. At the default $1.50 that is a
+# ~$45/month worst case.
+ExecStart=/usr/bin/env npm run --silent radar
+
+# The API key lives here rather than in the unit, so the unit can be committed.
+# Create it with `chmod 600` and one KEY=value per line:
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   JOB_RADAR_GMAIL_CLIENT_ID=...
+EnvironmentFile=%h/.config/job-radar/env
+
+# A source that hangs must not hold the timer open until tomorrow's firing.
+TimeoutStartSec=45min
+
+# Failures are recorded in the `runs` table and surfaced in the next briefing
+# under "Scheduler". The journal is the detail; the briefing is what gets read.
+StandardOutput=journal
+StandardError=journal
+
+# Ordinary hardening. This job reads job boards and writes into its own
+# directory; it has no reason to reach anywhere else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/Documents/Dev/job-radar/data %h/Documents/Dev/job-radar/reports

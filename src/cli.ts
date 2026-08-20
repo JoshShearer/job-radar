@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { readApplicationHistory, describeHistory } from "./apply/history.js";
 import { parseNonNegativeFlag, parseNumericFlag } from "./lib/options.js";
+import { listBackups, pruneBackups } from "./lib/backup.js";
 import { Command } from "commander";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
@@ -2011,9 +2012,10 @@ interview
 
 program
   .command("backup")
-  .description("Copy the SQLite database to a timestamped file")
+  .description("Copy the SQLite database to a timestamped file, pruning old ones")
   .option("-o, --out <dir>", "output directory", resolve(PROJECT_ROOT, "data", "backups"))
-  .action((opts: { out: string }) => {
+  .option("-k, --keep <n>", "how many backups to retain", "14")
+  .action((opts: { out: string; keep: string }) => {
     const src = paths.db();
     mkdirSync(opts.out, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -2024,6 +2026,19 @@ program
     closeDb();
     copyFileSync(src, dest);
     console.log(`Backed up to ${dest}`);
+
+    // Prune, and this is not housekeeping - it is the difference between a
+    // backup schedule and a disk-filling bug. The database is 238MB, so a
+    // daily copy with no retention is 7GB a month, on the same disk as the
+    // thing being protected.
+    const keep = Math.max(1, Number(opts.keep) || 14);
+    const pruned = pruneBackups(opts.out, keep);
+    if (pruned.length) {
+      console.log(`Pruned ${pruned.length} old backup(s), keeping the newest ${keep}.`);
+    }
+    const remaining = listBackups(opts.out);
+    const bytes = remaining.reduce((a, f) => a + statSync(resolve(opts.out, f)).size, 0);
+    console.log(`${remaining.length} backup(s), ${(bytes / 1_073_741_824).toFixed(2)} GB total.`);
   });
 
 // ---------------------------------------------------------------------------

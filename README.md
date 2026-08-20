@@ -565,6 +565,44 @@ That second case is called out explicitly, because it's the most common misdiagn
 
 ---
 
+## Running it on a schedule
+
+Fresh postings are the whole game, and ingest had only ever been run by hand — on four distinct days in total. `daily` already bundles backup-worthy work (ingest, score, optional analyze, the GHOSTED sweep, and the briefing); the only missing piece was a scheduler.
+
+```bash
+./deploy/install-timer.sh
+```
+
+That installs a **user** systemd timer — no privilege needed, and `systemctl --user status` rather than sudo when you want to know why last night's run failed.
+
+Three details in the unit that are load-bearing rather than boilerplate:
+
+- **The backup runs first, then the pass.** If a run corrupts something or a migration goes wrong, the copy taken moments earlier is the one you want. Backing up afterwards preserves the damage.
+- **`Persistent=true`.** Laptops are asleep at 07:15. Without it the run is silently skipped and the index quietly goes stale, which is the exact failure the schedule exists to prevent.
+- **`backup --keep 14`.** The database is 238MB. A daily copy with no retention is about 7GB a month, on the same disk as the thing being protected.
+
+**The scheduled pass does not call the API.** `--analyze` is deliberately absent from the unit, so the schedule costs nothing: ingest, score, the GHOSTED sweep and the briefing are all free. To turn paid analysis on, add `-- --analyze` to the second `ExecStart` and `systemctl --user daemon-reload`. Spend is then bounded by `scoring.max_spend_per_run_usd`, checked *before* the call that would cross it, so an unattended run cannot cost more than that ceiling however many jobs arrived overnight — a ~$45/month worst case at the default $1.50.
+
+### Failures land where you already look
+
+An unattended schedule that silently stops is worse than no schedule: the briefing keeps arriving, built from an index nothing has refreshed, and looks exactly like a quiet week in the job market.
+
+So the briefing carries a **Scheduler** section whenever the last successful ingest is more than two days old, or any run failed in the last three:
+
+```
+### Scheduler
+
+- **Last successful ingest was 6 days ago.** Everything below is being chosen
+  from a stale index. Check `systemctl --user status job-radar-daily.timer`.
+- `analyze` failed 2026-08-20 05:02: Error: --max-spend expects a number, got "1.5O"
+```
+
+The journal has the detail (`journalctl --user -u job-radar-daily.service`); the briefing is what actually gets read.
+
+Lingering must be on for a user timer to fire while you are logged out — the installer checks and tells you if it is not.
+
+---
+
 ## Data retention
 
 Nothing overwrites history. The `jobs` row holds current state; `job_events` is append-only and records how it got there — `discovered`, `description_changed`, `salary_changed`, `status_changed`, `analyzed`. `job_sources` keeps **every** URL a canonical job was seen at, since syndication is the norm.
