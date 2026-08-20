@@ -620,6 +620,47 @@ scoring:
   # on a credit-card statement. Override per run with `--max-spend`.
   max_spend_per_run_usd: 1.50
 
+# When a sweep may conclude a posting has left its board and park it.
+#
+# 339 filter-passing jobs were sitting at NEW although their board had stopped
+# listing them. `top` flagged them [CLOSED?] and nothing acted on it, so they
+# held ranking slots and could eat analysis budget.
+#
+# Both numbers exist to tell one thing apart from another: a board where lots of
+# postings genuinely closed, versus a board that returned a truncated list. They
+# look identical from here.
+parking:
+  # `isStale` uses a six-hour window, which is right for COLOURING a listing -
+  # the cost of being wrong is one misleading tag. This is a STATE CHANGE, so
+  # it waits far longer. At six hours a single bad response parks everything
+  # that response omitted; at three days it takes a sustained failure.
+  #
+  # Measured on the live index: 354 NEW+passing jobs have a gap over 1 day, 329
+  # over 3 days, 256 over 7. Nothing exceeds 14, because the index is only about
+  # two weeks old.
+  after_days: 3
+  # If more than this share of a source's parkable jobs would go in one run,
+  # the source is the problem and parking is refused for it entirely, loudly.
+  # Same principle the ingest path already holds to: one failing source must
+  # never invalidate a run.
+  #
+  # 0.8, not 0.5, and the difference was measured. Real per-source rates on the
+  # current index:
+  #
+  #     greenhouse   1955 / 7563   25.8%
+  #     lever          48 /  345   13.9%
+  #     ashby         121 / 4082    3.0%
+  #     remoteok      132 /  264   50.0%
+  #
+  # RemoteOK sits exactly on 0.5 because its feed is a rolling window - older
+  # postings fall out permanently by design, so half its catalogue turning over
+  # is normal operation, not a fault. A ceiling of 0.5 would have sat on that
+  # knife edge and flapped between parking and refusing from run to run.
+  #
+  # 0.8 still catches what this is for: a board that returns a tenth of its
+  # list leaves 90% looking absent, which trips it immediately.
+  max_fraction_per_source: 0.8
+
 roi:
   # Weights for the Application ROI composite. They should sum to ~1.0.
   weights:

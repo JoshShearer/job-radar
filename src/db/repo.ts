@@ -209,7 +209,12 @@ export class JobRepo {
           salary_period = @salary_period,
           description_raw = @description_raw,
           description_clean = @description_clean,
-          description_hash = @description_hash
+          description_hash = @description_hash,
+          -- Seeing the posting again undoes a park, and only a park. CLOSED is
+          -- the one status a sweep sets on its own, so it is the one status a
+          -- sweep may clear. Anything a person recorded is left alone.
+          status = CASE WHEN status = 'CLOSED' THEN 'NEW' ELSE status END,
+          status_changed_at = CASE WHEN status = 'CLOSED' THEN @last_seen ELSE status_changed_at END
         WHERE id = @id`,
       )
       .run({
@@ -491,7 +496,7 @@ export class JobRepo {
             AND j.filter_passed = 1
             AND j.fit_score IS NOT NULL
             AND (? IS NULL OR COALESCE(j.raw_fit_score, j.fit_score) >= ?)
-            AND j.status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')
+            AND j.status NOT IN ('SKIPPED','REJECTED','WITHDRAWN','CLOSED')
             -- Do not pay to analyze what will not be recommended. An evergreen
             -- posting is excluded from the top list and the daily report, so
             -- buying a verdict on it is money for nothing. NULL date is kept:
@@ -561,6 +566,40 @@ export class JobRepo {
    * to colour a listing, and pulling full descriptions to answer "when did each
    * board last see this" would read hundreds of megabytes to print a flag.
    */
+  /**
+   * Everything a sweep needs to decide what has left the board.
+   *
+   * Status comes along because the decision depends on it: an inference must
+   * never move a posting a person has already acted on.
+   */
+  parkCandidates(): Array<{ id: string; source: string; lastSeen: string | null; status: string }> {
+    return this.db
+      .prepare("SELECT id, source, last_seen AS lastSeen, status FROM jobs")
+      .all() as Array<{ id: string; source: string; lastSeen: string | null; status: string }>;
+  }
+
+  /**
+   * Move postings to CLOSED.
+   *
+   * Guarded in SQL as well as in `planParking`, because this writes status and
+   * the guarantee that it never touches a human-set state should not depend on
+   * the caller having filtered correctly.
+   */
+  parkJobs(ids: ReadonlyArray<string>): number {
+    if (ids.length === 0) return 0;
+    const stmt = this.db.prepare(
+      `UPDATE jobs SET status = 'CLOSED', status_changed_at = ?
+        WHERE id = ? AND status IN ('NEW','REVIEWED')`,
+    );
+    const now = new Date().toISOString();
+    const run = this.db.transaction((batch: ReadonlyArray<string>) => {
+      let n = 0;
+      for (const id of batch) n += stmt.run(now, id).changes;
+      return n;
+    });
+    return run(ids);
+  }
+
   allSightings(): Array<{ id: string; source: string; lastSeen: string | null }> {
     return this.db
       .prepare("SELECT id, source, last_seen AS lastSeen FROM jobs")
@@ -587,7 +626,7 @@ export class JobRepo {
     evergreenDays?: number | null;
   }): EnrichedJob[] {
     const statusClause = opts.includeReviewed
-      ? "status NOT IN ('SKIPPED','REJECTED','WITHDRAWN','GHOSTED')"
+      ? "status NOT IN ('SKIPPED','REJECTED','WITHDRAWN','GHOSTED','CLOSED')"
       : "status = 'NEW'";
     const sinceClause = opts.since ? "AND last_seen >= @since" : "";
     const evergreenClause =
@@ -663,7 +702,7 @@ export class JobRepo {
            AND filter_passed = 1
            AND fit_score IS NOT NULL
            AND COALESCE(raw_fit_score, fit_score) < ?
-           AND status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')`,
+           AND status NOT IN ('SKIPPED','REJECTED','WITHDRAWN','CLOSED')`,
       )
       .get(minFit) as { count: number; best: number | null };
     return { count: row?.count ?? 0, best: row?.best ?? null };

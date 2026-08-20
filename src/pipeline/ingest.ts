@@ -6,6 +6,8 @@ import { RunStats, log } from "../lib/log.js";
 import { normalizeJob } from "./normalize.js";
 import { dedupeBatch } from "./dedupe.js";
 import { JobRepo } from "../db/repo.js";
+import { planParking, newestBySource } from "../model/freshness.js";
+import { isAutoParkable } from "../model/status.js";
 
 export interface IngestSummary {
   fetched: number;
@@ -17,6 +19,10 @@ export interface IngestSummary {
   crossSourceDuplicates: number;
   descriptionChanges: number;
   salaryChanges: number;
+  /** Postings moved to CLOSED because their board stopped listing them. */
+  parked: number;
+  /** Sources where parking was refused as implausible. Never silent. */
+  parkRefusals: Array<{ source: string; wouldPark: number; total: number }>;
   sourceFailures: number;
   stats: RunStats;
 }
@@ -115,6 +121,35 @@ export async function runIngest(
     }
   }
 
+  // PARK: postings the boards have stopped listing.
+  //
+  // After persist, so this run's sightings are already recorded and a posting
+  // seen moments ago cannot look absent. Failures here must not fail the run -
+  // parking is housekeeping, and the jobs it would have moved are still
+  // correct, just noisier.
+  let parked = 0;
+  const parkRefusals: Array<{ source: string; wouldPark: number; total: number }> = [];
+  try {
+    const plan = planParking(repo.parkCandidates(), newestBySource(repo.allSightings()), {
+      afterDays: profile.parking.after_days,
+      maxFractionPerSource: profile.parking.max_fraction_per_source,
+      isParkable: isAutoParkable,
+    });
+    parked = repo.parkJobs(plan.park);
+    parkRefusals.push(...plan.refusedSources);
+    if (parked) log.info(`Parked ${parked} posting(s) their board no longer lists (status CLOSED).`);
+    for (const r of parkRefusals) {
+      log.warn(
+        `Refused to park ${r.source}: ${r.wouldPark} of ${r.total} of its jobs would have gone at once. ` +
+          `That reads as a truncated response from the board rather than a hiring freeze - check the source.`,
+      );
+    }
+  } catch (err) {
+    log.warn(`parking pass failed: ${(err as Error).message}`);
+    stats.bump("parking.failed");
+  }
+  stats.bump("parking.parked", parked);
+
   stats.bump("persist.inserted", inserted);
   stats.bump("persist.updated", updated);
   stats.bump("persist.cross_source_dupes", crossSourceDuplicates);
@@ -131,6 +166,8 @@ export async function runIngest(
     crossSourceDuplicates,
     descriptionChanges,
     salaryChanges,
+    parked,
+    parkRefusals,
     sourceFailures: stats.failureCount,
     stats,
   };

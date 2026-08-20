@@ -1,6 +1,10 @@
 /** Application lifecycle. Every job carries exactly one of these. */
 export const STATUSES = [
   "NEW",
+  // Set by the machine, not by a person: the board stopped listing this
+  // posting. Reversible - it goes back to NEW the moment the posting is seen
+  // again. See `planParking` in model/freshness.ts.
+  "CLOSED",
   "REVIEWED",
   "SKIPPED",
   "SAVED",
@@ -17,6 +21,21 @@ export const STATUSES = [
 ] as const;
 
 export type Status = (typeof STATUSES)[number];
+
+/**
+ * Statuses a sweep may move a posting away from automatically.
+ *
+ * Deliberately tiny. Auto-parking acts on an INFERENCE - the board was swept
+ * more recently than this posting was seen on it - and an inference must never
+ * overwrite something a person recorded. A job at APPLIED or SCREEN stays
+ * exactly where it is even if the posting vanishes from the board, because the
+ * posting vanishing is often what happens right after you apply.
+ */
+export const AUTO_PARKABLE_STATUSES = ["NEW", "REVIEWED"] as const;
+
+export function isAutoParkable(status: string): boolean {
+  return (AUTO_PARKABLE_STATUSES as readonly string[]).includes(status);
+}
 
 export function isStatus(v: string): v is Status {
   return (STATUSES as readonly string[]).includes(v);
@@ -155,6 +174,9 @@ export function stagesReached(status: Status): FunnelStage[] {
   const reached: FunnelStage[] = ["DISCOVERED"];
   const order: Record<Status, number> = {
     NEW: 0,
+    // A posting that left the board never got further than DISCOVERED. Giving
+    // it QUALIFIED would inflate the funnel with jobs nobody ever acted on.
+    CLOSED: 0,
     REVIEWED: 1,
     SKIPPED: 1,
     SAVED: 1,
