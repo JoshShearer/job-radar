@@ -167,3 +167,88 @@ export function formatAge(days: number | null): string {
   if (d >= 365) return "1y+";
   return `${d}d`;
 }
+
+/* -------------------------------------------------------------------------
+ * Auto-parking
+ * ---------------------------------------------------------------------- */
+
+export interface ParkCandidate {
+  id: string;
+  source: string;
+  lastSeen: string | null;
+  status: string;
+}
+
+export interface ParkPlan {
+  /** Job ids to move to CLOSED. */
+  park: string[];
+  /**
+   * Sources where parking was refused because too much of the catalogue would
+   * have gone at once. Reported, never silently dropped.
+   */
+  refusedSources: Array<{ source: string; wouldPark: number; total: number }>;
+}
+
+/**
+ * Which postings should be parked after a sweep?
+ *
+ * `isStale` above uses a six-hour window, which is right for COLOURING a
+ * listing: the cost of being wrong is one misleading tag. This is a STATE
+ * CHANGE, so it is deliberately slower and more suspicious than that.
+ *
+ * Two guards, both aimed at the same failure: a board that returns a truncated
+ * list looks exactly like a board where hundreds of jobs closed at once.
+ *
+ *  1. `afterDays`. A posting must have gone unseen for this long while its own
+ *     board kept being swept. At six hours a single bad response parks
+ *     everything it omitted; at three days it takes a sustained failure.
+ *
+ *  2. `maxFractionPerSource`. If more than this share of a source's parkable
+ *     jobs would go at once, the source is the problem, not the jobs. Parking
+ *     is refused for that source entirely and reported. This is the same
+ *     principle the ingest path already holds to - one failing source must
+ *     never invalidate a run.
+ *
+ * Comparison is per-source against that source's own high-water mark, so a
+ * board that failed completely has no advanced mark and parks nothing.
+ *
+ * Only `AUTO_PARKABLE_STATUSES` are touched. An inference must not overwrite
+ * something a person recorded, and a posting disappearing from a board is
+ * often exactly what happens just after you apply to it.
+ */
+export function planParking(
+  jobs: ReadonlyArray<ParkCandidate>,
+  newestBySourceMap: ReadonlyMap<string, string>,
+  opts: { afterDays: number; maxFractionPerSource: number; isParkable: (status: string) => boolean },
+): ParkPlan {
+  const thresholdMs = opts.afterDays * 86_400_000;
+
+  const perSource = new Map<string, { candidates: string[]; total: number }>();
+  for (const job of jobs) {
+    if (!opts.isParkable(job.status)) continue;
+    const entry = perSource.get(job.source) ?? { candidates: [], total: 0 };
+    entry.total += 1;
+
+    if (job.lastSeen) {
+      const newest = newestBySourceMap.get(job.source);
+      const seen = Date.parse(job.lastSeen);
+      const latest = newest ? Date.parse(newest) : NaN;
+      if (!Number.isNaN(seen) && !Number.isNaN(latest) && latest - seen > thresholdMs) {
+        entry.candidates.push(job.id);
+      }
+    }
+    perSource.set(job.source, entry);
+  }
+
+  const park: string[] = [];
+  const refusedSources: ParkPlan["refusedSources"] = [];
+  for (const [source, { candidates, total }] of perSource) {
+    if (candidates.length === 0) continue;
+    if (total > 0 && candidates.length / total > opts.maxFractionPerSource) {
+      refusedSources.push({ source, wouldPark: candidates.length, total });
+      continue;
+    }
+    park.push(...candidates);
+  }
+  return { park, refusedSources };
+}
