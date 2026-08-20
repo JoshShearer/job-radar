@@ -845,6 +845,34 @@ export class JobRepo {
       .all(...IN_FLIGHT_STATUSES) as never;
   }
 
+  /**
+   * Runs that failed recently.
+   *
+   * The point of an unattended schedule is that nobody is watching it, so a
+   * failure has to arrive somewhere a person already looks. The briefing is
+   * that place; `systemctl --user status` is not.
+   */
+  recentFailedRuns(days: number): Array<{ command: string; startedAt: string; error: string | null }> {
+    return this.db
+      .prepare(
+        `SELECT command, started_at AS startedAt,
+                json_extract(stats_json, '$.error') AS error
+           FROM runs
+          WHERE ok = 0 AND started_at >= datetime('now', ?)
+          ORDER BY started_at DESC
+          LIMIT 10`,
+      )
+      .all(`-${Math.max(1, Math.floor(days))} days`) as never;
+  }
+
+  /** When each command last completed successfully. Shows a silent scheduler. */
+  lastSuccessfulRun(command: string): string | null {
+    const row = this.db
+      .prepare("SELECT MAX(started_at) AS m FROM runs WHERE command = ? AND ok = 1")
+      .get(command) as { m: string | null } | undefined;
+    return row?.m ?? null;
+  }
+
   /** The per-source funnel: in, passed, analyzed, applies out. */
   sourceScorecard(): Array<{
     source: string; ingested: number; passed: number; analyzed: number;

@@ -263,6 +263,35 @@ export function buildDailyReport(input: ReportInput): { markdown: string; jobCou
     L.push("");
   }
 
+  // Scheduler health, in the one place that gets read.
+  //
+  // An unattended schedule that silently stops is worse than no schedule: the
+  // briefing keeps arriving, built from an index nothing has refreshed, and
+  // looks exactly like a quiet week in the job market.
+  const failures = repo.recentFailedRuns(3);
+  const lastIngest = repo.lastSuccessfulRun("ingest") ?? repo.lastSuccessfulRun("daily");
+  const ingestAgeDays = lastIngest ? (now.getTime() - Date.parse(lastIngest)) / 86_400_000 : null;
+
+  if (failures.length || ingestAgeDays === null || ingestAgeDays > 2) {
+    L.push("---");
+    L.push("");
+    L.push("### Scheduler");
+    L.push("");
+    if (ingestAgeDays === null) {
+      L.push("- **No successful ingest on record.** Nothing has refreshed this index.");
+    } else if (ingestAgeDays > 2) {
+      L.push(
+        `- **Last successful ingest was ${Math.floor(ingestAgeDays)} days ago.** ` +
+          `Everything below is being chosen from a stale index. ` +
+          `Check \`systemctl --user status job-radar-daily.timer\`.`,
+      );
+    }
+    for (const f of failures) {
+      L.push(`- \`${f.command}\` failed ${f.startedAt.slice(0, 16).replace("T", " ")}: ${(f.error ?? "").slice(0, 160)}`);
+    }
+    L.push("");
+  }
+
   L.push(`_Generated ${now.toISOString()} by job-radar._`);
 
   return { markdown: L.join("\n"), jobCount: slate.length };
