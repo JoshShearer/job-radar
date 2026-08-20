@@ -106,6 +106,14 @@ function validateProfileCoherence(p: CareerProfile): void {
   if (p.scoring.freshness_full_days >= p.scoring.freshness_zero_days)
     errors.push("scoring.freshness_full_days must be less than freshness_zero_days");
 
+  // A backfill ceiling below the per-pass cap would mean the backfill pass can
+  // never add anything, quietly shrinking every run below its requested limit.
+  if (p.analysis_diversity.per_company_backfill_cap < p.analysis_diversity.per_company_cap)
+    errors.push(
+      "analysis_diversity.per_company_backfill_cap must be >= per_company_cap " +
+        `(${p.analysis_diversity.per_company_backfill_cap} < ${p.analysis_diversity.per_company_cap})`,
+    );
+
   if (errors.length) {
     throw new Error(`Career profile is internally inconsistent:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
   }

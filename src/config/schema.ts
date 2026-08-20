@@ -75,6 +75,33 @@ export const CareerProfileSchema = z.object({
     freshness_max_points: z.number().nonnegative(),
     analysis_threshold: z.number().min(0).max(100),
     report_threshold: z.number().min(0).max(100),
+    /**
+     * Hard ceiling on estimated spend for one `analyze` pass, in USD.
+     * `--limit` bounds how many jobs a pass looks at; nothing bounded the bill.
+     */
+    max_spend_per_run_usd: z.number().positive(),
+  }),
+  // How the analysis budget is spread across companies. Without these, a
+  // company with 80 open roles eats a whole pass and the long tail is never
+  // reached: 48% of the first 362 analyses went to 15 companies, and 96 of
+  // them to 8 companies that never once came back `apply`.
+  analysis_diversity: z.object({
+    /** Max jobs from one company in a single pass, before backfill. */
+    per_company_cap: z.number().int().positive(),
+    /** Absolute ceiling per company once backfill starts. Must be >= cap. */
+    per_company_backfill_cap: z.number().int().positive(),
+    /**
+     * Analyses a company may consume with zero `apply` results before it is
+     * ranked behind everything else. Not a ban - a later posting can still win.
+     */
+    cold_after: z.number().int().positive(),
+    /**
+     * ROI points added for a company that has never been analyzed, and removed
+     * once one goes cold. These nudge the ranking; they do not replace it, so a
+     * strong role at a proven employer still outranks a weak one at a new name.
+     */
+    unexplored_bonus: z.number().nonnegative(),
+    cold_penalty: z.number().nonnegative(),
   }),
   roi: z.object({
     weights: z.object({

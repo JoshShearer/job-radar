@@ -34,6 +34,12 @@ export interface AnalyzeOptions {
   model: string;
   effort: string;
   dryRun: boolean;
+  /**
+   * Hard ceiling on estimated spend for this pass, in USD. The run stops before
+   * the call that would cross it. Undefined means no ceiling, which is what the
+   * tool did for its whole life until a $19.54 fortnight made the case for one.
+   */
+  maxSpendUsd?: number;
 }
 
 export interface AnalyzeSummary {
@@ -49,6 +55,8 @@ export interface AnalyzeSummary {
   cacheReadTokens: number;
   outputTokens: number;
   estimatedCostUsd: number;
+  /** True when the pass ended on the spend ceiling rather than the job list. */
+  stoppedOnBudget?: boolean;
 }
 
 /** Anthropic prompt-cache multipliers relative to the base input rate. */
@@ -73,7 +81,13 @@ export async function runAnalysis(
   profile: CareerProfile,
   opts: AnalyzeOptions,
 ): Promise<AnalyzeSummary> {
-  const candidates = repo.needingAnalysis(opts.minFit, opts.limit);
+  const candidates = repo.needingAnalysis(opts.minFit, opts.limit, {
+    perCompanyCap: profile.analysis_diversity.per_company_cap,
+    backfillCap: profile.analysis_diversity.per_company_backfill_cap,
+    coldAfter: profile.analysis_diversity.cold_after,
+    unexploredBonus: profile.analysis_diversity.unexplored_bonus,
+    coldPenalty: profile.analysis_diversity.cold_penalty,
+  });
   const summary: AnalyzeSummary = {
     considered: candidates.length,
     analyzed: 0,
@@ -144,6 +158,23 @@ export async function runAnalysis(
   log.info(`Analyzing ${needsCall.length} job(s) with ${opts.model} (effort: ${opts.effort})`);
 
   for (const [i, job] of needsCall.entries()) {
+    // Checked before each call, so a pass stops as soon as the budget is used
+    // up rather than reporting an overrun once the money is gone. It can still
+    // overshoot by one job's cost - see shouldStopForBudget.
+    //
+    // This exists because there was no ceiling at all. `--limit` bounded the
+    // job count but nothing bounded the bill, so three routine passes in one
+    // afternoon came to $4.30 and a fortnight came to $19.54 with the only
+    // feedback arriving on a credit-card statement.
+    if (shouldStopForBudget(summary.estimatedCostUsd, opts.maxSpendUsd)) {
+      summary.stoppedOnBudget = true;
+      log.warn(
+        `Stopping at ${summary.analyzed} of ${needsCall.length}: spend ceiling of ` +
+          `$${(opts.maxSpendUsd ?? 0).toFixed(2)} reached ($${summary.estimatedCostUsd.toFixed(4)}). ` +
+          `Raise it with --max-spend, or run again to continue where this left off.`,
+      );
+      break;
+    }
     try {
       const result = await analyzeOne(client, systemPrompt, job, opts);
       repo.saveAnalysis(job.id, result.analysis, opts.model);
@@ -158,6 +189,15 @@ export async function runAnalysis(
       summary.cacheCreationTokens += result.cacheCreationTokens;
       summary.cacheReadTokens += result.cacheReadTokens;
       summary.outputTokens += result.outputTokens;
+      summary.estimatedCostUsd = estimateCostUsd(
+        {
+          input: summary.inputTokens,
+          cacheWrite: summary.cacheCreationTokens,
+          cacheRead: summary.cacheReadTokens,
+          output: summary.outputTokens,
+        },
+        opts.model,
+      );
 
       log.info(
         `  [${i + 1}/${needsCall.length}] ${job.company} - ${job.title} -> ` +
@@ -199,6 +239,46 @@ interface OneResult {
   outputTokens: number;
 }
 
+/**
+ * Should this pass stop before paying for the next job?
+ *
+ * Extracted for the same reason `statusAfterAutofill` is: the decision that
+ * governs whether money leaves the account should live somewhere a test can
+ * reach, not inside a loop body that nothing exercises.
+ *
+ * Checked before each call rather than at the end of the pass, so the run stops
+ * as soon as the budget is used up instead of reporting an overrun once the
+ * money is gone.
+ *
+ * This is a stop-when-reached ceiling, not a predictive one: the call that
+ * carries spend past the ceiling has already been paid for when this returns
+ * true, so a pass can overshoot by one job's cost. Bounding it tighter would
+ * mean estimating the next job's price before making the call, and an estimate
+ * that runs high would refuse jobs the budget could afford. Overshooting by one
+ * job is the smaller error.
+ *
+ * `>=` not `>`: at exactly the ceiling the budget is used up. Spending one more
+ * job's worth and calling it "not yet over" is how a ceiling becomes a
+ * suggestion.
+ */
+export function shouldStopForBudget(spentUsd: number, ceilingUsd: number | undefined): boolean {
+  if (ceilingUsd == null) return false;
+  return spentUsd >= ceilingUsd;
+}
+
+/**
+ * Whether a model accepts `output_config.effort`.
+ *
+ * Allow-listing the families known to reject it rather than the ones known to
+ * accept it: an unknown model is far more likely to be a newer one that takes
+ * the parameter than an older one that does not, and the failure mode of
+ * guessing wrong in that direction is one 400 rather than silently dropping
+ * the setting on every call.
+ */
+export function supportsEffort(model: string): boolean {
+  return !/^claude-haiku/.test(model);
+}
+
 async function analyzeOne(
   client: Anthropic,
   systemPrompt: string,
@@ -228,7 +308,12 @@ async function analyzeOne(
       },
     ],
     output_config: {
-      effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
+      // Not every model accepts `effort`. Haiku 4.5 rejects it with a 400
+      // ("This model does not support the effort parameter"), so passing it
+      // unconditionally made `analyze --model claude-haiku-4-5` fail on every
+      // single job rather than fall back - found while benchmarking cheaper
+      // models against Opus verdicts.
+      ...(supportsEffort(opts.model) ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
       format: {
         type: "json_schema",
         schema: ANALYSIS_JSON_SCHEMA as unknown as Record<string, unknown>,
