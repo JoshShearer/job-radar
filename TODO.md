@@ -114,8 +114,9 @@ answering the question. Below ~15 applications it says so itself.
 - **Cross-run dedupe uses the exact key only.** Within a batch there are three
   passes; across runs, a syndicated duplicate that arrives on a later day with a
   different title will not merge into the earlier record.
-- **The scoring `analysis_threshold` gate is a blunt cost control.** A job just
-  below it never gets an LLM read even if it's unusual.
+- ~~**The scoring `analysis_threshold` gate is a blunt cost control.**~~ Fixed in
+  JOB-32: the gate is retired and `analyze` selects the top K by rank. Spend is
+  bounded by `--limit` and `max_spend_per_run_usd`.
 - **No retry queue for failed analyses.** A failure is logged and skipped; the
   next run retries it because nothing was cached.
 - **Lever `salaryRange` is mapped but was null on every board tested**, so that

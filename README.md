@@ -342,7 +342,7 @@ Bands, compared against annualized figures (hourly × 2080):
 
 The only stage that costs money, so it's built around not spending it twice:
 
-- **Deterministic prefilters run first.** Only jobs that passed hard filters and clear `analysis_threshold` are eligible.
+- **Deterministic prefilters run first.** Only jobs that passed the hard filters are eligible, and `analyze` then takes the top K by rank. Selection is by rank rather than by an absolute score because the keyword engine ranks far better than it scores: its mean absolute error against the analyst is 26.6 points, and its hit rate is not monotonic between raw 40 and 75. Spend is bounded by `--limit` and `max_spend_per_run_usd`, which bound it directly.
 - **Content-addressed caching.** Analyses are keyed on a hash of description + title + company + model + profile. An unchanged job is never re-analyzed. Change the profile and the key changes, so re-analysis happens exactly when it should.
 - **Prompt caching.** The candidate profile is a stable system prefix marked `cache_control: ephemeral`, so the large invariant half of each request bills at cache-read rates after the first call.
 - **Truncated descriptions** to a fixed character budget.

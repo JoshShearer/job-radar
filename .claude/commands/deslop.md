@@ -3100,7 +3100,7 @@ disable the source, not to keep the data.
 `analyze` is the only stage that spends money. Four mechanisms keep it cheap, and all four
 must survive every change:
 
-1. **Deterministic prefilters** gate eligibility (`analysis_threshold` in `config/career-profile.yaml`)
+1. **Deterministic prefilters** gate eligibility (`filter_passed`), with selection by rank (`analysis_threshold` was retired in JOB-32)
 2. **Content-addressed cache** keyed on description + title + company + model + profile
 3. **Prompt caching** on the stable system prefix (`cache_control: ephemeral`)
 4. **Truncated description budget**

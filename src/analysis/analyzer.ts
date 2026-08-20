@@ -30,7 +30,14 @@ export const DEFAULT_EFFORT = "medium";
 
 export interface AnalyzeOptions {
   limit: number;
-  minFit: number;
+  /**
+   * Optional absolute floor on the deterministic score.
+   *
+   * Undefined means no floor, which is the default: selection is by RANK.
+   * See `JobRepo.needingAnalysis` for why an absolute gate was the wrong
+   * shape. Set only by an explicit `--min-fit` on one pass.
+   */
+  minFit?: number | null;
   model: string;
   effort: string;
   dryRun: boolean;
@@ -81,13 +88,13 @@ export async function runAnalysis(
   profile: CareerProfile,
   opts: AnalyzeOptions,
 ): Promise<AnalyzeSummary> {
-  const candidates = repo.needingAnalysis(opts.minFit, opts.limit, {
+  const candidates = repo.needingAnalysis(opts.limit, {
     perCompanyCap: profile.analysis_diversity.per_company_cap,
     backfillCap: profile.analysis_diversity.per_company_backfill_cap,
     coldAfter: profile.analysis_diversity.cold_after,
     unexploredBonus: profile.analysis_diversity.unexplored_bonus,
     coldPenalty: profile.analysis_diversity.cold_penalty,
-  });
+  }, opts.minFit);
   const summary: AnalyzeSummary = {
     considered: candidates.length,
     analyzed: 0,
@@ -101,16 +108,25 @@ export async function runAnalysis(
   };
 
   if (candidates.length === 0) {
-    // Say what the gate is holding back, not just that it held. Reporting only
-    // "nothing to analyze" made an over-set threshold look like an exhausted
-    // index, and that misreading cost a real afternoon.
+    // With no floor there is only one honest reason to be here, and it is a
+    // real one about the jobs rather than about a setting.
+    if (opts.minFit == null) {
+      log.info("Nothing to analyze: every job that passed filters has already been analyzed.");
+      return summary;
+    }
+    // A floor was set explicitly for this pass, so say what it is holding back
+    // rather than just that it held. Reporting only "nothing to analyze" made
+    // an over-set threshold look like an exhausted index, and that misreading
+    // cost a real afternoon of adding job boards that were never the
+    // constraint.
     const below = repo.belowThreshold(opts.minFit);
     if (below.count > 0) {
       log.info(
-        `Nothing above the fit threshold of ${opts.minFit}, but ${below.count} unanalyzed job(s) sit below it` +
+        `Nothing above the \`--min-fit ${opts.minFit}\` you asked for, but ${below.count} unanalyzed ` +
+          `job(s) sit below it` +
           (below.best !== null ? `, the best scoring ${Math.round(below.best)}` : "") +
-          `. Lower the bar with \`--min-fit\` for this pass, or change \`analysis_threshold\` in ` +
-          `config/career-profile.yaml if the gate is wrong rather than the jobs.`,
+          `. Drop the flag to analyze the highest-ranked jobs regardless of absolute score - ` +
+          `that is the default, because the rank is reliable and the score is not.`,
       );
     } else {
       log.info("Nothing to analyze: every job that passed filters has already been analyzed.");

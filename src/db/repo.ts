@@ -420,8 +420,35 @@ export class JobRepo {
    *
    * Deprioritised is not excluded. A cold company's next posting can still win
    * on ROI; it just stops crowding out companies nobody has looked at yet.
+   *
+   * ---------------------------------------------------------------------------
+   *
+   * SELECTION IS BY RANK, NOT BY AN ABSOLUTE SCORE
+   *
+   * `minFit` is optional and defaults to no floor. It used to be required, fed
+   * from `scoring.analysis_threshold`, and that was the wrong shape: the
+   * keyword engine's absolute score is not accurate enough to gate on. Its mean
+   * absolute error against the analyst is 26.6 points on a 0-100 scale, and
+   * measured over 406 analyzed jobs the hit rate is not even monotonic in the
+   * 40-75 range - the 40-49 band returns 8.1% while 50-59 returns 6.5% and
+   * 60-74 returns 6.8%.
+   *
+   * The RANK is reliable even though the score is not, so ordering by it and
+   * taking the top K spends the same money on strictly better-chosen jobs.
+   *
+   * A gate set above what the scorer could produce also made `analyze` report
+   * an exhausted index when the index was full - the message was describing the
+   * gate rather than the jobs - and that misreading cost an afternoon of adding
+   * job boards that were never the constraint.
+   *
+   * What bounds spend now is `limit` and the spend ceiling, both of which
+   * bound it directly instead of by proxy. What bounds *eligibility* is
+   * `filter_passed`, which encodes the real constraints (salary floor,
+   * location, seniority). A caller can still pass `minFit` for one pass via
+   * `--min-fit`, which is a deliberate human choice rather than a standing
+   * default nobody re-derives.
    */
-  needingAnalysis(minFit: number, limit: number, diversity: AnalysisDiversity): EnrichedJob[] {
+  needingAnalysis(limit: number, diversity: AnalysisDiversity, minFit?: number | null): EnrichedJob[] {
     const { perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty } = diversity;
 
     // Eligibility is gated on the RAW deterministic score, not the calibrated
@@ -454,7 +481,7 @@ export class JobRepo {
           WHERE j.analysis_json IS NULL
             AND j.filter_passed = 1
             AND j.fit_score IS NOT NULL
-            AND COALESCE(j.raw_fit_score, j.fit_score) >= ?
+            AND (? IS NULL OR COALESCE(j.raw_fit_score, j.fit_score) >= ?)
             AND j.status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')
           ORDER BY (
             j.application_roi
@@ -463,7 +490,7 @@ export class JobRepo {
           ) DESC, j.fit_score DESC
           LIMIT ?`,
       )
-      .all(minFit, unexploredBonus, coldAfter, coldPenalty, limit * 8) as JobRow[];
+      .all(minFit ?? null, minFit ?? null, unexploredBonus, coldAfter, coldPenalty, limit * 8) as JobRow[];
 
     const perCompany = new Map<string, number>();
     const picked: JobRow[] = [];

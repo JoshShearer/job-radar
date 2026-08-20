@@ -161,7 +161,7 @@ program
   .command("analyze")
   .description("Run structured Claude analysis on the highest-value unanalyzed jobs")
   .option("-l, --limit <n>", "max jobs to analyze this pass", "10")
-  .option("-m, --min-fit <n>", "minimum deterministic fit score to be eligible")
+  .option("-m, --min-fit <n>", "only consider jobs at or above this deterministic score (default: no floor, rank order)")
   .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
   .option("--effort <level>", `reasoning effort: low|medium|high|xhigh|max (default ${DEFAULT_EFFORT})`)
   .option("--max-spend <usd>", "stop the pass before estimated spend crosses this (default from config)")
@@ -171,7 +171,9 @@ program
     await withRepo("analyze", async (repo) => {
       const summary = await runAnalysis(repo, profile, {
         limit: Number(opts.limit) || 10,
-        minFit: parseNumericFlag(opts.minFit, "--min-fit") ?? profile.scoring.analysis_threshold,
+        // No config default. Selection is by rank; an absolute floor is an
+        // explicit per-pass choice, not a standing setting nobody re-derives.
+        minFit: parseNumericFlag(opts.minFit, "--min-fit"),
         model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
         effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
         // Parsed strictly, not with `|| default`. A mistyped ceiling must not
@@ -958,7 +960,6 @@ program
       if (opts.analyze) {
         const analysis = await runAnalysis(repo, profile, {
           limit: Number(opts.analyzeLimit) || 8,
-          minFit: profile.scoring.analysis_threshold,
           model: process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
           effort: process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
           dryRun: false,
