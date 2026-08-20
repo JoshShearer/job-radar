@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   ApplicationPackSchema,
-  applicationJsonSchema,
-  APPLICATION_JSON_SCHEMA,
+  applicationJsonSchema as rawApplicationJsonSchema,
   LATER_STAGE_SECTIONS,
 } from "../src/analysis/application.js";
+
+/** Lanes now come from config; these tests only care about shape, not the set. */
+const LANES = ["full_stack", "ai_product", "solutions_eng"];
+const applicationJsonSchema = (full: boolean) => rawApplicationJsonSchema(full, LANES);
 
 /**
  * JOB-23. The application pack is the largest output in the tool - roughly
@@ -62,7 +65,9 @@ describe("the core pack schema", () => {
     // Trading scope for cost must not trade away rigour.
     const schema = applicationJsonSchema(false) as { additionalProperties: boolean };
     expect(schema.additionalProperties).toBe(false);
-    expect(applicationJsonSchema(true)).toEqual(APPLICATION_JSON_SCHEMA);
+    // The full schema drops nothing; every property survives.
+    const full = applicationJsonSchema(true) as { properties: Record<string, unknown>; required: string[] };
+    for (const section of LATER_STAGE_SECTIONS) expect(full.properties).toHaveProperty(section);
   });
 
   it("actually asks for less", () => {
@@ -100,5 +105,43 @@ describe("loading a pack", () => {
     // The determinism rule does not relax because the pack got smaller.
     expect(ApplicationPackSchema.safeParse({ ...core, formAnswers: "not an array" }).success).toBe(false);
     expect(ApplicationPackSchema.safeParse({ ...core, coverNote: 42 }).success).toBe(false);
+  });
+});
+
+/**
+ * JOB-29. The lane list must live in one place.
+ *
+ * `resumeVariant`'s enum was hardcoded as
+ * ["full_stack", "growth_seo", "ai_product", "proptech_3d"], which had drifted
+ * twice: it never learned about `solutions_eng`, and `proptech_3d` is not a
+ * lane key at all - config calls that lane `spatial_iot`. The model was being
+ * offered an option that could never be right and denied one that often was.
+ */
+describe("resumeVariant lanes come from config", () => {
+  it("offers exactly the lanes it was given", () => {
+    const schema = rawApplicationJsonSchema(true, ["full_stack", "solutions_eng"]) as {
+      properties: { resumeVariant: { enum: string[] } };
+    };
+    expect(schema.properties.resumeVariant.enum).toEqual(["full_stack", "solutions_eng"]);
+  });
+
+  it("picks up a newly added lane with no code change", () => {
+    const schema = rawApplicationJsonSchema(true, ["full_stack", "brand_new_lane"]) as {
+      properties: { resumeVariant: { enum: string[] } };
+    };
+    expect(schema.properties.resumeVariant.enum).toContain("brand_new_lane");
+  });
+
+  it("no longer offers proptech_3d, which was never a real lane key", () => {
+    const schema = rawApplicationJsonSchema(true, ["spatial_iot"]) as {
+      properties: { resumeVariant: { enum: string[] } };
+    };
+    expect(schema.properties.resumeVariant.enum).not.toContain("proptech_3d");
+  });
+
+  it("still reads a saved pack whose variant is a retired lane", () => {
+    // pack.json files on disk carry whatever the enum allowed when they were
+    // written, including `proptech_3d`. Re-validating on read must not throw.
+    expect(ApplicationPackSchema.shape.resumeVariant.safeParse("proptech_3d").success).toBe(true);
   });
 });

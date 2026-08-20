@@ -84,9 +84,12 @@ export const AnalysisSchema = z.object({
     .describe(
       "0-100 estimate of whether this deserves the candidate's time, accounting for likely applicant volume, differentiation, and compensation probability.",
     ),
-  lane: z
-    .enum(["full_stack", "growth_seo", "ai_product", "spatial_iot", "other"])
-    .describe("Which target role family this belongs to."),
+  // Deliberately `string` rather than an enum here. The set of valid lanes
+  // lives in config/career-profile.yaml, so it is not knowable at compile
+  // time; `analysisSchemaFor` narrows it at validation time. Stored analyses
+  // are read back with a plain JSON.parse, so a lane retired from config
+  // still deserialises rather than throwing on historical rows.
+  lane: z.string().describe("Which target role family this belongs to."),
   recommendation: z
     .enum(["apply_and_outreach", "apply", "network_or_watch", "skip"])
     .describe("The action the candidate should take."),
@@ -133,6 +136,25 @@ export const AnalysisSchema = z.object({
 });
 
 export type Analysis = z.infer<typeof AnalysisSchema>;
+
+/**
+ * The analysis schema with `lane` narrowed to the lanes this profile defines.
+ *
+ * Used to validate a fresh model response. The hardcoded five-lane enum this
+ * replaces is why 90 of 98 solutions-engineering roles came back labelled
+ * "other": `solutions_eng` was added to config and the analyst had no legal
+ * way to say it. It failed silently - the model picked the closest legal
+ * value, validation passed, and the lane column was wrong.
+ *
+ * `other` is appended and reserved as the escape hatch for a role that fits no
+ * configured lane. `validateProfileCoherence` refuses a config lane named
+ * `other` so the two meanings cannot collide.
+ */
+export function analysisSchemaFor(laneKeys: readonly string[]) {
+  return AnalysisSchema.extend({
+    lane: z.enum(["other", ...laneKeys] as unknown as [string, ...string[]]),
+  });
+}
 
 /** A job joined with its scoring and (optional) LLM analysis. */
 export interface EnrichedJob extends NormalizedJob {

@@ -96,7 +96,7 @@ Return only the structured object.`;
     system: [{ type: "text", text: buildSystemPrompt(profile), cache_control: { type: "ephemeral" } }],
     output_config: {
       effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
-      format: { type: "json_schema", schema: applicationJsonSchema(opts.full === true) },
+      format: { type: "json_schema", schema: applicationJsonSchema(opts.full === true, Object.keys(profile.lanes)) },
     },
     messages: [{ role: "user", content: userPrompt }],
   });
