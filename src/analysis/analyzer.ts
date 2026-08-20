@@ -266,6 +266,19 @@ export function shouldStopForBudget(spentUsd: number, ceilingUsd: number | undef
   return spentUsd >= ceilingUsd;
 }
 
+/**
+ * Whether a model accepts `output_config.effort`.
+ *
+ * Allow-listing the families known to reject it rather than the ones known to
+ * accept it: an unknown model is far more likely to be a newer one that takes
+ * the parameter than an older one that does not, and the failure mode of
+ * guessing wrong in that direction is one 400 rather than silently dropping
+ * the setting on every call.
+ */
+export function supportsEffort(model: string): boolean {
+  return !/^claude-haiku/.test(model);
+}
+
 async function analyzeOne(
   client: Anthropic,
   systemPrompt: string,
@@ -295,7 +308,12 @@ async function analyzeOne(
       },
     ],
     output_config: {
-      effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
+      // Not every model accepts `effort`. Haiku 4.5 rejects it with a 400
+      // ("This model does not support the effort parameter"), so passing it
+      // unconditionally made `analyze --model claude-haiku-4-5` fail on every
+      // single job rather than fall back - found while benchmarking cheaper
+      // models against Opus verdicts.
+      ...(supportsEffort(opts.model) ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
       format: {
         type: "json_schema",
         schema: ANALYSIS_JSON_SCHEMA as unknown as Record<string, unknown>,
