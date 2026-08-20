@@ -106,3 +106,64 @@ export function closedPostingMarker(finalUrl: string, bodyText: string): string 
   }
   return null;
 }
+
+/**
+ * How old is the posting itself, in days? `null` when the board did not say.
+ *
+ * Distinct from `isStale` above, and the difference matters. `isStale` asks
+ * "is this still listed on its board?" from `last_seen`. This asks "how long
+ * has this been open?" from `date_posted`. A posting can be freshly swept and
+ * a year old, which is the common case for the roles that were being
+ * recommended.
+ */
+export function postingAgeDays(datePosted: string | null, now: number = Date.now()): number | null {
+  if (!datePosted) return null;
+  const t = Date.parse(datePosted);
+  if (Number.isNaN(t)) return null;
+  return (now - t) / 86_400_000;
+}
+
+/**
+ * Has this posting been open so long that it is furniture rather than an
+ * opening?
+ *
+ * The threshold is deliberately far out. Measured on the live index, the
+ * apply-recommendation pool is destroyed by a tight cutoff and barely touched
+ * by a loose one:
+ *
+ *     cutoff    apply-recommendations lost (of 8)
+ *      30d       4        <- half the pool, including the best fit in the index
+ *      90d       2
+ *     180d       1        <- Hightouch Deployment Architect, 219 days old
+ *
+ * So this is not a freshness filter. Ranking already handles freshness within
+ * the normal range. This catches only the extreme, where a posting has been up
+ * for six months and is almost certainly an always-on requisition.
+ *
+ * UNKNOWN AGE IS NEVER EVERGREEN. A board that does not publish a date tells
+ * us nothing about the posting, and treating missing data as disqualifying
+ * data is the same defect as rejecting a location field that only says
+ * "Hybrid". Absence of evidence is not evidence.
+ */
+export function isEvergreen(
+  datePosted: string | null,
+  evergreenDays: number,
+  now: number = Date.now(),
+): boolean {
+  const age = postingAgeDays(datePosted, now);
+  if (age === null) return false;
+  return age > evergreenDays;
+}
+
+/**
+ * Compact age for a listing column: `3d`, `77d`, `1y+`.
+ *
+ * `?` for unknown, so a reader can tell "the board did not say" from "posted
+ * today" - which a bare `0d` would hide.
+ */
+export function formatAge(days: number | null): string {
+  if (days === null) return "?";
+  const d = Math.round(days);
+  if (d >= 365) return "1y+";
+  return `${d}d`;
+}

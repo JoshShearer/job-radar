@@ -20,6 +20,14 @@ export interface AnalysisDiversity {
   coldAfter: number;
   unexploredBonus: number;
   coldPenalty: number;
+  /** Postings newer than this many days get `freshBonus` in the ranking. */
+  freshDays: number;
+  freshBonus: number;
+  /**
+   * Age past which a posting is not worth paying to analyze, because it will
+   * not be recommended either. Null keeps everything.
+   */
+  evergreenDays: number | null;
 }
 
 export interface UpsertOutcome {
@@ -449,7 +457,8 @@ export class JobRepo {
    * default nobody re-derives.
    */
   needingAnalysis(limit: number, diversity: AnalysisDiversity, minFit?: number | null): EnrichedJob[] {
-    const { perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty } = diversity;
+    const { perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty, freshDays, freshBonus, evergreenDays } =
+      diversity;
 
     // Eligibility is gated on the RAW deterministic score, not the calibrated
     // one. Calibration deliberately scales scores down, so gating on the
@@ -483,14 +492,38 @@ export class JobRepo {
             AND j.fit_score IS NOT NULL
             AND (? IS NULL OR COALESCE(j.raw_fit_score, j.fit_score) >= ?)
             AND j.status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')
+            -- Do not pay to analyze what will not be recommended. An evergreen
+            -- posting is excluded from the top list and the daily report, so
+            -- buying a verdict on it is money for nothing. NULL date is kept:
+            -- unknown age is not old age.
+            AND (? IS NULL OR j.date_posted IS NULL
+                 OR julianday('now') - julianday(j.date_posted) <= ?)
           ORDER BY (
             j.application_roi
             + CASE WHEN cs.analyzed IS NULL THEN ? ELSE 0 END
             - CASE WHEN cs.analyzed >= ? AND COALESCE(cs.hits, 0) = 0 THEN ? ELSE 0 END
+            -- Freshness-first spend. A nudge inside the ranking, not a sort
+            -- key: a clearly better older posting still wins. What this stops
+            -- is spending the day's budget on four-month-old listings while
+            -- this week's sit unread. Median posting age at apply was 55 days.
+            + CASE WHEN j.date_posted IS NOT NULL
+                    AND julianday('now') - julianday(j.date_posted) <= ?
+                   THEN ? ELSE 0 END
           ) DESC, j.fit_score DESC
           LIMIT ?`,
       )
-      .all(minFit ?? null, minFit ?? null, unexploredBonus, coldAfter, coldPenalty, limit * 8) as JobRow[];
+      .all(
+        minFit ?? null,
+        minFit ?? null,
+        evergreenDays,
+        evergreenDays,
+        unexploredBonus,
+        coldAfter,
+        coldPenalty,
+        freshDays,
+        freshBonus,
+        limit * 8,
+      ) as JobRow[];
 
     const perCompany = new Map<string, number>();
     const picked: JobRow[] = [];
@@ -535,11 +568,32 @@ export class JobRepo {
   }
 
   /** Top actionable jobs for the daily report. */
-  top(opts: { minFit: number; limit: number; since?: string; includeReviewed?: boolean }): EnrichedJob[] {
+  /**
+   * The recommendation list.
+   *
+   * `evergreenDays` drops postings older than that many days. Null or
+   * undefined keeps everything, which is what `--include-evergreen` passes.
+   *
+   * `date_posted IS NULL` is deliberately kept, not dropped. A board that
+   * publishes no date tells us nothing about the posting, and treating missing
+   * data as disqualifying data is the same defect as rejecting a location
+   * field that only reads "Hybrid".
+   */
+  top(opts: {
+    minFit: number;
+    limit: number;
+    since?: string;
+    includeReviewed?: boolean;
+    evergreenDays?: number | null;
+  }): EnrichedJob[] {
     const statusClause = opts.includeReviewed
       ? "status NOT IN ('SKIPPED','REJECTED','WITHDRAWN','GHOSTED')"
       : "status = 'NEW'";
     const sinceClause = opts.since ? "AND last_seen >= @since" : "";
+    const evergreenClause =
+      opts.evergreenDays == null
+        ? ""
+        : "AND (date_posted IS NULL OR julianday('now') - julianday(date_posted) <= @evergreenDays)";
     const rows = this.db
       .prepare(
         `SELECT * FROM jobs
@@ -547,10 +601,16 @@ export class JobRepo {
            AND fit_score >= @minFit
            AND ${statusClause}
            ${sinceClause}
+           ${evergreenClause}
          ORDER BY application_roi DESC, fit_score DESC
          LIMIT @limit`,
       )
-      .all({ minFit: opts.minFit, limit: opts.limit, since: opts.since ?? null }) as JobRow[];
+      .all({
+        minFit: opts.minFit,
+        limit: opts.limit,
+        since: opts.since ?? null,
+        evergreenDays: opts.evergreenDays ?? null,
+      }) as JobRow[];
     return rows.map(toEnriched);
   }
 

@@ -12,6 +12,7 @@ import {
 } from "../model/status.js";
 import { formatSalary } from "../lib/salary.js";
 import { paths } from "../config/load.js";
+import { formatAge, postingAgeDays } from "../model/freshness.js";
 
 export interface ReportInput {
   repo: JobRepo;
@@ -140,6 +141,11 @@ export function buildDailyReport(input: ReportInput): { markdown: string; jobCou
     minFit: profile.scoring.report_threshold,
     limit: profile.report.max_total * 4,
     includeReviewed: false,
+    // A posting open for six months is furniture, not an opening. The briefing
+    // is the one surface that should never show one: it is read as "here is
+    // today's work", and median posting age at apply was 55 days largely
+    // because this list did not distinguish.
+    evergreenDays: profile.scoring.evergreen_days,
   });
 
   const byPriority: Record<Priority, EnrichedJob[]> = { A: [], B: [], C: [], D: [] };
@@ -275,7 +281,15 @@ function renderJob(job: EnrichedJob, index: number): string[] {
   L.push(`| **Compensation** | ${job.compensationBand ?? "UNKNOWN"} - posted ${salary} |`);
   L.push(`| **Lane** | ${job.lane ?? "-"} |`);
   L.push(`| **Location** | ${job.location} (${job.remoteStatus}) |`);
-  L.push(`| **Posted** | ${job.datePosted ? job.datePosted.slice(0, 10) : "not stated"} |`);
+  // Age, not just the date. "2026-06-04" needs mental arithmetic; "77d old"
+  // is the number that should influence whether this is worth applying to
+  // today, and it was absent from every briefing that recommended a posting
+  // already four months old.
+  const ageDays = postingAgeDays(job.datePosted);
+  L.push(
+    `| **Posted** | ${job.datePosted ? job.datePosted.slice(0, 10) : "not stated"}` +
+      `${ageDays === null ? "" : ` (${formatAge(ageDays)} old)`} |`,
+  );
   if (a) L.push(`| **Interview probability** | ${a.interviewProbability}% (competition: ${a.competitionEstimate}) |`);
   L.push(`| **Apply** | ${job.applicationUrl ?? job.sourceUrl} |`);
   L.push("");
