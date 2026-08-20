@@ -56,16 +56,19 @@ location:
 lanes:
   full_stack:
     label: Senior Full-Stack / Platform
-    weight: 0.35
-  growth_seo:
-    label: Growth Engineering / Technical SEO
     weight: 0.30
   ai_product:
     label: AI-enabled Product Engineering
-    weight: 0.25
+    weight: 0.24
+  solutions_eng:
+    label: Solutions Engineering / Customer-Facing Technical
+    weight: 0.20
+  growth_seo:
+    label: Growth Engineering / Technical SEO
+    weight: 0.18
   spatial_iot:
     label: Proptech / 3D / IoT
-    weight: 0.10
+    weight: 0.08
 
 seniority:
   # Titles at or above these are acceptable.
@@ -127,10 +130,33 @@ target_titles:
     - ai product engineer
     - applied ai engineer
     - llm engineer
-    - forward deployed engineer
     - agent engineer
     - ai platform engineer
     - ai infrastructure engineer
+  # `forward deployed engineer` deliberately does NOT appear here. It used to,
+  # and it bought 14 analyses for zero `apply` recommendations - the worst
+  # title band in the whole record, against a 7.8% baseline. The name sounds
+  # like the Solutions Engineer band but the postings are not: they read as
+  # applied-ML infrastructure roles (inference serving, fine-tuning, GPU
+  # scheduling) with a customer-facing veneer, and that is precisely the
+  # evidence this candidate does not have. It can still surface on real
+  # description signal; it no longer gets promoted for free on its title.
+  solutions_eng:
+    - solutions engineer
+    - senior solutions engineer
+    - staff solutions engineer
+    - principal solutions engineer
+    - solutions architect
+    - senior solutions architect
+    - technical solutions engineer
+    - enterprise solutions engineer
+    - solutions consultant
+    - customer engineer
+    - senior customer engineer
+    - partner solutions engineer
+    - technical account manager
+    - implementation engineer
+    - professional services engineer
   spatial_iot:
     - 3d engineer
     - webgl engineer
@@ -231,6 +257,31 @@ signals:
   - { term: workflow automation, weight: 6, lane: ai_product }
   - { term: human-in-the-loop, weight: 6, lane: ai_product }
 
+  - { term: solutions engineer, weight: 12, lane: solutions_eng }
+  - { term: solutions architect, weight: 11, lane: solutions_eng }
+  - { term: sales engineer, weight: 9, lane: solutions_eng }
+  - { term: pre-sales, weight: 10, lane: solutions_eng }
+  - { term: presales, weight: 10, lane: solutions_eng }
+  - { term: post-sales, weight: 7, lane: solutions_eng }
+  - { term: technical discovery, weight: 8, lane: solutions_eng }
+  - { term: proof of concept, weight: 9, lane: solutions_eng }
+  - { term: proof-of-concept, weight: 9, lane: solutions_eng }
+  - { term: customer-facing, weight: 8, lane: solutions_eng }
+  - { term: customer facing, weight: 8, lane: solutions_eng }
+  - { term: technical account, weight: 8, lane: solutions_eng }
+  - { term: account management, weight: 7, lane: solutions_eng }
+  - { term: solution architecture, weight: 8, lane: solutions_eng }
+  - { term: professional services, weight: 6, lane: solutions_eng }
+  - { term: field engineering, weight: 6, lane: solutions_eng }
+  - { term: enterprise customers, weight: 5, lane: solutions_eng }
+  - { term: technical evaluation, weight: 6, lane: solutions_eng }
+  - { term: rfp, weight: 5, lane: solutions_eng }
+  - { term: onboarding customers, weight: 6, lane: solutions_eng }
+  - { term: customer onboarding, weight: 6, lane: solutions_eng }
+  - { term: integration support, weight: 5, lane: solutions_eng }
+  - { term: technical champion, weight: 6, lane: solutions_eng }
+  - { term: quota, weight: 4, lane: solutions_eng }
+
   - { term: three.js, weight: 13, lane: spatial_iot }
   - { term: threejs, weight: 13, lane: spatial_iot }
   - { term: webgl, weight: 12, lane: spatial_iot }
@@ -254,6 +305,31 @@ signals:
 # Combination bonuses. All `all` terms must be present. This is where the
 # unusual-differentiation edge lives - it is the whole point of the system.
 combos:
+  - name: Solutions engineering + production engineering
+    all: [solutions engineer, typescript]
+    bonus: 20
+    lane: solutions_eng
+    why: Six years as Sales Engineer / Account Manager at Valin plus production
+      TypeScript ownership. Pre-sales orgs usually get one or the other.
+  - name: Solutions engineering + developer/API platform
+    all: [solutions engineer, api]
+    bonus: 14
+    lane: solutions_eng
+    why: A technical seller whose demo is code, not slides. The product being an
+      API is what makes the engineering half of the record load-bearing.
+  - name: Pre-sales + AI product
+    all: [pre-sales, llm]
+    bonus: 16
+    lane: solutions_eng
+    why: Quota-carrying technical sales history against a product category he has
+      actually built with.
+  - name: Customer-facing technical + industrial/data-center domain
+    all: [solutions, data center]
+    bonus: 16
+    lane: solutions_eng
+    why: Valin's account base included data-center clients and ARES was controls
+      and instrumentation. Server hardware and network operations are not
+      abstractions here, which is unusual for an application engineer.
   - name: Payload CMS + Next.js
     all: [payload, next]
     bonus: 22
