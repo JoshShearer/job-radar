@@ -638,6 +638,64 @@ scoring:
   # on a credit-card statement. Override per run with `--max-spend`.
   max_spend_per_run_usd: 1.50
 
+# Two-tier analysis.
+#
+# 77% of paid analyses end in "skip" (314 of 406), and the output schema forced
+# a full ~3KB dossier for every one - up to 8 strengths, 8 risks, 8 missing
+# requirements, salary reasoning, outreach targets. Output tokens are ~70% of
+# the bill and analyze is 84% of logged spend.
+#
+# Measured over the 406 stored analyses, the six triage fields are 25.9% of the
+# output bytes. So roughly three quarters of what is being paid for on a skip
+# is prose nobody reads.
+#
+# The second call is cheap on input because the system prefix is prompt-cached,
+# so splitting costs very little for the jobs that do earn a dossier.
+analysis_detail:
+  # OFF, and this is now a measured result rather than a precaution.
+  #
+  # `benchmark-triage --limit 25` on 2026-08-20, Opus, balanced sample of 12
+  # apply and 13 non-apply baselines:
+  #
+  #     apply-vs-not agreement   17/21 = 81.0%   (bar: 92%)
+  #     mean absolute fit delta  6.2 points, almost all upward
+  #     missed applies           0
+  #     invented applies         4
+  #
+  # FAILS the gate, and the shape of the failure is the interesting part. The
+  # triage form lost nothing - every apply baseline survived - but it PROMOTED
+  # four network_or_watch roles to apply:
+  #
+  #     Sanity    Solutions Engineer, PreSales   network_or_watch -> apply_and_outreach
+  #     Samsara   Staff Software Engineer        network_or_watch -> apply
+  #     Hightouch Full Stack Product Engineer    network_or_watch -> apply
+  #     Deepgram  Pre-Sales Solutions Engineer   network_or_watch -> apply
+  #
+  # That is the hypothesis in JOB-31's critique note, confirmed: the dossier's
+  # forced risks and missingRequirements fields are doing real reasoning work.
+  # A model made to write down why not applying is reasonable reaches a more
+  # conservative verdict than one that is not asked. Remove the scaffolding and
+  # it turns borderline roles into recommendations.
+  #
+  # With no outcome data yet (JOB-26) that regression would have been invisible
+  # for months, which is exactly why the gate exists.
+  #
+  # WORTH TRYING NEXT, and untested because the API budget ran out mid-run:
+  # add `missingRequirements` alone back into TRIAGE_FIELDS. It is the cheapest
+  # of the three list fields and the most likely to be carrying the caution.
+  # Re-run `benchmark-triage` before flipping this.
+  #
+  # A first run scored 96% and was wrong: the sampler returned apply baselines
+  # only, so "invented applies: 0" meant nothing had been tested rather than
+  # nothing had gone wrong. The sampler is balanced now.
+  two_stage: false
+  # Verdicts that always earn the dossier. Anything a human might act on.
+  dossier_for: [apply_and_outreach, apply, network_or_watch]
+  # ...and a safety valve. A `skip` at fit 70+ is more likely a model that has
+  # misjudged something than a hopeless role, and the dossier is what a person
+  # would need to tell which. Costs a handful of extra calls.
+  dossier_min_fit: 70
+
 # When a sweep may conclude a posting has left its board and park it.
 #
 # 339 filter-passing jobs were sitting at NEW although their board had stopped

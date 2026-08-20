@@ -1,15 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CareerProfile } from "../config/schema.js";
 import type { Analysis, EnrichedJob } from "../model/job.js";
-import { analysisSchemaFor } from "../model/job.js";
+import { analysisSchemaFor, triageSchemaFor, triageOnlyAnalysis, type TriageVerdict } from "../model/job.js";
 import type { JobRepo } from "../db/repo.js";
-import { buildAnalysisJsonSchema } from "./schema.js";
+import { buildAnalysisJsonSchema, buildTriageJsonSchema } from "./schema.js";
 import { buildSystemPrompt, buildUserPrompt } from "./prompt.js";
 import { sha256 } from "../lib/hash.js";
 import { log } from "../lib/log.js";
 
 import { estimateCostUsd, PRICING } from "../lib/cost.js";
 import { classifyAnalysisFailure, countsAgainstJob } from "./failures.js";
+import { deservesDossier } from "./detail.js";
 
 export const DEFAULT_MODEL = "claude-opus-5";
 
@@ -41,6 +42,8 @@ export interface AnalyzeOptions {
   minFit?: number | null;
   /** Override the configured attempt budget for this pass. */
   maxAttempts?: number | null;
+  /** Override `analysis_detail.two_stage` for this pass. */
+  twoStage?: boolean;
   /**
    * Consider postings past `evergreen_days` as well.
    *
@@ -78,6 +81,10 @@ export interface AnalyzeSummary {
   failureKinds: Record<string, number>;
   /** Jobs that reached the attempt limit in this pass and will not be re-offered. */
   parkedAfterFailure: number;
+  /** Two-tier only: jobs that earned the full dossier. */
+  dossiers: number;
+  /** Two-tier only: jobs that got the cheap verdict and nothing more. */
+  triageOnly: number;
 }
 
 /** Anthropic prompt-cache multipliers relative to the base input rate. */
@@ -128,6 +135,8 @@ export async function runAnalysis(
     estimatedCostUsd: 0,
     failureKinds: {},
     parkedAfterFailure: 0,
+    dossiers: 0,
+    triageOnly: 0,
   };
 
   if (candidates.length === 0) {
@@ -162,6 +171,11 @@ export async function runAnalysis(
   // therefore inside the cache key: adding a lane invalidates cached analyses
   // that could not have known about it, which is exactly right.
   const laneKeys = Object.keys(profile.lanes);
+  const twoStage = opts.twoStage ?? profile.analysis_detail.two_stage;
+  const dossierPolicy = {
+    recommendations: profile.analysis_detail.dossier_for,
+    minFit: profile.analysis_detail.dossier_min_fit,
+  };
   const profileVersion = sha256(JSON.stringify(profile)).slice(0, 12);
   const systemPrompt = buildSystemPrompt(profile);
 
@@ -220,7 +234,37 @@ export async function runAnalysis(
       break;
     }
     try {
-      const result = await analyzeOne(client, systemPrompt, job, opts, laneKeys);
+      // Two-tier: a cheap verdict for everything, a dossier only for the few
+      // that earn one. 77% of analyses end in `skip`, and the dossier is about
+      // three quarters of the output bytes on each.
+      //
+      // The dossier decision is deterministic (`deservesDossier`) rather than
+      // asked of the model: it decides where money goes, so it has to be
+      // reproducible and auditable.
+      let result: OneResult;
+      if (twoStage) {
+        const triaged = await analyzeOne(client, systemPrompt, job, opts, laneKeys, "triage");
+        result = triaged;
+        const verdict = triaged.triage;
+        if (verdict && deservesDossier(verdict, dossierPolicy)) {
+          // The system prefix is prompt-cached, so this second call bills its
+          // large invariant half at cache-read rates.
+          const full = await analyzeOne(client, systemPrompt, job, opts, laneKeys, "full");
+          result = {
+            analysis: full.analysis,
+            triage: verdict,
+            inputTokens: triaged.inputTokens + full.inputTokens,
+            cacheCreationTokens: triaged.cacheCreationTokens + full.cacheCreationTokens,
+            cacheReadTokens: triaged.cacheReadTokens + full.cacheReadTokens,
+            outputTokens: triaged.outputTokens + full.outputTokens,
+          };
+          summary.dossiers++;
+        } else {
+          summary.triageOnly++;
+        }
+      } else {
+        result = await analyzeOne(client, systemPrompt, job, opts, laneKeys);
+      }
       repo.saveAnalysis(job.id, result.analysis, opts.model);
       const key = repo.cacheKey(job.descriptionHash, job.title, job.company, opts.model, profileVersion);
       repo.putCachedAnalysis(key, job.descriptionHash, opts.model, result.analysis, {
@@ -305,8 +349,10 @@ export async function runAnalysis(
   return summary;
 }
 
-interface OneResult {
+export interface OneResult {
   analysis: Analysis;
+  /** Set only on a triage call, so the caller can apply the dossier policy. */
+  triage: TriageVerdict | null;
   inputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
@@ -362,7 +408,7 @@ export function supportsEffort(model: string): boolean {
   return !/^claude-haiku/.test(model);
 }
 
-async function analyzeOne(
+export async function analyzeOne(
   client: Anthropic,
   systemPrompt: string,
   job: EnrichedJob,
@@ -373,6 +419,12 @@ async function analyzeOne(
    * edit - which is the whole point of JOB-29.
    */
   laneKeys: readonly string[],
+  /**
+   * "triage" asks for a verdict and one sentence; "full" asks for the dossier.
+   * Both are validated strictly - the tier changes what is requested, never
+   * whether the response is checked.
+   */
+  tier: "triage" | "full" = "full",
 ): Promise<OneResult> {
   const deterministicNote = [
     `Fit score: ${job.fitScore ?? "n/a"} / Application ROI: ${job.applicationRoi ?? "n/a"} / Lane: ${job.lane ?? "n/a"}`,
@@ -405,7 +457,9 @@ async function analyzeOne(
       ...(supportsEffort(opts.model) ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
       format: {
         type: "json_schema",
-        schema: buildAnalysisJsonSchema(laneKeys) as unknown as Record<string, unknown>,
+        schema: (tier === "triage"
+          ? buildTriageJsonSchema(laneKeys)
+          : buildAnalysisJsonSchema(laneKeys)) as unknown as Record<string, unknown>,
       },
     },
     messages: [{ role: "user", content: buildUserPrompt(job, deterministicNote) }],
@@ -442,7 +496,8 @@ async function analyzeOne(
 
   // Structured outputs constrain the shape, but we validate anyway: nothing
   // unvalidated is allowed into the database.
-  const parsed = analysisSchemaFor(laneKeys).safeParse(raw);
+  const schema = tier === "triage" ? triageSchemaFor(laneKeys) : analysisSchemaFor(laneKeys);
+  const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     throw new Error(
       `Response failed schema validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
@@ -450,7 +505,11 @@ async function analyzeOne(
   }
 
   return {
-    analysis: parsed.data,
+    analysis:
+      tier === "triage"
+        ? triageOnlyAnalysis(parsed.data as TriageVerdict)
+        : (parsed.data as Analysis),
+    triage: tier === "triage" ? (parsed.data as TriageVerdict) : null,
     inputTokens: response.usage.input_tokens,
     cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
     cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,

@@ -695,6 +695,51 @@ export class JobRepo {
     }>;
   }
 
+  /**
+   * Jobs that already carry a full analysis, for benchmarking a cheaper form
+   * against the verdicts they hold.
+   *
+   * BALANCED between apply and non-apply baselines, and that balance is the
+   * whole design.
+   *
+   * Neither extreme works. A uniform sample is ~77% skips, so an agreement rate
+   * computed from it would look excellent while saying almost nothing about the
+   * decision that matters. But an apply-only sample - which is what the first
+   * version of this returned - can only ever measure MISSED applies. It reports
+   * "invented applies: 0" because there was no skip baseline to invent one
+   * from, which reads as a clean result and is really an untested direction.
+   *
+   * Both failure modes are real and they cost differently: a missed apply hides
+   * a role forever, an invented apply wastes an afternoon. So the sample takes
+   * half from each side.
+   */
+  analyzedSample(limit: number): Array<{ job: EnrichedJob; analysis: Analysis }> {
+    const half = Math.max(1, Math.floor(limit / 2));
+    const pick = (applyish: boolean, n: number): JobRow[] =>
+      this.db
+        .prepare(
+          `SELECT * FROM jobs
+            WHERE analysis_json IS NOT NULL AND filter_passed = 1
+              AND json_extract(analysis_json, '$.recommendation')
+                  ${applyish ? "IN" : "NOT IN"} ('apply','apply_and_outreach')
+            ORDER BY application_roi DESC
+            LIMIT ?`,
+        )
+        .all(n) as JobRow[];
+
+    const applies = pick(true, half);
+    // Top up from the other side if one is short, so a small corpus still
+    // returns `limit` rows rather than silently halving the sample.
+    const others = pick(false, limit - applies.length);
+    const rows = [...applies, ...others];
+    if (rows.length < limit) rows.push(...pick(true, limit - rows.length).slice(applies.length));
+
+    return rows.map((r) => ({
+      job: toEnriched(r),
+      analysis: JSON.parse(r.analysis_json as string) as Analysis,
+    }));
+  }
+
   allSightings(): Array<{ id: string; source: string; lastSeen: string | null }> {
     return this.db
       .prepare("SELECT id, source, last_seen AS lastSeen FROM jobs")
