@@ -38,10 +38,12 @@ If you find yourself reaching for a model to compare two strings or add up weigh
 
 The `analyze` stage is the only thing that costs money. Preserve all four mechanisms:
 
-1. Deterministic prefilters gate eligibility (`analysis_threshold`)
+1. Deterministic prefilters gate eligibility (`filter_passed`), and selection takes the top K by **rank**
 2. Content-addressed cache keyed on description + title + company + model + profile
 3. Prompt caching on the stable system prefix (`cache_control: ephemeral`)
 4. Truncated description budget
+
+`analysis_threshold` used to be mechanism 1 and was retired in JOB-32. It gated on an absolute keyword score whose mean absolute error against the analyst is 26.6 points, and whose hit rate is not monotonic through the middle of its range. Spend is now bounded *directly* by `--limit` and `max_spend_per_run_usd` instead of by proxy, and eligibility by the filters, which encode constraints that are actually real. Do not reintroduce an absolute fit gate as a spend control; if a pass needs a floor, that is `--min-fit` for that pass.
 
 Never re-analyze an unchanged job. If a description changes, `repo.upsert` already invalidates the cached analysis and score — keep that behavior.
 
