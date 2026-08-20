@@ -178,6 +178,77 @@ describe("scoreJob", () => {
     expect(r.score.lane).toBe("growth_seo");
   });
 
+  it("assigns the solutions lane to a pre-sales engineering role", () => {
+    const r = score(
+      make({
+        title: "Senior Solutions Engineer",
+        descriptionHtml: `<p>Own technical discovery and pre-sales for enterprise customers. Build
+          proof-of-concept integrations against our API in TypeScript. Partner with account management
+          through onboarding.</p>`,
+      }),
+    );
+    expect(r.score.lane).toBe("solutions_eng");
+  });
+
+  /*
+   * The regression this pins is invisible rather than loud: before the
+   * solutions_eng lane existed, every Solutions Engineer posting scored in the
+   * low 30s - indistinguishable from a paralegal listing - so 1,268 of them sat
+   * unanalyzed below the gate while the tool reported the index exhausted. A
+   * lane that stops crediting these is a lane that silently stops finding them.
+   */
+  it("scores a solutions engineering role far above a generic one", () => {
+    const solutions = make({
+      title: "Senior Solutions Engineer",
+      descriptionHtml: `<p>Pre-sales technical discovery, proof of concept builds against our API,
+        and customer onboarding. TypeScript and Python. Enterprise customers.</p>`,
+    });
+    const generic = make({
+      title: "Senior Software Engineer",
+      descriptionHtml: "<p>Write software. Collaborate with the team. Java and Spring preferred.</p>",
+    });
+    expect(score(solutions).score.fitScore).toBeGreaterThan(score(generic).score.fitScore + 25);
+  });
+
+  /*
+   * The title list cannot be the only thing crediting this lane. Real postings
+   * name the job a dozen ways - "Principal Presales Engineer", "Partner Success
+   * Engineer", "Strategic Solutions Engineer, East" - and an exact-phrase list
+   * will always trail the market. The description signals are what catch the
+   * ones the list misses, so they get their own test: this title deliberately
+   * matches no `target_titles` entry in any lane.
+   */
+  it("credits a pre-sales role whose title matches no target-title entry", () => {
+    const description = `<p>Lead technical discovery with enterprise customers, own the
+      proof of concept, and hand off through customer onboarding. This is a customer-facing
+      role partnered with account management.</p>`;
+    const presales = make({ title: "Principal Presales Engineer", descriptionHtml: description });
+    const control = make({ title: "Principal Presales Engineer", descriptionHtml: "<p>Write software.</p>" });
+
+    const titles = Object.values(profile.target_titles).flat();
+    expect(titles.some((t) => "principal presales engineer".includes(t.toLowerCase()))).toBe(false);
+    expect(score(presales).score.lane).toBe("solutions_eng");
+    expect(score(presales).score.fitScore).toBeGreaterThan(score(control).score.fitScore + 15);
+  });
+
+  /*
+   * `forward deployed engineer` was a target_titles entry, which bought it an
+   * unconditional +18. It went 0-for-14 on `apply` recommendations against a
+   * 7.8% baseline - the worst band measured. It must still be able to score on
+   * real description signal; it must not be promoted on its title alone.
+   */
+  it("does not hand a forward-deployed title a free bonus", () => {
+    const bare = make({
+      title: "Forward Deployed Engineer",
+      descriptionHtml: "<p>Write software. Collaborate with the team. Java and Spring preferred.</p>",
+    });
+    const control = make({
+      title: "Widget Coordinator",
+      descriptionHtml: "<p>Write software. Collaborate with the team. Java and Spring preferred.</p>",
+    });
+    expect(score(bare).score.fitScore).toBe(score(control).score.fitScore);
+  });
+
   it("assigns the spatial lane to a 3D/proptech role", () => {
     const r = score(
       make({

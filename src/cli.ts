@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readApplicationHistory, describeHistory } from "./apply/history.js";
+import { parseNonNegativeFlag, parseNumericFlag } from "./lib/options.js";
 import { Command } from "commander";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -162,15 +164,19 @@ program
   .option("-m, --min-fit <n>", "minimum deterministic fit score to be eligible")
   .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
   .option("--effort <level>", `reasoning effort: low|medium|high|xhigh|max (default ${DEFAULT_EFFORT})`)
+  .option("--max-spend <usd>", "stop the pass before estimated spend crosses this (default from config)")
   .option("--dry-run", "show what would be analyzed without calling the API", false)
-  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; dryRun: boolean }) => {
+  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; dryRun: boolean }) => {
     const profile = loadProfile();
     await withRepo("analyze", async (repo) => {
       const summary = await runAnalysis(repo, profile, {
         limit: Number(opts.limit) || 10,
-        minFit: opts.minFit ? Number(opts.minFit) : profile.scoring.analysis_threshold,
+        minFit: parseNumericFlag(opts.minFit, "--min-fit") ?? profile.scoring.analysis_threshold,
         model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
         effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
+        // Parsed strictly, not with `|| default`. A mistyped ceiling must not
+        // fall through to "no ceiling" - see src/lib/options.ts.
+        maxSpendUsd: parseNonNegativeFlag(opts.maxSpend, "--max-spend") ?? profile.scoring.max_spend_per_run_usd,
         dryRun: opts.dryRun,
       });
       console.log("");
@@ -1021,6 +1027,12 @@ program
       console.log("");
       console.log(`Last ${days} days. "PAID" counts runs that actually called a model;`);
       console.log(`the rest reused what was already on disk and cost nothing.`);
+      // The run log is not the bill. Cost logging for resume-tailor and apply
+      // only began 2026-08-19 (70 earlier paid runs recorded $0), and API use
+      // outside this tool never reaches the log at all. Presenting these
+      // figures as the whole bill is how a $17 day went unexplained.
+      console.log(`Figures are lower bounds: tailor/apply cost logging began 2026-08-19,`);
+      console.log(`and API use outside this tool is not recorded here.`);
       return { total };
     });
   });
@@ -1053,13 +1065,25 @@ program
       const newest = newestBySource(repo.allSightings());
       const stale = new Set(jobs.filter((j) => isStale({ id: j.id, source: j.source, lastSeen: j.lastSeen }, newest)).map((j) => j.id));
 
+      // Work already done, read from disk rather than from `status`. `autofill`
+      // will not write APPLIED without an explicit human yes, so a job whose
+      // form was filled days ago still reads APPLY here - and this listing kept
+      // offering those back as fresh. Four of them went out on one list under a
+      // heading claiming they were companies never applied to.
+      const worked = new Map<string, string>();
+      for (const j of jobs) {
+        const line = describeHistory(readApplicationHistory(packDir(j)));
+        if (line) worked.set(j.id, line);
+      }
+
       console.log("");
       console.log(
         `${"ID".padEnd(13)} ${"ROI".padStart(3)} ${"FIT".padStart(3)} ${"P".padStart(1)} ${"COMP".padEnd(7)} ${"COMPANY".padEnd(20)} TITLE`,
       );
       console.log("-".repeat(120));
       for (const j of jobs) {
-        const mark = stale.has(j.id) ? " [CLOSED?]" : "";
+        const done = worked.get(j.id);
+        const mark = (stale.has(j.id) ? " [CLOSED?]" : "") + (done ? ` [${done}]` : "");
         console.log(
           `${j.id.padEnd(13)} ${String(j.applicationRoi ?? "-").padStart(3)} ${String(j.fitScore ?? "-").padStart(3)} ` +
             `${(j.priority ?? "-").padStart(1)} ${(j.compensationBand ?? "-").padEnd(7)} ` +
@@ -1072,6 +1096,13 @@ program
         console.log(
           `${stale.size} marked [CLOSED?]: the board was swept more recently than the posting was last seen on it. ` +
             `\`ingest\` to re-check.`,
+        );
+      }
+      const filled = [...worked.values()].filter((v) => v.startsWith("FORM ALREADY")).length;
+      if (filled) {
+        console.log(
+          `${filled} marked [FORM ALREADY FILLED]: a browser was driven at that employer's form on that date. ` +
+            `That is not proof you submitted - \`status <id> APPLIED\` if you did.`,
         );
       }
       return { count: jobs.length };

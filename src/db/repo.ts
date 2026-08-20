@@ -7,6 +7,21 @@ import type { RemoteStatus } from "../lib/location.js";
 import type { EmploymentType, SeniorityLevel } from "../lib/seniority.js";
 import { IN_FLIGHT_STATUSES, type Priority, type Status } from "../model/status.js";
 
+/**
+ * How one analysis pass spreads its budget across companies.
+ *
+ * Mirrors `analysis_diversity` in config/career-profile.yaml. Passed in rather
+ * than read from config here so the repo stays a data layer and the rule stays
+ * testable without a config file on disk.
+ */
+export interface AnalysisDiversity {
+  perCompanyCap: number;
+  backfillCap: number;
+  coldAfter: number;
+  unexploredBonus: number;
+  coldPenalty: number;
+}
+
 export interface UpsertOutcome {
   jobId: string;
   isNew: boolean;
@@ -381,13 +396,34 @@ export class JobRepo {
   /**
    * Jobs eligible for the (paid) LLM analysis stage.
    *
-   * Selection is capped per company. Without that, a single employer with many
-   * open roles consumes the entire analysis budget on near-identical postings -
-   * observed in practice, where five Samsara reqs took half a pass and returned
-   * five variations of the same verdict. Spending the budget across more
-   * companies is strictly more informative for the same money.
+   * Selection is spread across companies, because the obvious ordering - best
+   * ROI first - concentrates the entire budget on whichever employers happen to
+   * post the most. Measured on the first 362 analyses: 175 went to 15 companies,
+   * ClickUp took 16 and Cresta 14 for zero `apply` results between them, and 245
+   * companies with filter-passing jobs had never had a single job looked at.
+   *
+   * There was already a per-company cap here. It did not hold, because the
+   * backfill below it ran with no cap at all: whenever the eligible pool was
+   * narrow, unspent budget was refilled from the same companies and the limit
+   * silently vanished. ClickUp took 3 in one minute that way. A cap with an
+   * uncapped escape hatch is not a cap.
+   *
+   * Two mechanisms now, both deterministic:
+   *
+   *   1. Ranking nudge. A company never analyzed gets `unexplored_bonus` ROI
+   *      points; one that has spent `cold_after` analyses without ever coming
+   *      back `apply` loses `cold_penalty`. This is a nudge, not a sort key - a
+   *      strong role at a proven employer must still beat a weak role at a new
+   *      name, or the fix is worse than the bug.
+   *   2. Two caps. `perCompanyCap` on the first pass, and `backfillCap` as a
+   *      hard ceiling on the pass that fills leftover budget.
+   *
+   * Deprioritised is not excluded. A cold company's next posting can still win
+   * on ROI; it just stops crowding out companies nobody has looked at yet.
    */
-  needingAnalysis(minFit: number, limit: number, perCompanyCap = 2): EnrichedJob[] {
+  needingAnalysis(minFit: number, limit: number, diversity: AnalysisDiversity): EnrichedJob[] {
+    const { perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty } = diversity;
+
     // Eligibility is gated on the RAW deterministic score, not the calibrated
     // one. Calibration deliberately scales scores down, so gating on the
     // projected value would shrink the candidate pool every time the
@@ -397,18 +433,37 @@ export class JobRepo {
     // The two numbers answer different questions: the raw score asks "is this
     // worth spending an API call on?", the projected score asks "where does it
     // belong in the ranking?". Ordering still uses the projected value.
+    //
+    // The nudge is applied in SQL rather than after the fact so that `LIMIT`
+    // sees the adjusted order. Ranking in JS after a LIMIT would truncate away
+    // the unexplored companies before they could ever be promoted - which is
+    // the exact bug being fixed, one layer up.
     const rows = this.db
       .prepare(
-        `SELECT * FROM jobs
-         WHERE analysis_json IS NULL
-           AND filter_passed = 1
-           AND fit_score IS NOT NULL
-           AND COALESCE(raw_fit_score, fit_score) >= ?
-           AND status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')
-         ORDER BY application_roi DESC, fit_score DESC
-         LIMIT ?`,
+        `WITH company_state AS (
+           SELECT company_normalized AS cn,
+                  COUNT(*) AS analyzed,
+                  SUM(CASE WHEN json_extract(analysis_json, '$.recommendation')
+                             IN ('apply','apply_and_outreach') THEN 1 ELSE 0 END) AS hits
+             FROM jobs
+            WHERE analysis_json IS NOT NULL
+            GROUP BY company_normalized
+         )
+         SELECT j.* FROM jobs j
+           LEFT JOIN company_state cs ON cs.cn = j.company_normalized
+          WHERE j.analysis_json IS NULL
+            AND j.filter_passed = 1
+            AND j.fit_score IS NOT NULL
+            AND COALESCE(j.raw_fit_score, j.fit_score) >= ?
+            AND j.status NOT IN ('SKIPPED','REJECTED','WITHDRAWN')
+          ORDER BY (
+            j.application_roi
+            + CASE WHEN cs.analyzed IS NULL THEN ? ELSE 0 END
+            - CASE WHEN cs.analyzed >= ? AND COALESCE(cs.hits, 0) = 0 THEN ? ELSE 0 END
+          ) DESC, j.fit_score DESC
+          LIMIT ?`,
       )
-      .all(minFit, limit * 8) as JobRow[];
+      .all(minFit, unexploredBonus, coldAfter, coldPenalty, limit * 8) as JobRow[];
 
     const perCompany = new Map<string, number>();
     const picked: JobRow[] = [];
@@ -426,9 +481,13 @@ export class JobRepo {
     }
 
     // If the cap left budget unspent (few distinct companies clear the bar),
-    // fill from the overflow rather than wasting the pass.
+    // fill from the overflow - but still under a ceiling. Filling without one
+    // is what let a single employer take a whole pass.
     for (const row of overflow) {
       if (picked.length >= limit) break;
+      const seen = perCompany.get(row.company_normalized) ?? 0;
+      if (seen >= backfillCap) continue;
+      perCompany.set(row.company_normalized, seen + 1);
       picked.push(row);
     }
 

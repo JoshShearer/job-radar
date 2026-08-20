@@ -56,16 +56,19 @@ location:
 lanes:
   full_stack:
     label: Senior Full-Stack / Platform
-    weight: 0.35
-  growth_seo:
-    label: Growth Engineering / Technical SEO
     weight: 0.30
   ai_product:
     label: AI-enabled Product Engineering
-    weight: 0.25
+    weight: 0.24
+  solutions_eng:
+    label: Solutions Engineering / Customer-Facing Technical
+    weight: 0.20
+  growth_seo:
+    label: Growth Engineering / Technical SEO
+    weight: 0.18
   spatial_iot:
     label: Proptech / 3D / IoT
-    weight: 0.10
+    weight: 0.08
 
 seniority:
   # Titles at or above these are acceptable.
@@ -127,10 +130,33 @@ target_titles:
     - ai product engineer
     - applied ai engineer
     - llm engineer
-    - forward deployed engineer
     - agent engineer
     - ai platform engineer
     - ai infrastructure engineer
+  # `forward deployed engineer` deliberately does NOT appear here. It used to,
+  # and it bought 14 analyses for zero `apply` recommendations - the worst
+  # title band in the whole record, against a 7.8% baseline. The name sounds
+  # like the Solutions Engineer band but the postings are not: they read as
+  # applied-ML infrastructure roles (inference serving, fine-tuning, GPU
+  # scheduling) with a customer-facing veneer, and that is precisely the
+  # evidence this candidate does not have. It can still surface on real
+  # description signal; it no longer gets promoted for free on its title.
+  solutions_eng:
+    - solutions engineer
+    - senior solutions engineer
+    - staff solutions engineer
+    - principal solutions engineer
+    - solutions architect
+    - senior solutions architect
+    - technical solutions engineer
+    - enterprise solutions engineer
+    - solutions consultant
+    - customer engineer
+    - senior customer engineer
+    - partner solutions engineer
+    - technical account manager
+    - implementation engineer
+    - professional services engineer
   spatial_iot:
     - 3d engineer
     - webgl engineer
@@ -231,6 +257,31 @@ signals:
   - { term: workflow automation, weight: 6, lane: ai_product }
   - { term: human-in-the-loop, weight: 6, lane: ai_product }
 
+  - { term: solutions engineer, weight: 12, lane: solutions_eng }
+  - { term: solutions architect, weight: 11, lane: solutions_eng }
+  - { term: sales engineer, weight: 9, lane: solutions_eng }
+  - { term: pre-sales, weight: 10, lane: solutions_eng }
+  - { term: presales, weight: 10, lane: solutions_eng }
+  - { term: post-sales, weight: 7, lane: solutions_eng }
+  - { term: technical discovery, weight: 8, lane: solutions_eng }
+  - { term: proof of concept, weight: 9, lane: solutions_eng }
+  - { term: proof-of-concept, weight: 9, lane: solutions_eng }
+  - { term: customer-facing, weight: 8, lane: solutions_eng }
+  - { term: customer facing, weight: 8, lane: solutions_eng }
+  - { term: technical account, weight: 8, lane: solutions_eng }
+  - { term: account management, weight: 7, lane: solutions_eng }
+  - { term: solution architecture, weight: 8, lane: solutions_eng }
+  - { term: professional services, weight: 6, lane: solutions_eng }
+  - { term: field engineering, weight: 6, lane: solutions_eng }
+  - { term: enterprise customers, weight: 5, lane: solutions_eng }
+  - { term: technical evaluation, weight: 6, lane: solutions_eng }
+  - { term: rfp, weight: 5, lane: solutions_eng }
+  - { term: onboarding customers, weight: 6, lane: solutions_eng }
+  - { term: customer onboarding, weight: 6, lane: solutions_eng }
+  - { term: integration support, weight: 5, lane: solutions_eng }
+  - { term: technical champion, weight: 6, lane: solutions_eng }
+  - { term: quota, weight: 4, lane: solutions_eng }
+
   - { term: three.js, weight: 13, lane: spatial_iot }
   - { term: threejs, weight: 13, lane: spatial_iot }
   - { term: webgl, weight: 12, lane: spatial_iot }
@@ -254,6 +305,31 @@ signals:
 # Combination bonuses. All `all` terms must be present. This is where the
 # unusual-differentiation edge lives - it is the whole point of the system.
 combos:
+  - name: Solutions engineering + production engineering
+    all: [solutions engineer, typescript]
+    bonus: 20
+    lane: solutions_eng
+    why: Six years as Sales Engineer / Account Manager at Valin plus production
+      TypeScript ownership. Pre-sales orgs usually get one or the other.
+  - name: Solutions engineering + developer/API platform
+    all: [solutions engineer, api]
+    bonus: 14
+    lane: solutions_eng
+    why: A technical seller whose demo is code, not slides. The product being an
+      API is what makes the engineering half of the record load-bearing.
+  - name: Pre-sales + AI product
+    all: [pre-sales, llm]
+    bonus: 16
+    lane: solutions_eng
+    why: Quota-carrying technical sales history against a product category he has
+      actually built with.
+  - name: Customer-facing technical + industrial/data-center domain
+    all: [solutions, data center]
+    bonus: 16
+    lane: solutions_eng
+    why: Valin's account base included data-center clients and ARES was controls
+      and instrumentation. Server hardware and network operations are not
+      abstractions here, which is unusual for an application engineer.
   - name: Payload CMS + Next.js
     all: [payload, next]
     bonus: 22
@@ -468,13 +544,44 @@ scoring:
   # 35 is where the rate is still meaningfully above the 25-34 band. Going
   # lower is defensible but costs roughly $0.04/job for a 2.6% hit rate.
   #
-  # SPEND IS BOUNDED BY `--limit`, NOT BY THIS NUMBER. The threshold decides
-  # what is eligible; the limit decides what is paid for. Lowering it widens
-  # the pool that `analyze` can choose from in ROI order, it does not widen a
-  # single pass.
-  analysis_threshold: 35
+  # SPEND IS BOUNDED BY `--limit` AND `max_spend_per_run_usd`, NOT BY THIS
+  # NUMBER. The threshold decides what is eligible; those two decide what gets
+  # paid for. Raising it does not cut the bill - it changes which jobs the same
+  # money is spent on.
+  #
+  # Raised 35 -> 60 on 2026-08-19. Re-measured over 402 analyzed jobs rather
+  # than the 270 above, and the gradient is far sharper than that sample showed:
+  #
+  #     raw 90+      26 analyzed    8 apply   30.8%
+  #     raw 75-89    24 analyzed    3 apply   12.5%
+  #     raw 60-74    68 analyzed    4 apply    5.9%
+  #     raw 50-59    94 analyzed    7 apply    7.4%
+  #     raw 40-49    95 analyzed    6 apply    6.3%
+  #     raw 35-39    49 analyzed    2 apply    4.1%
+  #
+  # Cumulatively a gate of 60 hits 12.7% against 8.4% at 35, so the same $19.54
+  # would have bought roughly half again as many `apply` recommendations.
+  #
+  # Deliberately not higher. The 50-59 band still returns 7.4%, and the note
+  # above records real roles found well below it - Resend Product Engineer
+  # scored raw 21 and came back a 72-fit apply. This prefilter ranks better than
+  # it gates, so the gate sits where the yield gradient is, not at the top.
+  #
+  # One caveat on the table: the solutions_eng lane landed the same day and
+  # lifted raw scores materially, so these bands mix two scoring regimes.
+  # Re-measure before moving this again.
+  analysis_threshold: 60
   # Minimum fit score to appear in the daily report at all.
   report_threshold: 45
+
+  # Hard ceiling on one `analyze` pass, in USD. The pass stops before the call
+  # that would cross it and says where it stopped; run again to continue.
+  #
+  # There was no ceiling until 2026-08-19. `--limit` bounded the job count and
+  # nothing bounded the money, so three routine passes in one afternoon came to
+  # $4.30 and a fortnight came to $19.54, with the first real feedback arriving
+  # on a credit-card statement. Override per run with `--max-spend`.
+  max_spend_per_run_usd: 1.50
 
 roi:
   # Weights for the Application ROI composite. They should sum to ~1.0.
@@ -498,3 +605,30 @@ report:
   max_priority_b: 7
   max_priority_c: 5
   max_total: 12
+
+# How the analysis budget is spread across companies.
+#
+# Added 2026-08-19 against measured data, not intuition. Of the first 362
+# analyses, 175 went to 15 companies. ClickUp took 16 and Cresta 14, both for
+# zero `apply` results, while 245 companies with filter-passing jobs had never
+# had a single job analyzed.
+#
+# The old code did have a per-company cap of 2 - and then backfilled any unspent
+# budget with no cap at all, so a narrow eligible pool silently removed the
+# limit entirely. ClickUp took 3 in a single minute on 2026-08-19.
+analysis_diversity:
+  # Per company, per pass, before backfill.
+  per_company_cap: 2
+  # Hard ceiling once backfill starts. The old behaviour was effectively
+  # unlimited; this is what stops one employer eating a whole run.
+  per_company_backfill_cap: 3
+  # A company that has spent this many analyses and never once come back
+  # `apply` ranks behind unexplored companies. Deprioritised, never excluded -
+  # its next posting could be the one that fits.
+  cold_after: 6
+  # These nudge the ranking rather than replacing it. A hard "unexplored first"
+  # rule would put a ROI-5 unknown ahead of a ROI-70 Vercel role, which is worse
+  # than the problem it fixes. At 8 points, exploration wins the near-ties and
+  # loses to a genuinely better posting.
+  unexplored_bonus: 8
+  cold_penalty: 15
