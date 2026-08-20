@@ -114,7 +114,9 @@ describe("assessLocation", () => {
   it("does not reject an unstated location, but flags it", () => {
     const v = assessLocation("", PREFS);
     expect(v.acceptable).toBe(true);
-    expect(v.reason).toMatch(/not stated/i);
+    // Wording changed in JOB-35 so every unknown-location path carries the
+    // same reviewable label, whether the field was empty or said only "Hybrid".
+    expect(v.reason).toMatch(/location unknown - review/i);
   });
 });
 

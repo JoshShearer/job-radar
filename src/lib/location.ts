@@ -20,6 +20,11 @@ export interface LocationVerdict {
   reason: string;
   /** Set when the posting restricts to a country/region we cannot satisfy. */
   geoBlocked: boolean;
+  /**
+   * The posting names a work arrangement but no place, so the location is
+   * unknown rather than wrong. Accepted, and surfaced for a human to check.
+   */
+  needsLocationReview: boolean;
 }
 
 export interface LocationPrefs {
@@ -69,6 +74,72 @@ const SCOPE_WORDS =
   "united states|usa|u\\.s\\.a\\.?|u\\.s\\.?|us|north america|americas|nam|nationwide|" +
   "global|worldwide|anywhere|multiple locations|various locations|remote";
 const SCOPE_ONLY_RE = new RegExp(`^(?:${SCOPE_WORDS})(?:\\s*[,/&()-]+\\s*(?:${SCOPE_WORDS}))*$`, "i");
+
+/**
+ * Locations that name a WORK ARRANGEMENT and no place at all.
+ *
+ * 213 postings on the live index have a location field reading exactly
+ * "Hybrid". That classifies as hybrid, fails the metro match, and is rejected
+ * as "Hybrid outside acceptable metros (Hybrid)" - a sentence that treats the
+ * absence of a city as evidence of the wrong city. Some of those are very
+ * likely Austin or remote.
+ *
+ * This is the same defect as the country-scope fix directly above, and the
+ * same shape of remedy. It is also a violation of the rule filters.ts states
+ * in its own header: reject on evidence, never on absence of evidence. The
+ * project already applies exactly this reasoning to personal.yaml, where an
+ * unset value is unknown and never a default; inbound data had not been given
+ * the same treatment.
+ *
+ * Anchored, so only a string that is ENTIRELY arrangement vocabulary matches.
+ * "Hybrid" does; "Hybrid - San Francisco" and "San Francisco, US (Hybrid)"
+ * both name a place and are still judged on it.
+ */
+// Longest-first, so "flexible" is consumed before "flex" could leave "ible"
+// behind and make a placeless value look like it named somewhere.
+const ARRANGEMENT_WORDS = [
+  "work from home",
+  "fully remote",
+  "telecommute",
+  "in[- ]?person",
+  "in[- ]?office",
+  "on[- ]?site",
+  "distributed",
+  "flexible",
+  "full[- ]?time",
+  "part[- ]?time",
+  "contract",
+  "permanent",
+  "optional",
+  "anywhere",
+  "hybrid",
+  "remote",
+  "onsite",
+  "flex",
+  "wfh",
+].join("|");
+const ARRANGEMENT_RE = new RegExp(`\\b(?:${ARRANGEMENT_WORDS})\\b`, "gi");
+
+/**
+ * Does this location string name a place, or only how the work is arranged?
+ *
+ * Implemented by subtraction rather than by matching the whole string: remove
+ * every arrangement word, discard punctuation and spacing, and see whether any
+ * letters or digits survive. An anchored whole-string pattern looks tidier and
+ * is wrong in practice - "On-site (Full-time)" has a trailing bracket that no
+ * reasonable separator class covers, and location fields are full of that.
+ *
+ * Empty counts as naming no place, but that case never reaches the metro
+ * checks: `classifyRemote` returns "unknown" for it and the unknown branch
+ * already accepts.
+ */
+export function statesAPlace(cleanedLocation: string): boolean {
+  const text = cleanedLocation.trim();
+  if (!text) return false;
+  const residue = text.replace(ARRANGEMENT_RE, " ").replace(/[^a-z0-9]+/gi, "");
+  return residue.length > 0;
+}
+
 
 /** Normalize whitespace/punctuation in a raw location string. */
 export function cleanLocation(raw: string | null | undefined): string {
@@ -160,22 +231,39 @@ export function assessLocation(
       acceptable: false,
       reason: `Remote but scoped to a region outside the US (${location}).`,
       geoBlocked: true,
+      needsLocationReview: false,
     };
   }
 
   if (remoteStatus === "remote") {
     return prefs.remoteOk
-      ? { remoteStatus, location, acceptable: true, reason: "Fully remote.", geoBlocked: false }
+      ? { remoteStatus, location, acceptable: true, reason: "Fully remote.", geoBlocked: false, needsLocationReview: false }
       : {
           remoteStatus,
           location,
           acceptable: false,
           reason: "Remote roles disabled in profile.",
           geoBlocked: false,
+          needsLocationReview: false,
         };
   }
 
+  // A value that names an arrangement and no place cannot be judged against a
+  // metro list. Rejecting it reads the absence of a city as evidence of the
+  // wrong city - see ARRANGEMENT_ONLY_RE. Accept and flag for review instead.
+  const placeless = !statesAPlace(cleaned);
+
   if (remoteStatus === "hybrid") {
+    if (placeless) {
+      return {
+        remoteStatus,
+        location,
+        acceptable: true,
+        reason: `Location unknown - review. The posting says "${location}" and names no place.`,
+        geoBlocked: false,
+        needsLocationReview: true,
+      };
+    }
     const ok = matchesMetro(location, prefs.hybridMetros);
     return {
       remoteStatus,
@@ -185,10 +273,21 @@ export function assessLocation(
         ? `Hybrid in an acceptable metro (${location}).`
         : `Hybrid outside acceptable metros (${location}); relocation is off.`,
       geoBlocked: false,
+      needsLocationReview: false,
     };
   }
 
   if (remoteStatus === "onsite") {
+    if (placeless) {
+      return {
+        remoteStatus,
+        location,
+        acceptable: true,
+        reason: `Location unknown - review. The posting says "${location}" and names no place.`,
+        geoBlocked: false,
+        needsLocationReview: true,
+      };
+    }
     const ok = matchesMetro(location, prefs.onsiteOkMetros) || prefs.relocationOk;
     return {
       remoteStatus,
@@ -198,6 +297,7 @@ export function assessLocation(
         ? `Onsite in an acceptable metro (${location}).`
         : `Onsite outside ${prefs.homeMetro} (${location}); relocation is off.`,
       geoBlocked: false,
+      needsLocationReview: false,
     };
   }
 
@@ -207,8 +307,9 @@ export function assessLocation(
     remoteStatus,
     location,
     acceptable: true,
-    reason: "Location not stated; needs a human check before applying.",
+    reason: "Location unknown - review. The posting states no location at all.",
     geoBlocked: false,
+    needsLocationReview: true,
   };
 }
 

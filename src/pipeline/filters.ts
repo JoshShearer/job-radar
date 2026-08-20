@@ -47,7 +47,12 @@ export function applyFilters(job: NormalizedJob, profile: CareerProfile): Filter
   const loc = locationVerdictFor(job, profile);
   if (!loc.acceptable) {
     reasons.push(loc.reason);
-  } else if (job.remoteStatus === "unknown") {
+  } else if (loc.needsLocationReview || job.remoteStatus === "unknown") {
+    // `needsLocationReview` covers the case the old condition missed: a
+    // posting whose location reads exactly "Hybrid" has a KNOWN remote status
+    // and an UNKNOWN place, so it never hit the `remoteStatus === "unknown"`
+    // branch and was rejected on the metro list instead. 213 postings on the
+    // live index were being thrown away that way.
     warnings.push(loc.reason);
   }
 
