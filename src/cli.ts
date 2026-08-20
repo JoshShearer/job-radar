@@ -1094,9 +1094,14 @@ program
       for (const j of jobs) {
         const done = worked.get(j.id);
         const evergreen = isEvergreen(j.datePosted, profile.scoring.evergreen_days);
+        // The pipeline's own verdict, not a re-derivation: these are the
+        // postings whose location names an arrangement and no place, and which
+        // used to be thrown away as "outside acceptable metros".
+        const locUnknown = j.negativeSignals.some((n) => n.includes("Location unknown - review"));
         const mark =
           (stale.has(j.id) ? " [CLOSED?]" : "") +
           (evergreen ? " [EVERGREEN]" : "") +
+          (locUnknown ? " [LOCATION?]" : "") +
           (done ? ` [${done}]` : "");
         console.log(
           `${j.id.padEnd(13)} ${String(j.applicationRoi ?? "-").padStart(3)} ${String(j.fitScore ?? "-").padStart(3)} ` +
@@ -1126,6 +1131,15 @@ program
               `They are almost certainly always-on requisitions; \`--include-evergreen\` shows them.`,
           );
         }
+      }
+      const needLoc = jobs.filter((j) =>
+        j.negativeSignals.some((n) => n.includes("Location unknown - review")),
+      ).length;
+      if (needLoc) {
+        console.log(
+          `${needLoc} marked [LOCATION?]: the posting names a work arrangement but no place. ` +
+            `Unknown is not wrong - check where it actually is before applying.`,
+        );
       }
       const filled = [...worked.values()].filter((v) => v.startsWith("FORM ALREADY")).length;
       if (filled) {
