@@ -34,6 +34,12 @@ export interface AnalyzeOptions {
   model: string;
   effort: string;
   dryRun: boolean;
+  /**
+   * Hard ceiling on estimated spend for this pass, in USD. The run stops before
+   * the call that would cross it. Undefined means no ceiling, which is what the
+   * tool did for its whole life until a $19.54 fortnight made the case for one.
+   */
+  maxSpendUsd?: number;
 }
 
 export interface AnalyzeSummary {
@@ -49,6 +55,8 @@ export interface AnalyzeSummary {
   cacheReadTokens: number;
   outputTokens: number;
   estimatedCostUsd: number;
+  /** True when the pass ended on the spend ceiling rather than the job list. */
+  stoppedOnBudget?: boolean;
 }
 
 /** Anthropic prompt-cache multipliers relative to the base input rate. */
@@ -150,6 +158,23 @@ export async function runAnalysis(
   log.info(`Analyzing ${needsCall.length} job(s) with ${opts.model} (effort: ${opts.effort})`);
 
   for (const [i, job] of needsCall.entries()) {
+    // Checked before each call, so a pass stops as soon as the budget is used
+    // up rather than reporting an overrun once the money is gone. It can still
+    // overshoot by one job's cost - see shouldStopForBudget.
+    //
+    // This exists because there was no ceiling at all. `--limit` bounded the
+    // job count but nothing bounded the bill, so three routine passes in one
+    // afternoon came to $4.30 and a fortnight came to $19.54 with the only
+    // feedback arriving on a credit-card statement.
+    if (shouldStopForBudget(summary.estimatedCostUsd, opts.maxSpendUsd)) {
+      summary.stoppedOnBudget = true;
+      log.warn(
+        `Stopping at ${summary.analyzed} of ${needsCall.length}: spend ceiling of ` +
+          `$${(opts.maxSpendUsd ?? 0).toFixed(2)} reached ($${summary.estimatedCostUsd.toFixed(4)}). ` +
+          `Raise it with --max-spend, or run again to continue where this left off.`,
+      );
+      break;
+    }
     try {
       const result = await analyzeOne(client, systemPrompt, job, opts);
       repo.saveAnalysis(job.id, result.analysis, opts.model);
@@ -164,6 +189,15 @@ export async function runAnalysis(
       summary.cacheCreationTokens += result.cacheCreationTokens;
       summary.cacheReadTokens += result.cacheReadTokens;
       summary.outputTokens += result.outputTokens;
+      summary.estimatedCostUsd = estimateCostUsd(
+        {
+          input: summary.inputTokens,
+          cacheWrite: summary.cacheCreationTokens,
+          cacheRead: summary.cacheReadTokens,
+          output: summary.outputTokens,
+        },
+        opts.model,
+      );
 
       log.info(
         `  [${i + 1}/${needsCall.length}] ${job.company} - ${job.title} -> ` +
@@ -203,6 +237,33 @@ interface OneResult {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   outputTokens: number;
+}
+
+/**
+ * Should this pass stop before paying for the next job?
+ *
+ * Extracted for the same reason `statusAfterAutofill` is: the decision that
+ * governs whether money leaves the account should live somewhere a test can
+ * reach, not inside a loop body that nothing exercises.
+ *
+ * Checked before each call rather than at the end of the pass, so the run stops
+ * as soon as the budget is used up instead of reporting an overrun once the
+ * money is gone.
+ *
+ * This is a stop-when-reached ceiling, not a predictive one: the call that
+ * carries spend past the ceiling has already been paid for when this returns
+ * true, so a pass can overshoot by one job's cost. Bounding it tighter would
+ * mean estimating the next job's price before making the call, and an estimate
+ * that runs high would refuse jobs the budget could afford. Overshooting by one
+ * job is the smaller error.
+ *
+ * `>=` not `>`: at exactly the ceiling the budget is used up. Spending one more
+ * job's worth and calling it "not yet over" is how a ceiling becomes a
+ * suggestion.
+ */
+export function shouldStopForBudget(spentUsd: number, ceilingUsd: number | undefined): boolean {
+  if (ceilingUsd == null) return false;
+  return spentUsd >= ceilingUsd;
 }
 
 async function analyzeOne(

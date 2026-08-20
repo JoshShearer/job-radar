@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { parseNonNegativeFlag, parseNumericFlag } from "./lib/options.js";
 import { Command } from "commander";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -162,15 +163,19 @@ program
   .option("-m, --min-fit <n>", "minimum deterministic fit score to be eligible")
   .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
   .option("--effort <level>", `reasoning effort: low|medium|high|xhigh|max (default ${DEFAULT_EFFORT})`)
+  .option("--max-spend <usd>", "stop the pass before estimated spend crosses this (default from config)")
   .option("--dry-run", "show what would be analyzed without calling the API", false)
-  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; dryRun: boolean }) => {
+  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; dryRun: boolean }) => {
     const profile = loadProfile();
     await withRepo("analyze", async (repo) => {
       const summary = await runAnalysis(repo, profile, {
         limit: Number(opts.limit) || 10,
-        minFit: opts.minFit ? Number(opts.minFit) : profile.scoring.analysis_threshold,
+        minFit: parseNumericFlag(opts.minFit, "--min-fit") ?? profile.scoring.analysis_threshold,
         model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
         effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
+        // Parsed strictly, not with `|| default`. A mistyped ceiling must not
+        // fall through to "no ceiling" - see src/lib/options.ts.
+        maxSpendUsd: parseNonNegativeFlag(opts.maxSpend, "--max-spend") ?? profile.scoring.max_spend_per_run_usd,
         dryRun: opts.dryRun,
       });
       console.log("");
