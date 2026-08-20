@@ -60,7 +60,7 @@ import {
   INTERVIEW_STAGES,
 } from "./model/status.js";
 import { statusAfterAutofill } from "./apply/record.js";
-import { isStale, newestBySource, closedPostingMarker } from "./model/freshness.js";
+import { isStale, newestBySource, closedPostingMarker, formatAge, isEvergreen, postingAgeDays } from "./model/freshness.js";
 import type { EnrichedJob } from "./model/job.js";
 import { resolveJob } from "./db/resolve.js";
 import { confirmYesNo } from "./lib/prompt.js";
@@ -165,8 +165,9 @@ program
   .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
   .option("--effort <level>", `reasoning effort: low|medium|high|xhigh|max (default ${DEFAULT_EFFORT})`)
   .option("--max-spend <usd>", "stop the pass before estimated spend crosses this (default from config)")
+  .option("--include-evergreen", "also analyze postings past evergreen_days (they are not recommended)", false)
   .option("--dry-run", "show what would be analyzed without calling the API", false)
-  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; dryRun: boolean }) => {
+  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; includeEvergreen: boolean; dryRun: boolean }) => {
     const profile = loadProfile();
     await withRepo("analyze", async (repo) => {
       const summary = await runAnalysis(repo, profile, {
@@ -179,6 +180,7 @@ program
         // Parsed strictly, not with `|| default`. A mistyped ceiling must not
         // fall through to "no ceiling" - see src/lib/options.ts.
         maxSpendUsd: parseNonNegativeFlag(opts.maxSpend, "--max-spend") ?? profile.scoring.max_spend_per_run_usd,
+        includeEvergreen: opts.includeEvergreen,
         dryRun: opts.dryRun,
       });
       console.log("");
@@ -1047,11 +1049,18 @@ program
   .option("--all", "include already-reviewed jobs, not just NEW", false)
   .option("--lane <lane>", "filter to one lane")
   .option("--min-fit <n>", "minimum fit score")
-  .action(async (opts: { limit: string; all: boolean; lane?: string; minFit?: string }) => {
+  .option("--include-evergreen", `include postings older than ${"evergreen_days"} (default: hidden)`, false)
+  .action(async (opts: { limit: string; all: boolean; lane?: string; minFit?: string; includeEvergreen: boolean }) => {
     const profile = loadProfile();
     await withRepo("top", (repo) => {
       const minFit = opts.minFit ? Number(opts.minFit) : profile.scoring.report_threshold;
-      let jobs = repo.top({ minFit, limit: Number(opts.limit) * 3 || 45, includeReviewed: opts.all });
+      const evergreenDays = opts.includeEvergreen ? null : profile.scoring.evergreen_days;
+      let jobs = repo.top({
+        minFit,
+        limit: Number(opts.limit) * 3 || 45,
+        includeReviewed: opts.all,
+        evergreenDays,
+      });
       if (opts.lane) jobs = jobs.filter((j) => j.lane === opts.lane);
       jobs = jobs.slice(0, Number(opts.limit) || 15);
 
@@ -1079,15 +1088,20 @@ program
 
       console.log("");
       console.log(
-        `${"ID".padEnd(13)} ${"ROI".padStart(3)} ${"FIT".padStart(3)} ${"P".padStart(1)} ${"COMP".padEnd(7)} ${"COMPANY".padEnd(20)} TITLE`,
+        `${"ID".padEnd(13)} ${"ROI".padStart(3)} ${"FIT".padStart(3)} ${"P".padStart(1)} ${"AGE".padStart(4)} ${"COMP".padEnd(7)} ${"COMPANY".padEnd(20)} TITLE`,
       );
       console.log("-".repeat(120));
       for (const j of jobs) {
         const done = worked.get(j.id);
-        const mark = (stale.has(j.id) ? " [CLOSED?]" : "") + (done ? ` [${done}]` : "");
+        const evergreen = isEvergreen(j.datePosted, profile.scoring.evergreen_days);
+        const mark =
+          (stale.has(j.id) ? " [CLOSED?]" : "") +
+          (evergreen ? " [EVERGREEN]" : "") +
+          (done ? ` [${done}]` : "");
         console.log(
           `${j.id.padEnd(13)} ${String(j.applicationRoi ?? "-").padStart(3)} ${String(j.fitScore ?? "-").padStart(3)} ` +
-            `${(j.priority ?? "-").padStart(1)} ${(j.compensationBand ?? "-").padEnd(7)} ` +
+            `${(j.priority ?? "-").padStart(1)} ${formatAge(postingAgeDays(j.datePosted)).padStart(4)} ` +
+            `${(j.compensationBand ?? "-").padEnd(7)} ` +
             `${truncate(j.company, 20).padEnd(20)} ${truncate(j.title, 52 - mark.length)}${mark}`,
         );
       }
@@ -1098,6 +1112,20 @@ program
           `${stale.size} marked [CLOSED?]: the board was swept more recently than the posting was last seen on it. ` +
             `\`ingest\` to re-check.`,
         );
+      }
+      if (!opts.includeEvergreen) {
+        // Never hide silently. A recommendation list that quietly drops rows
+        // is indistinguishable from an empty index, which is the misreading
+        // that cost an afternoon of adding job boards.
+        const hidden = repo.top({ minFit, limit: 500, includeReviewed: opts.all, evergreenDays: null }).filter((j) =>
+          isEvergreen(j.datePosted, profile.scoring.evergreen_days),
+        ).length;
+        if (hidden) {
+          console.log(
+            `${hidden} posting(s) older than ${profile.scoring.evergreen_days} days hidden. ` +
+              `They are almost certainly always-on requisitions; \`--include-evergreen\` shows them.`,
+          );
+        }
       }
       const filled = [...worked.values()].filter((v) => v.startsWith("FORM ALREADY")).length;
       if (filled) {

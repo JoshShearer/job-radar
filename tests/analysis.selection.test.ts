@@ -18,6 +18,12 @@ const DIVERSITY: AnalysisDiversity = {
   coldAfter: 6,
   unexploredBonus: 8,
   coldPenalty: 15,
+  // Freshness off by default in these tests: seedJob writes no date_posted, and
+  // a NULL date must never be treated as old. The evergreen tests below turn
+  // it on explicitly.
+  freshDays: 21,
+  freshBonus: 12,
+  evergreenDays: null,
 };
 
 /** Mark a job analyzed with a given recommendation, the way the analyzer does. */
@@ -196,5 +202,101 @@ describe("needingAnalysis rank-based selection", () => {
     const id = seedJob(db, { company: "Alpha", applicationRoi: 90, fitScore: 90 });
     markAnalyzed(db, id, "skip");
     expect(repo.needingAnalysis(10, DIVERSITY)).toHaveLength(0);
+  });
+});
+
+/** Set a posting date on an already-seeded job. */
+function setPosted(db: any, id: string, daysAgo: number | null): void {
+  db.prepare("UPDATE jobs SET date_posted = ? WHERE id = ?").run(
+    daysAgo === null ? null : new Date(Date.now() - daysAgo * 86_400_000).toISOString(),
+    id,
+  );
+}
+
+/**
+ * JOB-27. Freshness-first spend.
+ *
+ * Median posting age at apply was 55 days, not because the user was slow - all
+ * 43 applications went out within 7 days of the tool first seeing the posting -
+ * but because selection did not care how old a posting was.
+ */
+describe("needingAnalysis freshness", () => {
+  const FRESH = { ...DIVERSITY, evergreenDays: 180 };
+
+  it("does not pay to analyze a posting it would refuse to recommend", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "old", company: "Alpha", applicationRoi: 99, fitScore: 90 });
+    seedJob(db, { id: "new", company: "Beta", applicationRoi: 10, fitScore: 10 });
+    setPosted(db, "old", 300);
+    setPosted(db, "new", 2);
+    // The evergreen job outranks the fresh one on every other axis and is
+    // still excluded, because nothing will ever recommend it.
+    expect(repo.needingAnalysis(10, FRESH).map((j) => j.id)).toEqual(["new"]);
+  });
+
+  it("keeps a posting whose date the board never published", () => {
+    // Unknown age is not old age. Excluding it would be the same defect as
+    // rejecting a location field that only reads "Hybrid".
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "undated", company: "Alpha", applicationRoi: 50, fitScore: 50 });
+    setPosted(db, "undated", null);
+    expect(repo.needingAnalysis(10, FRESH).map((j) => j.id)).toEqual(["undated"]);
+  });
+
+  it("prefers the fresher posting when quality is comparable", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "stale", company: "Alpha", applicationRoi: 50, fitScore: 50 });
+    seedJob(db, { id: "fresh", company: "Beta", applicationRoi: 45, fitScore: 50 });
+    setPosted(db, "stale", 120);
+    setPosted(db, "fresh", 3);
+    // 45 + 12 (fresh bonus) beats 50.
+    expect(repo.needingAnalysis(2, FRESH).map((j) => j.id)).toEqual(["fresh", "stale"]);
+  });
+
+  it("is a nudge, not a sort key - a clearly better old posting still wins", () => {
+    // The failure mode of over-correcting: burning the budget on whatever
+    // arrived most recently regardless of whether it fits.
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "goodold", company: "Alpha", applicationRoi: 80, fitScore: 80 });
+    seedJob(db, { id: "weaknew", company: "Beta", applicationRoi: 20, fitScore: 20 });
+    setPosted(db, "goodold", 120);
+    setPosted(db, "weaknew", 1);
+    expect(repo.needingAnalysis(2, FRESH).map((j) => j.id)).toEqual(["goodold", "weaknew"]);
+  });
+
+  it("keeps everything when the evergreen ceiling is off", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "ancient", company: "Alpha", applicationRoi: 50, fitScore: 50 });
+    setPosted(db, "ancient", 900);
+    expect(repo.needingAnalysis(10, { ...DIVERSITY, evergreenDays: null })).toHaveLength(1);
+  });
+});
+
+describe("top evergreen exclusion", () => {
+  it("hides the six-month-old requisition but keeps the four-month-old one", () => {
+    // The measured constraint: a tight cutoff destroys the pool. 180 days cost
+    // exactly one of eight apply-recommendations on the live index.
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "evergreen", company: "Alpha", applicationRoi: 90, fitScore: 90 });
+    seedJob(db, { id: "aging", company: "Beta", applicationRoi: 80, fitScore: 80 });
+    setPosted(db, "evergreen", 219);
+    setPosted(db, "aging", 125);
+    const shown = repo.top({ minFit: 0, limit: 10, evergreenDays: 180 });
+    expect(shown.map((j) => j.id)).toEqual(["aging"]);
+  });
+
+  it("shows everything when the ceiling is lifted", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "evergreen", company: "Alpha", applicationRoi: 90, fitScore: 90 });
+    setPosted(db, "evergreen", 219);
+    expect(repo.top({ minFit: 0, limit: 10, evergreenDays: null })).toHaveLength(1);
+    expect(repo.top({ minFit: 0, limit: 10 })).toHaveLength(1);
+  });
+
+  it("keeps an undated posting in the list", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "undated", company: "Alpha", applicationRoi: 90, fitScore: 90 });
+    setPosted(db, "undated", null);
+    expect(repo.top({ minFit: 0, limit: 10, evergreenDays: 180 }).map((j) => j.id)).toEqual(["undated"]);
   });
 });

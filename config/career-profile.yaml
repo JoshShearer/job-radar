@@ -523,6 +523,36 @@ scoring:
   freshness_full_days: 7
   freshness_zero_days: 45
   freshness_max_points: 10
+
+  # Age past which a posting is furniture rather than an opening. Excluded
+  # from recommendations AND from paid analysis unless --include-evergreen.
+  #
+  # 180 is deliberately far out, and it was measured rather than picked. A
+  # tight cutoff destroys the pool; a loose one costs almost nothing:
+  #
+  #     cutoff    apply-recommendations lost (of 8)
+  #      30d       4      <- half the pool, including the best fit in the index
+  #      90d       2
+  #     180d       1      <- Hightouch Deployment Architect, 219 days old
+  #
+  # This is not the freshness control. Ranking handles freshness in the normal
+  # range, and `analysis_fresh_*` below biases spend toward new postings. This
+  # only catches the extreme, where something has been up for six months and is
+  # almost certainly an always-on requisition.
+  #
+  # A posting with no published date is NEVER evergreen. Missing data is not
+  # disqualifying data.
+  evergreen_days: 180
+
+  # Freshness-first spend. A posting newer than analysis_fresh_days gets
+  # analysis_fresh_bonus added to its rank when `analyze` chooses what to buy.
+  #
+  # A nudge, not a sort key - same reasoning as analysis_diversity's bonuses. A
+  # clearly better older posting should still win; what this stops is spending
+  # the day's budget on four-month-old listings while this week's sit unread.
+  # Median posting age at apply was 55 days, which is where that showed up.
+  analysis_fresh_days: 21
+  analysis_fresh_bonus: 12
   # Minimum RAW fit score to be eligible for LLM analysis (cost control).
   #
   # Lowered 55 -> 35 on 2026-08-19 against measured data, not intuition. Hit
