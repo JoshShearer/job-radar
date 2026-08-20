@@ -110,6 +110,17 @@ export const CareerProfileSchema = z.object({
     unexplored_bonus: z.number().nonnegative(),
     cold_penalty: z.number().nonnegative(),
   }),
+  // When a sweep may conclude a posting has left its board.
+  parking: z.object({
+    /** Days a posting must go unseen while its own board keeps being swept. */
+    after_days: z.number().positive(),
+    /**
+     * Refuse to park a source at all if more than this share of its parkable
+     * jobs would go at once. A truncated board response looks exactly like a
+     * board where hundreds of jobs closed.
+     */
+    max_fraction_per_source: z.number().positive().max(1),
+  }),
   roi: z.object({
     weights: z.object({
       fit: z.number(),
