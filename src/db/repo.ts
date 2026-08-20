@@ -740,6 +740,111 @@ export class JobRepo {
     }));
   }
 
+  /* ---- application mail ------------------------------------------------ */
+
+  /** Has this message already been processed? Keeps a re-scan idempotent. */
+  emailSeen(messageId: string): boolean {
+    return (
+      this.db.prepare("SELECT 1 FROM email_events WHERE message_id = ?").get(messageId) !== undefined
+    );
+  }
+
+  /** The newest email we have processed, so a scan can narrow its query. */
+  lastEmailAt(): string | null {
+    const row = this.db.prepare("SELECT MAX(received_at) AS m FROM email_events").get() as { m: string | null };
+    return row?.m ?? null;
+  }
+
+  recordEmailEvent(e: {
+    messageId: string;
+    source: string;
+    from: string;
+    subject: string;
+    receivedAt: string;
+    kinds: string[];
+    evidence: string[];
+    resolution: string;
+    jobId: string | null;
+    appliedStatus: string | null;
+    note: string | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO email_events
+           (message_id, source, from_address, subject, received_at, kinds, evidence,
+            resolution, job_id, applied_status, note, seen_at)
+         VALUES (@messageId, @source, @from, @subject, @receivedAt, @kinds, @evidence,
+                 @resolution, @jobId, @appliedStatus, @note, @seenAt)`,
+      )
+      .run({
+        ...e,
+        kinds: e.kinds.join(","),
+        evidence: e.evidence.slice(0, 5).join(" | ").slice(0, 500),
+        seenAt: new Date().toISOString(),
+      });
+  }
+
+  /** Emails that could not be resolved to exactly one job. The review queue. */
+  emailsNeedingReview(limit = 50): Array<{
+    messageId: string;
+    from: string;
+    subject: string;
+    receivedAt: string;
+    kinds: string;
+    resolution: string;
+    note: string | null;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT message_id AS messageId, from_address AS "from", subject, received_at AS receivedAt,
+                kinds, resolution, note
+           FROM email_events
+          WHERE resolution IN ('ambiguous','unmatched')
+          ORDER BY received_at DESC
+          LIMIT ?`,
+      )
+      .all(limit) as never;
+  }
+
+  /** In-flight applications an incoming email could plausibly be about. */
+  inFlightApplications(): Array<{
+    id: string;
+    company: string;
+    title: string;
+    status: string;
+    statusChangedAt: string | null;
+    applicationUrl: string | null;
+  }> {
+    const marks = IN_FLIGHT_STATUSES.map(() => "?").join(",");
+    return this.db
+      .prepare(
+        `SELECT id, company, title, status, status_changed_at AS statusChangedAt,
+                application_url AS applicationUrl
+           FROM jobs WHERE status IN (${marks})`,
+      )
+      .all(...IN_FLIGHT_STATUSES) as never;
+  }
+
+  /** Applications plus their most recent matched email, for the ghost sweep. */
+  ghostCandidates(): Array<{
+    id: string;
+    company: string;
+    title: string;
+    status: string;
+    statusChangedAt: string | null;
+    lastEmailAt: string | null;
+  }> {
+    const marks = IN_FLIGHT_STATUSES.map(() => "?").join(",");
+    return this.db
+      .prepare(
+        `SELECT j.id, j.company, j.title, j.status,
+                j.status_changed_at AS statusChangedAt,
+                (SELECT MAX(e.received_at) FROM email_events e WHERE e.job_id = j.id) AS lastEmailAt
+           FROM jobs j WHERE j.status IN (${marks})`,
+      )
+      .all(...IN_FLIGHT_STATUSES) as never;
+  }
+
   allSightings(): Array<{ id: string; source: string; lastSeen: string | null }> {
     return this.db
       .prepare("SELECT id, source, last_seen AS lastSeen FROM jobs")

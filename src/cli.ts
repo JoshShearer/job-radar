@@ -66,6 +66,9 @@ import { resolveJob } from "./db/resolve.js";
 import { confirmYesNo } from "./lib/prompt.js";
 import { formatSalary } from "./lib/salary.js";
 import { benchmarkTriage } from "./analysis/benchmark.js";
+import { scanInbox } from "./inbox/scan.js";
+import { GmailSource, EmlDirectorySource } from "./inbox/source.js";
+import { ghostable } from "./inbox/ghost.js";
 
 // Must run before any command reads process.env for credentials or overrides.
 loadEnvFile();
@@ -979,6 +982,23 @@ program
         log.info("Skipping ingest (--no-ingest)");
       }
 
+      // GHOSTED sweep. It belongs in the daily pass rather than in `inbox`
+      // because it is not driven by an email arriving - it is driven by one
+      // never arriving, which only elapsed time can tell you.
+      const ghosts = ghostable(repo.ghostCandidates(), {
+        afterDays: profile.inbox.ghost_after_days,
+        from: profile.inbox.ghost_from,
+      });
+      for (const g of ghosts) {
+        repo.setStatus(g.id, "GHOSTED", `no response in ${profile.inbox.ghost_after_days} days`);
+      }
+      if (ghosts.length) {
+        log.info(
+          `Ghosted ${ghosts.length} application(s) silent for over ${profile.inbox.ghost_after_days} days: ` +
+            ghosts.map((g) => g.company).join(", "),
+        );
+      }
+
       let scoreSummary = runScoring(repo, profile, db);
 
       if (opts.analyze) {
@@ -1059,6 +1079,89 @@ program
       console.log(`Figures are lower bounds: tailor/apply cost logging began 2026-08-19,`);
       console.log(`and API use outside this tool is not recorded here.`);
       return { total };
+    });
+  });
+
+// ---- inbox ------------------------------------------------------------------
+
+program
+  .command("inbox")
+  .description("Read application mail and update job status (read-only on the mailbox)")
+  .option("-l, --limit <n>", "max messages to read")
+  .option("--apply", "write the status changes; without this it only reports", false)
+  .option("--all", "ignore the last-scanned watermark and re-read everything", false)
+  .option("--eml <dir>", "read .eml files from a directory instead of Gmail")
+  .action(async (opts: { limit?: string; apply: boolean; all: boolean; eml?: string }) => {
+    const profile = loadProfile();
+    const emlDir = opts.eml ?? profile.inbox.eml_dir;
+    const source = emlDir ? new EmlDirectorySource(emlDir) : GmailSource.fromEnv(profile.inbox.gmail_query);
+
+    if (!source) {
+      console.log("");
+      console.log("No mail source configured.");
+      console.log("  Gmail: set JOB_RADAR_GMAIL_CLIENT_ID, JOB_RADAR_GMAIL_CLIENT_SECRET and");
+      console.log("         JOB_RADAR_GMAIL_REFRESH_TOKEN (scope: gmail.readonly).");
+      console.log("  Or:    point `inbox.eml_dir` at a directory of .eml files, or pass --eml <dir>.");
+      return;
+    }
+
+    await withRepo("inbox", async (repo) => {
+      const summary = await scanInbox(repo, source, {
+        limit: opts.limit ? Number(opts.limit) : profile.inbox.scan_limit,
+        apply: opts.apply,
+        since: opts.all ? null : undefined,
+      });
+
+      console.log("");
+      console.log(
+        `Read ${summary.fetched} message(s) from ${source.name} | ` +
+          `already seen ${summary.alreadySeen} | no signal ${summary.ignored}`,
+      );
+      console.log(
+        `Matched ${summary.matched} | status changes ${summary.transitioned} | ` +
+          `ambiguous ${summary.ambiguous} | unmatched ${summary.unmatched}`,
+      );
+
+      for (const c of summary.changes) {
+        console.log(`  ${c.company} - ${c.title}: ${c.from} -> ${c.to}  (${c.messageId})`);
+      }
+
+      if (summary.ambiguous || summary.unmatched) {
+        console.log("");
+        console.log(
+          `${summary.ambiguous + summary.unmatched} message(s) went to review rather than being guessed at. ` +
+            `\`job-radar inbox-review\` lists them.`,
+        );
+      }
+      if (!opts.apply && (summary.transitioned || summary.ambiguous || summary.unmatched)) {
+        console.log("");
+        console.log("Nothing was written. Re-run with --apply to record these.");
+      }
+      return { fetched: summary.fetched, transitioned: summary.transitioned };
+    });
+  });
+
+program
+  .command("inbox-review")
+  .description("Application mail that could not be resolved to exactly one job")
+  .option("-l, --limit <n>", "how many to show", "30")
+  .action(async (opts: { limit: string }) => {
+    await withRepo("inbox-review", (repo) => {
+      const rows = repo.emailsNeedingReview(Number(opts.limit) || 30);
+      if (rows.length === 0) {
+        console.log("Nothing awaiting review.");
+        return { count: 0 };
+      }
+      console.log("");
+      for (const r of rows) {
+        console.log(`${r.receivedAt.slice(0, 10)}  [${r.resolution}] ${r.kinds}`);
+        console.log(`  from   : ${r.from}`);
+        console.log(`  subject: ${r.subject}`);
+        if (r.note) console.log(`  why    : ${r.note}`);
+        console.log("");
+      }
+      console.log(`${rows.length} message(s). Resolve with \`job-radar status <job-id> <STATUS>\`.`);
+      return { count: rows.length };
     });
   });
 

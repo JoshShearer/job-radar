@@ -112,6 +112,19 @@ export const CareerProfileSchema = z.object({
     unexplored_bonus: z.number().nonnegative(),
     cold_penalty: z.number().nonnegative(),
   }),
+  // Reading application mail. Read-only; nothing is ever sent.
+  inbox: z.object({
+    /** Gmail search that scopes the scan to application mail. */
+    gmail_query: z.string().min(1),
+    /** Fallback source: a directory of .eml files, for testing without credentials. */
+    eml_dir: z.string().nullable(),
+    /** Max messages per scan. */
+    scan_limit: z.number().int().positive(),
+    /** Days of silence before an in-flight application is called GHOSTED. */
+    ghost_after_days: z.number().int().positive(),
+    /** Statuses the ghost sweep may act on. */
+    ghost_from: z.array(z.string()).min(1),
+  }),
   // Two-tier analysis: a cheap verdict for everything, a dossier for the few.
   analysis_detail: z.object({
     /** Off until the agreement benchmark passes. See JOB-31. */

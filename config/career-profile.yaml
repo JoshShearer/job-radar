@@ -638,6 +638,44 @@ scoring:
   # on a credit-card statement. Override per run with `--max-spend`.
   max_spend_per_run_usd: 1.50
 
+# Reading application mail, so the funnel has real outcomes in it.
+#
+# The tracker showed 43 applications and zero results - not because nothing
+# happened, but because nothing wrote it down. SCREEN, REJECTED and GHOSTED all
+# sat at zero, so every score in the system was a guess never checked against
+# reality.
+#
+# READ-ONLY. This reads mail and never sends, replies, labels or deletes.
+# Credentials come from the environment, not from here:
+#   JOB_RADAR_GMAIL_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN
+# with the gmail.readonly scope.
+inbox:
+  # Scoped to the ATS platforms the tool already ingests from, plus anything
+  # you have labelled. Narrow on purpose: a scan that reads the whole mailbox
+  # would be slower, more invasive, and no more accurate.
+  gmail_query: >-
+    (from:greenhouse.io OR from:hire.lever.co OR from:ashbyhq.com OR
+     from:myworkdayjobs.com OR from:smartrecruiters.com OR from:workable.com OR
+     label:job-applications)
+  # A directory of .eml files, used when Gmail credentials are absent. Lets you
+  # see what the classifier would do to real mail before pointing it at a live
+  # mailbox.
+  eml_dir: null
+  scan_limit: 100
+
+  # GHOSTED is the absence of email, so no parser can produce it. This is a
+  # sweep over elapsed time, folded into the daily pass.
+  #
+  # 30 days is chosen to be later than almost every real reply. The cost of
+  # being early is calling a live application dead; the cost of being late is a
+  # row that says APPLIED for another fortnight.
+  #
+  # Silence is measured from the last CONTACT, not from the application, so a
+  # job mid-conversation is never ghosted for having been applied to a while
+  # ago.
+  ghost_after_days: 30
+  ghost_from: [APPLIED, CONTACTED]
+
 # Two-tier analysis.
 #
 # 77% of paid analyses end in "skip" (314 of 406), and the output schema forced
