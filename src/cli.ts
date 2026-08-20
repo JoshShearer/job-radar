@@ -65,6 +65,7 @@ import type { EnrichedJob } from "./model/job.js";
 import { resolveJob } from "./db/resolve.js";
 import { confirmYesNo } from "./lib/prompt.js";
 import { formatSalary } from "./lib/salary.js";
+import { benchmarkTriage } from "./analysis/benchmark.js";
 
 // Must run before any command reads process.env for credentials or overrides.
 loadEnvFile();
@@ -166,8 +167,9 @@ program
   .option("--effort <level>", `reasoning effort: low|medium|high|xhigh|max (default ${DEFAULT_EFFORT})`)
   .option("--max-spend <usd>", "stop the pass before estimated spend crosses this (default from config)")
   .option("--include-evergreen", "also analyze postings past evergreen_days (they are not recommended)", false)
+  .option("--two-stage", "cheap verdict first, dossier only for jobs that earn one", false)
   .option("--dry-run", "show what would be analyzed without calling the API", false)
-  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; includeEvergreen: boolean; dryRun: boolean }) => {
+  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; includeEvergreen: boolean; twoStage: boolean; dryRun: boolean }) => {
     const profile = loadProfile();
     await withRepo("analyze", async (repo) => {
       const summary = await runAnalysis(repo, profile, {
@@ -181,6 +183,7 @@ program
         // fall through to "no ceiling" - see src/lib/options.ts.
         maxSpendUsd: parseNonNegativeFlag(opts.maxSpend, "--max-spend") ?? profile.scoring.max_spend_per_run_usd,
         includeEvergreen: opts.includeEvergreen,
+        twoStage: opts.twoStage || undefined,
         dryRun: opts.dryRun,
       });
       console.log("");
@@ -193,6 +196,12 @@ program
         // three times or three different postings.
         console.log(`Failures by kind: ${kinds.map(([k, n]) => `${k} ${n}`).join(", ")}.`);
         console.log(`  \`job-radar failures\` shows the reasons, which are now stored per job.`);
+      }
+      if (summary.dossiers || summary.triageOnly) {
+        console.log(
+          `Two-tier: ${summary.dossiers} dossier(s), ${summary.triageOnly} triage-only. ` +
+            `The triage form is about a quarter of the output bytes of a dossier.`,
+        );
       }
       if (summary.parkedAfterFailure) {
         console.log(
@@ -1050,6 +1059,76 @@ program
       console.log(`Figures are lower bounds: tailor/apply cost logging began 2026-08-19,`);
       console.log(`and API use outside this tool is not recorded here.`);
       return { total };
+    });
+  });
+
+// ---- benchmark-triage -------------------------------------------------------
+
+program
+  .command("benchmark-triage")
+  .description("Check the cheap triage verdict against existing full verdicts (COSTS MONEY)")
+  .option("-l, --limit <n>", "how many analyzed jobs to re-run", "25")
+  .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
+  .option("--effort <level>", `reasoning effort (default ${DEFAULT_EFFORT})`)
+  .option("--yes", "actually make the calls; without this it only estimates", false)
+  .action(async (opts: { limit: string; model?: string; effort?: string; yes: boolean }) => {
+    const profile = loadProfile();
+    const limit = Number(opts.limit) || 25;
+    const model = opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL;
+    await withRepo("benchmark-triage", async (repo) => {
+      const sample = repo.analyzedSample(limit);
+      if (!opts.yes) {
+        // This spends real money, so it says so and stops. The estimate is
+        // rough on purpose - it is a guard against a surprise, not an invoice.
+        console.log("");
+        console.log(`Would re-run ${sample.length} already-analyzed job(s) through the triage form.`);
+        console.log(`Model: ${model}. Rough estimate: $${(sample.length * 0.02).toFixed(2)}.`);
+        console.log(`Sample skews toward apply/network verdicts on purpose - a uniform sample`);
+        console.log(`would be mostly skips and would say nothing about the decision that matters.`);
+        console.log("");
+        console.log("Re-run with --yes to actually make the calls.");
+        return { estimated: sample.length };
+      }
+
+      const result = await benchmarkTriage(repo, profile, {
+        limit,
+        model,
+        effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
+      });
+
+      const pct = (result.agreementRate * 100).toFixed(1);
+      console.log("");
+      console.log(`Compared ${result.compared} job(s), ${result.failed} failed.`);
+      console.log(`Apply-vs-not agreement: ${result.agreeOnApply}/${result.compared} = ${pct}%`);
+      console.log(`Mean absolute fit delta: ${result.meanAbsFitDelta.toFixed(1)} points`);
+      console.log(`Spent about $${result.estimatedCostUsd.toFixed(4)}.`);
+
+      if (result.missedApplies.length) {
+        console.log("");
+        console.log(`Missed applies (${result.missedApplies.length}) - the expensive kind of miss:`);
+        for (const r of result.missedApplies) {
+          console.log(`  ${r.company} - ${r.title}: ${r.baselineRecommendation} -> ${r.triageRecommendation}`);
+        }
+      }
+      if (result.spuriousApplies.length) {
+        console.log("");
+        console.log(`Invented applies (${result.spuriousApplies.length}) - wastes time rather than hiding a role:`);
+        for (const r of result.spuriousApplies) {
+          console.log(`  ${r.company} - ${r.title}: ${r.baselineRecommendation} -> ${r.triageRecommendation}`);
+        }
+      }
+
+      console.log("");
+      const BAR = 0.92;
+      if (result.agreementRate >= BAR) {
+        console.log(`PASS: ${pct}% is at or above the ${(BAR * 100).toFixed(0)}% bar.`);
+        console.log(`Set analysis_detail.two_stage: true in config/career-profile.yaml.`);
+      } else {
+        console.log(`FAIL: ${pct}% is below the ${(BAR * 100).toFixed(0)}% bar.`);
+        console.log(`Leave analysis_detail.two_stage: false. The dossier's forced strengths and`);
+        console.log(`risks fields are likely doing real reasoning work, not just producing prose.`);
+      }
+      return { compared: result.compared, agreementRate: result.agreementRate };
     });
   });
 

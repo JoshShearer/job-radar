@@ -150,6 +150,49 @@ export type Analysis = z.infer<typeof AnalysisSchema>;
  * configured lane. `validateProfileCoherence` refuses a config lane named
  * `other` so the two meanings cannot collide.
  */
+/**
+ * The triage half of the analysis, validated as strictly as the full form.
+ *
+ * A separate schema rather than making the dossier fields optional on
+ * `AnalysisSchema`. Optional-with-defaults would mean a FULL response that
+ * simply forgot `strengths` would validate and store an empty array, which is
+ * exactly the "malformed output is rejected, never stored" guarantee going
+ * quietly soft. Two strict schemas keep both paths honest.
+ */
+export function triageSchemaFor(laneKeys: readonly string[]) {
+  return z.object({
+    fitScore: AnalysisSchema.shape.fitScore,
+    applicationRoi: AnalysisSchema.shape.applicationRoi,
+    lane: z.enum(["other", ...laneKeys] as unknown as [string, ...string[]]),
+    recommendation: AnalysisSchema.shape.recommendation,
+    salaryClassification: AnalysisSchema.shape.salaryClassification,
+    reasoningSummary: AnalysisSchema.shape.reasoningSummary,
+  });
+}
+
+export type TriageVerdict = z.infer<ReturnType<typeof triageSchemaFor>>;
+
+/**
+ * Fill the dossier half with empties for a job that was only triaged.
+ *
+ * Deliberately explicit rather than a `Partial<Analysis>` flowing through the
+ * codebase: everything downstream already handles an empty strengths list, and
+ * a reader can see at a glance that nothing was invented to fill the gap.
+ */
+export function triageOnlyAnalysis(v: TriageVerdict): Analysis {
+  return {
+    ...v,
+    strengths: [],
+    risks: [],
+    missingRequirements: [],
+    differentiation: "",
+    salaryReasoning: "",
+    interviewProbability: 0,
+    competitionEstimate: "moderate",
+    outreachTargets: [],
+  };
+}
+
 export function analysisSchemaFor(laneKeys: readonly string[]) {
   return AnalysisSchema.extend({
     lane: z.enum(["other", ...laneKeys] as unknown as [string, ...string[]]),
