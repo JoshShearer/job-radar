@@ -12,6 +12,7 @@ Critic Gate.
 ## Usage
 
 - `/critique` — review uncommitted and staged changes (auto-detect depth)
+- `/critique plan` — review an implementation plan before approving it (always L2, Plan Review)
 - `/critique workflow` — review all `.claude/` files (always L2)
 - `/critique architecture` — review structure and architectural decisions (always L2)
 - `/critique "<question>"` — adversarial evaluation of one specific decision (always L2)
@@ -31,6 +32,121 @@ overlooked. You succeed when you find real issues. You fail when you rubber-stam
 - A contradiction between the docs and the implementation
 
 No evidence → downgrade to a **question** ("Have you verified that…?"). Never state it as a finding.
+
+## Plan Review Path (when `/critique plan`)
+
+**If `plan` was specified**, skip Steps 1–3 and use this path instead. You are reviewing a
+*proposed approach*, not code that exists — the risk table and the auto-pass check are both
+meaningless here.
+
+> **This repo has no `critic` agent, so the protocol is inlined**, matching how the rest of this
+> command works. But **do not review the plan in this session** when the plan is one you just
+> wrote: spawn a **fresh `general-purpose` subagent** and give it the protocol below. A context
+> that drafted the plan cannot adversarially review it — it already believes the plan. Freshness
+> is the mechanism, not the agent type.
+
+### P1: Locate the plan
+
+1. **The plan file named in the plan-mode system message**, if this session is in plan mode.
+   That path is authoritative — use it verbatim. *(Called from `/validated-plan`? It passes the
+   path in; skip this step entirely.)*
+2. **A path given in the invocation** — `/critique plan <path>`.
+3. **A candidate in `~/.claude/plans/`**, if it exists — **confirm with the user first**. That
+   store is shared across sessions and holds more than live plans: `*-ultraplan.md` are plans the
+   user **rejected**, `*-agent-*.md` belong to subagents, `*.workshop.md` are not plans, and a
+   concurrent session's file will look freshest of all. Exclude those, name the file you intend
+   to review, and wait. The directory is relocatable via `plansDirectory`, so its absence is not
+   proof there are no plans.
+4. **`.claude/plan.md`** — legacy; frequently stale. Confirm first.
+
+**Never review a plan whose location you inferred and did not confirm.** A score against the
+wrong file looks exactly like a real verdict and will be trusted as one.
+
+### P2: Assemble the requirements baseline
+
+**Requirements Coverage is 20% of the score and cannot be judged against the plan alone** — a
+plan is trivially complete with respect to itself. Gather: the Linear issue if a `JOB-\d+` key is
+named (see `/create-issue` for the tooling), acceptance criteria from the conversation, or the
+user's original request.
+
+No baseline? Rate that dimension `unrated` and exclude its weight. Do **not** score it 10 — that
+inflates every plan by two points and makes "no criteria were handy" the easier path to a pass.
+
+### P3: Review against the plan rubric
+
+Rate each dimension **1–10**, multiply by weight, sum, and multiply by 10 for a score **out of
+100**.
+
+| Dimension | Weight | What to evaluate |
+|---|---|---|
+| **Soundness** | 25% | Is the logic correct? Will the approach produce the desired outcome? Are assumptions validated rather than asserted? |
+| **Requirements Coverage** | 20% | Does the plan address every acceptance criterion? Anything missing or partial? |
+| **Codebase Alignment** | 20% | Does it match existing patterns, utilities, and the invariants in `CLAUDE.md`? |
+| **Gaps & Risks** | 20% | What is missing? Are mitigations concrete? Is there a rollback? |
+| **Scope Feasibility** | 15% | Will unexpected changes be required? Are dependencies verified? Is rework likely? |
+
+| Rating | Meaning |
+|---|---|
+| **9–10** | No meaningful gaps; sound, complete, aligned |
+| **7–8** | Minor gaps or unverified assumptions; directionally correct |
+| **5–6** | Notable gaps that could cause rework |
+| **3–4** | Significant issues; will need major revision |
+| **1–2** | Fundamentally flawed, or violates a documented constraint |
+
+**Rounding is round-half-up and load-bearing.** `Score = round(TOTAL × 10)`. 8/8/8/7/9 gives 7.95
+→ **79.5 → 80, which PASSES**. Do not truncate, and do not nudge a dimension to land on the side
+of the line you prefer. With a dimension `unrated`, renormalize over the remaining weights, keep
+full precision, and round **once** at the end; say `(no requirements baseline — score not
+comparable to a baselined run)`, because the four remaining dimensions all judge the plan against
+itself or the codebase, both of which the planner controls. More than one unrated → return
+CONCERNS with an explanation, not a number that looks authoritative.
+
+**Verdict:** PASS (80+) / CONCERNS (50–79) / BLOCK (<50).
+
+**The highest-value check is verifying the plan's claims against the actual repository.** A plan
+is a set of assertions about code — "this helper exists", "this is a three-file change". **Open
+the files.** A confident `file:line` that does not exist is the most common plan defect and is
+invisible until implementation.
+
+**Evidence, adapted for plans.** Code does not exist yet, so cite: the requirements baseline
+(coverage gaps), a `CLAUDE.md` invariant (alignment violations), a **real** `file:line` you opened
+(wrong assumptions), or a named dependency/migration/config the plan omits (scope gaps). Anything
+you cannot ground this way is a **question**, not a finding, and must not move the score.
+
+Number findings `F1`, `F2`, … with severity `HIGH` (will break or miss a requirement), `MEDIUM`
+(likely rework), `LOW` (worth fixing, not blocking).
+
+**Re-reviewing a revised plan (a `/validated-plan` pass).** You get the previous **findings** and
+the **previous plan version** — never previous **scores**. Score this version on its own merits.
+Two checks are yours alone: (1) were the previous findings genuinely fixed — a finding marked
+addressed whose problem remains is itself HIGH; and (2) **diff the two versions and account for
+everything that got smaller**. A plan scores higher when risks and caveats vanish from it, whether
+or not they were mitigated, so deletion is the cheapest way to game this gate and is invisible
+unless someone compares versions. Narrowing *scope* is legitimate; deleting the *description of a
+risk* while the risk remains is HIGH. If a section vanished and no finding asked for its removal,
+name it.
+
+**Do not** nitpick the plan's wording, block on implementation details not yet decided, or demand
+certainty about things only implementation can settle.
+
+### P4: Record and report
+
+**In plan mode** (including every `/validated-plan` pass): write **nothing**. Writes outside the
+plan file are blocked; the pass is recorded inside the plan by the caller. A blocked write is not
+a failure of the review — do not retry it or route around it.
+
+**Not in plan mode:** write the verdict to `.claude/last-plan-critique.md`.
+
+**Never write `.claude/last-critique.md`.** That is the code-review verdict `/ship` reuses in
+place of running its own gate when the recorded commit matches HEAD. Plan review scores on the
+same 0–100 PASS/CONCERNS/BLOCK scale, so a plan verdict there would ship unreviewed code on the
+strength of a review that never read any code. Do not record a `Commit:` either — a plan is not a
+commit, and a hash is exactly what makes the file look reusable.
+
+Emit `**Mode:** Plan Review`, `**Score:**` and `**Verdict:**` verbatim on their own lines;
+`/validated-plan` parses them.
+
+---
 
 ## Step 1: Identify changes
 
