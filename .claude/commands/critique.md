@@ -101,7 +101,7 @@ comparable to a baselined run)`, because the four remaining dimensions all judge
 itself or the codebase, both of which the planner controls. More than one unrated → return
 CONCERNS with an explanation, not a number that looks authoritative.
 
-**Verdict:** PASS (80+) / CONCERNS (50–79) / BLOCK (<50).
+**Verdict:** PASS (80+) / CONCERNS (50–79) / BLOCK (<50). **The score is advisory — nothing gates on it.** `/validated-plan` runs one pass and acts on the findings. 80 requires a straight 8 on every dimension at once, while an honest HIGH finding forces a 5-6 and caps the total at 75, so a gate on the number would be asking you for a clean bill of health. Report what you found.
 
 **The highest-value check is verifying the plan's claims against the actual repository.** A plan
 is a set of assertions about code — "this helper exists", "this is a three-file change". **Open
@@ -116,22 +116,14 @@ you cannot ground this way is a **question**, not a finding, and must not move t
 Number findings `F1`, `F2`, … with severity `HIGH` (will break or miss a requirement), `MEDIUM`
 (likely rework), `LOW` (worth fixing, not blocking).
 
-**Re-reviewing a revised plan (a `/validated-plan` pass).** You get the previous **findings** and
-the **previous plan version** — never previous **scores**. Score this version on its own merits.
-Two checks are yours alone: (1) were the previous findings genuinely fixed — a finding marked
-addressed whose problem remains is itself HIGH; and (2) **diff the two versions and account for
-everything that got smaller**. A plan scores higher when risks and caveats vanish from it, whether
-or not they were mitigated, so deletion is the cheapest way to game this gate and is invisible
-unless someone compares versions. Narrowing *scope* is legitimate; deleting the *description of a
-risk* while the risk remains is HIGH. If a section vanished and no finding asked for its removal,
-name it.
+**If you are handed a plan that was revised after an earlier review**, score it on its own merits — do not ask for or guess the earlier score. One check is worth making: if a risk, caveat or edge case present in the earlier version is simply *gone*, say so and name it. Narrowing scope is a legitimate fix; deleting the description of a risk while the risk remains is not, and it is the cheapest way to make a plan look better than it is.
 
 **Do not** nitpick the plan's wording, block on implementation details not yet decided, or demand
 certainty about things only implementation can settle.
 
 ### P4: Record and report
 
-**In plan mode** (including every `/validated-plan` pass): write **nothing**. Writes outside the
+**In plan mode** (including a `/validated-plan` verification pass): write **nothing**. Writes outside the
 plan file are blocked; the pass is recorded inside the plan by the caller. A blocked write is not
 a failure of the review — do not retry it or route around it.
 
