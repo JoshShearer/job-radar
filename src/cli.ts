@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
 import { loadEnvFile } from "./config/env.js";
-import { applyDestructiveMigrations, closeDb, openDb } from "./db/index.js";
+import { applyDataCleanups, applyDestructiveMigrations, closeDb, openDb } from "./db/index.js";
 import { JobRepo } from "./db/repo.js";
 import { runIngest } from "./pipeline/ingest.js";
 import { runScoring } from "./pipeline/rescore.js";
@@ -36,7 +36,7 @@ import { importResume } from "./resume/import.js";
 import { matchResumeToJob } from "./resume/requirements.js";
 import { enforceProvenance, tailorResume, TailorSchema } from "./resume/tailor.js";
 import { decideReuse, hashFile, readStamps, writeStamp } from "./apply/reuse.js";
-import { describeSpend, estimateCostUsd } from "./lib/cost.js";
+import { describeSpend, emptyUsage, estimateCostUsd } from "./lib/cost.js";
 import {
   composeResume,
   renderMatchReport,
@@ -211,12 +211,22 @@ program
         );
       }
       if (summary.analyzed > 0) {
-        const cacheTotal = summary.cacheReadTokens + summary.cacheCreationTokens;
-        const hitRate = cacheTotal > 0 ? Math.round((summary.cacheReadTokens / cacheTotal) * 100) : 0;
+        const cacheRead = summary.usage.cacheRead ?? 0;
+        const cacheWrite = summary.usage.cacheWrite ?? 0;
+        const cacheTotal = cacheRead + cacheWrite;
+        const hitRate = cacheTotal > 0 ? Math.round((cacheRead / cacheTotal) * 100) : 0;
         console.log(
-          `Tokens: ${summary.inputTokens} uncached in / ${summary.cacheCreationTokens} cache-write / ` +
-            `${summary.cacheReadTokens} cache-read / ${summary.outputTokens} out`,
+          `Tokens: ${summary.usage.input} uncached in / ${cacheWrite} cache-write / ` +
+            `${cacheRead} cache-read / ${summary.usage.output} out`,
         );
+        if (summary.usageMissing > 0) {
+          // Named, not swallowed. The calls were billed; the receipts were not
+          // returned, so these totals are short by that many calls.
+          console.log(
+            `Data quality: ${summary.usageMissing} call(s) reported no usage. ` +
+              `Token totals above are short by that many calls.`,
+          );
+        }
         console.log(
           `Prompt cache hit rate: ${hitRate}%   Estimated cost: $${summary.estimatedCostUsd.toFixed(4)} ` +
             `($${(summary.estimatedCostUsd / summary.analyzed).toFixed(4)}/job)`,
@@ -290,6 +300,7 @@ program
 
       let pack: ApplicationPack;
       let usage: Awaited<ReturnType<typeof prepareApplication>>["usage"] | null = null;
+      let usageMissing = false;
       if (reuse.reuse && saved) {
         log.info(reuse.why);
         pack = saved;
@@ -305,6 +316,7 @@ program
         });
         pack = fresh.pack;
         usage = fresh.usage;
+        usageMissing = fresh.usageMissing;
         writeStamp(packDir(job), "pack", {
           descriptionHash: job.descriptionHash,
           resumeHash: hashFile(resumePath()),
@@ -383,7 +395,14 @@ program
         dir,
         reused: !usage,
         ...overrodeVerdict,
-        ...(usage ? { ...usage, estimatedCostUsd: estimateCostUsd(usage, packModel) } : { estimatedCostUsd: 0 }),
+        // One envelope under one key, so a single SQL query can total tokens
+        // across every command that spends. Reuse writes zeros rather than
+        // omitting the key: a missing envelope and a free run should not look
+        // the same to whatever reads this later.
+        jobId: job.id,
+        usage: usage ?? emptyUsage(),
+        ...(usageMissing ? { usageMissing: 1 } : {}),
+        estimatedCostUsd: usage ? estimateCostUsd(usage, packModel) : 0,
       };
     });
   });
@@ -585,6 +604,7 @@ resumeCmd
       let violations: Awaited<ReturnType<typeof tailorResume>>["violations"];
       let reverted: Awaited<ReturnType<typeof tailorResume>>["reverted"];
       let usage: Awaited<ReturnType<typeof tailorResume>>["usage"] | null = null;
+      let usageMissing = false;
 
       if (reuse.reuse && savedPlan?.success) {
         log.info(reuse.why);
@@ -600,6 +620,7 @@ resumeCmd
           effort: opts.effort ?? "high",
         });
         ({ plan, violations, reverted, usage } = fresh);
+        usageMissing = fresh.usageMissing;
       }
 
       const composed = composeResume(resume, plan);
@@ -677,7 +698,11 @@ resumeCmd
         dir,
         reused: !usage,
         ...overrodeVerdict,
-        ...(usage ? { ...usage, estimatedCostUsd: estimateCostUsd(usage, tailorModel) } : { estimatedCostUsd: 0 }),
+        // See `apply`: one envelope, one key, always present.
+        jobId: job.id,
+        usage: usage ?? emptyUsage(),
+        ...(usageMissing ? { usageMissing: 1 } : {}),
+        estimatedCostUsd: usage ? estimateCostUsd(usage, tailorModel) : 0,
       };
     });
   });
@@ -2196,6 +2221,7 @@ program
     } else {
       for (const d of dropped) console.log(`Dropped ${d}`);
     }
+    for (const c of applyDataCleanups(db)) console.log(c);
 
     // VACUUM rewrites the file to reclaim the freed pages. Dropping a column
     // alone frees nothing on disk. It cannot run inside a transaction, which

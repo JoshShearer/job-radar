@@ -6,6 +6,7 @@ import type { Resume } from "./schema.js";
 import { allBullets } from "./schema.js";
 import type { MatchReport } from "./requirements.js";
 import { buildVocabulary, checkRewrite, checkSelection, type Violation } from "./provenance.js";
+import { readUsage, type TokenUsage } from "../lib/cost.js";
 
 /**
  * Tailoring: choose which of the candidate's real bullets to show, in what
@@ -99,7 +100,9 @@ export interface TailorResult {
   violations: Violation[];
   /** Rewrites that failed provenance and were reverted to the master wording. */
   reverted: string[];
-  usage: { input: number; cacheWrite: number; cacheRead: number; output: number };
+  usage: TokenUsage;
+  /** The call was billed but reported no usage. Counted, never thrown on. */
+  usageMissing: boolean;
 }
 
 export async function tailorResume(
@@ -194,17 +197,8 @@ Return only the structured object.`;
   const plan = parsed.data;
   const { violations, reverted } = enforceProvenance(resume, plan);
 
-  return {
-    plan,
-    violations,
-    reverted,
-    usage: {
-      input: response.usage.input_tokens,
-      cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
-      cacheRead: response.usage.cache_read_input_tokens ?? 0,
-      output: response.usage.output_tokens,
-    },
-  };
+  const reading = readUsage(response, `resume tailor ${job.id}`);
+  return { plan, violations, reverted, usage: reading.usage, usageMissing: reading.missing };
 }
 
 /**

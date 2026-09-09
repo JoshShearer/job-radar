@@ -138,10 +138,10 @@ export async function benchmarkTriage(
         laneKeys,
         "triage",
       );
-      input += r.inputTokens;
-      cacheWrite += r.cacheCreationTokens;
-      cacheRead += r.cacheReadTokens;
-      output += r.outputTokens;
+      input += r.usage.input;
+      cacheWrite += r.usage.cacheWrite ?? 0;
+      cacheRead += r.usage.cacheRead ?? 0;
+      output += r.usage.output;
 
       // BOTH metric families are computed on every run, whatever the mode.
       // The calls are the expensive part; having made them, refusing to answer
