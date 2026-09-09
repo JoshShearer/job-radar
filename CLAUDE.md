@@ -26,6 +26,12 @@ Checkboxes are never ticked. When a dropdown match is not confident, leave it bl
 
 **Remote OK attribution is a condition of use.** Their API terms require a followed link back and naming them as the source. `src/report/daily.ts` emits it. If that attribution is removed, disable the source rather than violating the terms.
 
+## Schema migrations
+
+`applyColumnMigrations` is **additive only** and runs from `openDb()`, on the hot path of every command and every test. A migration entry may carry a one-time `backfill` that fires only on the pass that creates the column.
+
+Anything destructive lives in `applyDestructiveMigrations` and runs **only** from `job-radar migrate`, never automatically. That command backs up first and verifies the copy's byte size before dropping anything — a truncated backup is worse than none, because it looks like one. `VACUUM` cannot run inside a transaction, which is the other reason this is a command rather than part of startup.
+
 ## Determinism boundary
 
 Use **deterministic code** for: deduplication, salary parsing, date parsing, location classification, seniority classification, schema validation, hard filters, scoring arithmetic.
@@ -39,13 +45,19 @@ If you find yourself reaching for a model to compare two strings or add up weigh
 The `analyze` stage is the only thing that costs money. Preserve all four mechanisms:
 
 1. Deterministic prefilters gate eligibility (`filter_passed`), and selection takes the top K by **rank**
-2. Content-addressed cache keyed on description + title + company + model + profile
+2. Content-addressed cache keyed on material hash + title + company + model + evidence + tier
 3. Prompt caching on the stable system prefix (`cache_control: ephemeral`)
 4. Truncated description budget
 
+Two-tier analysis (`analysis_detail.two_stage`) is **on** as of 2026-09-09, enabled on a measured routing benchmark: 0 missed dossiers across 45 dossier-routing baselines. It is a router, not a replacement — the verdict-accuracy bar still fails at 88.9% against 92%, and that finding stands. Note that the predicted cost saving is **not yet observed**: the first two-stage pass measured $0.0474/job against a $0.0459/job single-stage baseline. Treat the saving as unproven until several daily passes say otherwise.
+
 `analysis_threshold` used to be mechanism 1 and was retired in JOB-32. It gated on an absolute keyword score whose mean absolute error against the analyst is 26.6 points, and whose hit rate is not monotonic through the middle of its range. Spend is now bounded *directly* by `--limit` and `max_spend_per_run_usd` instead of by proxy, and eligibility by the filters, which encode constraints that are actually real. Do not reintroduce an absolute fit gate as a spend control; if a pass needs a floor, that is `--min-fit` for that pass.
 
-Never re-analyze an unchanged job. If a description changes, `repo.upsert` already invalidates the cached analysis and score — keep that behavior.
+Never re-analyze an unchanged job. If a description changes **materially**, `repo.upsert` invalidates the cached analysis and score — keep that behavior.
+
+"Materially" is the mechanism, not a hedge (JOB-44). `descriptionHash` is byte-level and still drives `job_events`, so change history stays exact; `materialHash` — a sorted token multiset — drives invalidation, because a board re-rendering the same words in a different order is not a new posting. Byte-level invalidation is what gave the cache 3 lifetime hits on 430 rows. The normalizer is biased toward calling a change material: a false "material" costs $0.046, a false "immaterial" serves a verdict formed against text that no longer exists. Do not add stopword stripping, stemming, or anything else that widens what counts as immaterial without measuring it against the whole index first.
+
+The cache key is `(materialHash, title, company, model, evidenceVersion, tier)`. `evidenceVersion` hashes the system prompt plus the **calibration-stable** half of the deterministic note; `fitScore` and `applicationRoi` are deliberately excluded, because `project()` rewrites exactly those on every scoring run and hashing them would invalidate the cache continuously. `tier` separates a triage stub from a dossier — without it the stub is served forever to the pass trying to buy the dossier.
 
 The same rule applies to the two per-job documents. `resume tailor` and `apply` reuse a saved `resume-plan.json` / `pack.json` rather than calling the model again, keyed on the stamps in `applications/<job>/generation.json` (`src/apply/reuse.ts`). A changed **posting** regenerates; a changed **master resume** reuses and says so, because `enforceProvenance` re-checks every citation on render, so a stale plan can miss new bullets but can never become a false one. `--force` regenerates deliberately.
 
@@ -75,7 +87,7 @@ Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds`
 
 ## Verification
 
-Before claiming anything works: `npm test` (489 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
+Before claiming anything works: `npm test` (902 tests) and `npm run typecheck` must both pass, and the relevant command must actually be run. Endpoint availability is verified against the live host, never assumed — board tokens in `config/sources.yaml` were each confirmed to return HTTP 200 with a non-empty job list.
 
 `npm test` launches a real Chromium. `tests/autofill.browser.test.ts` drives a saved application form from `file://` and asserts the refusals in `src/apply/` — no checkbox ticked, no attestation affirmed, no demographic question answered, submit never clicked, each combobox reading only its own listbox. It needs `npx playwright install chromium`, and it **fails loudly** rather than skipping when the browser is missing: a refusal test that quietly disappears leaves the suite green on a machine where nothing was checked.
 
