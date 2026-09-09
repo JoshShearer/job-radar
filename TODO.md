@@ -104,6 +104,66 @@ answering the question. Below ~15 applications it says so itself.
 
 ---
 
+## Shipped 2026-09-09 — the efficiency batch (JOB-39 … JOB-45)
+
+From `docs/EFFICIENCY_IMPLEMENTATION_PLAN.md`. All seven merged.
+
+- [x] **Warn before preparing an application the analyst said to skip** (JOB-39) — done.
+  `resume tailor` and `apply` read the standing verdict before spending and stop on an
+  unendorsed posting, quoting the analyst's own reasoning. `--override` proceeds and records
+  `overrodeVerdict` on the run. Never hard-blocks; the autofill report carries the verdict
+  into the last document read before submitting. 22 of 43 past applications would have been
+  flagged.
+- [x] **Make the two-stage analysis path safe to enable** (JOB-40) — done. The cache key
+  gained a `tier`, so a triage stub and a dossier can no longer collide; `interviewProbability`
+  and `competitionEstimate` are nullable and render as `not assessed (triage only)` instead of
+  a fabricated `0% / moderate`; the application-pack prompt says it has no dossier rather than
+  asserting empty strengths.
+- [x] **Benchmark triage as a router, then switch two-tier on** (JOB-41) — done.
+  `benchmark-triage --mode routing` measures whether triage can decide *who earns* a dossier,
+  which is what the code actually uses it for. Measured 0 missed dossiers across 45 baselines
+  → `two_stage: true`. The verdict-accuracy question still fails (88.9% vs a 92% bar) and that
+  finding stands.
+- [x] **Drop the unread `description_raw` column** (JOB-42) — done. 254 MB → 130 MB. A
+  separate `applyDestructiveMigrations` runs only from the new `job-radar migrate`, which backs
+  up and verifies the copy's size first. `applyColumnMigrations` stays additive-only.
+- [x] **One usage envelope on every paid call, with jobId** (JOB-43) — done. `readUsage` is the
+  single chokepoint; one `usage` key across every command that spends, so one SQL query totals
+  tokens. A response with no usage is flagged and counted, never thrown on — throwing would
+  consume one of the job's two analysis attempts. Purged 1,098 runaway dashboard run rows.
+- [x] **Repair the analysis cache** (JOB-44) — done. Was 3 lifetime hits on 430 rows. The key
+  now uses `materialHash` (order-independent token multiset) instead of a byte hash, and
+  `evidenceVersion` instead of the whole profile. Measured across 13,615 real descriptions:
+  every cosmetic perturbation tested is now stable where the byte hash changed on all of them.
+- [x] **Dossier on intent, triage on the slate** (JOB-45) — done. `analyze --slate` selects
+  379 jobs against 10 for the default pass. The dossier fetch hangs off the JOB-39 gate rather
+  than a second place that decides whether to spend. See the follow-on below.
+
+### Follow-on work this batch revealed
+
+- [ ] **The dossier-on-intent path is currently unreachable.** `dossier_for` is
+  `[apply_and_outreach, apply, network_or_watch]`, a superset of the verdicts that endorse
+  applying — so every endorsed job already gets its dossier during the `analyze` pass and the
+  gate's fetch can never fire. Confirmed: 0 such jobs exist in the index and none can.
+  Completing JOB-45's intent means narrowing `dossier_for` so triage runs wide and the dossier
+  really is bought on intent. That is its own change and needs its own measurement — narrowing
+  it invalidates the routing benchmark, which measured against the current policy.
+- [ ] **The two-tier cost saving is unproven.** JOB-41 projected ~$0.046/job → ~$0.020/job. The
+  first two-tier pass measured **$0.0474/job against a $0.0459/job single-stage baseline** — no
+  reduction. Two of six jobs earned dossiers and pay for both calls, and the `dossier_min_fit:
+  70` safety valve fired more often than the ticket's model assumed (it predicted 1 in 263
+  skips). Judge over several daily passes before counting the saving.
+- [ ] **The analysis cache hit rate is not yet observable.** Both JOB-40 and JOB-44 changed the
+  key, so the existing rows were invalidated once by design. Check `analysis_cache` against
+  `fromCache` in run stats after a week of daily passes.
+- [ ] **`analyzedSample` draws only from already-analyzed jobs**, which passed the old top-K
+  selection. Under `--slate`, triage runs across a broader, lower-ranked pool the routing gate
+  has never seen.
+- [ ] **A single `--slate` pass covers 379 of 1,075 eligible**, capped by the per-company
+  diversity limits. Successive daily passes drain the rest; there is no one-shot backfill.
+
+---
+
 ## Known limitations of the current build
 
 - **Company size is proxied by open-role count in the index.** Real, cheap, and
@@ -117,8 +177,10 @@ answering the question. Below ~15 applications it says so itself.
 - ~~**The scoring `analysis_threshold` gate is a blunt cost control.**~~ Fixed in
   JOB-32: the gate is retired and `analyze` selects the top K by rank. Spend is
   bounded by `--limit` and `max_spend_per_run_usd`.
-- **No retry queue for failed analyses.** A failure is logged and skipped; the
-  next run retries it because nothing was cached.
+- ~~**No retry queue for failed analyses.**~~ Fixed in JOB-34: the failure kind and
+  reason are recorded, and a job that has failed `analysis_max_attempts` times is not
+  bought again. A materially changed description clears the record and earns a fresh
+  pair of attempts (JOB-44).
 - **Lever `salaryRange` is mapped but was null on every board tested**, so that
   path is implemented against the documented shape rather than an observed one.
 - **Calibration corrects the symptom, not the cause.** The measured 0.75x

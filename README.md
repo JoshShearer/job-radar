@@ -223,6 +223,8 @@ npm run cli -- ingest --source ashby lever # restrict to specific sources
 npm run cli -- score                       # re-filter and re-score everything
 npm run cli -- analyze --limit 10          # Claude analysis on the top unanalyzed jobs
 npm run cli -- analyze --dry-run           # show what would be analyzed, no API calls
+npm run cli -- analyze --slate             # triage the whole eligible slate, not the top N
+npm run cli -- benchmark-triage --mode routing --limit 45 --yes   # can triage decide who earns a dossier?
 npm run cli -- daily                       # ingest + score + briefing  (= npm run radar)
 npm run cli -- daily --no-ingest           # re-report on stored data
 npm run cli -- daily --analyze             # full pass including the LLM stage
@@ -234,6 +236,7 @@ npm run cli -- resume init                 # scaffold a master from career-profi
 npm run cli -- resume lint                 # check the master before trusting it
 npm run cli -- resume match <job-id>       # deterministic requirement overlap, no API call
 npm run cli -- resume tailor <job-id>      # job-specific resume + PDF, selected from the master
+npm run cli -- resume tailor <job-id> --override  # prepare anyway when the analyst said skip
 npm run cli -- apply <job-id> --open       # prepare an application pack (never submits)
 npm run cli -- autofill <job-id>           # fill the real form in a browser (never submits)
 npm run cli -- autofill <job-id> --headless # dry run: report what it would fill, no window
@@ -246,6 +249,7 @@ npm run cli -- sources                     # health-check every board
 npm run cli -- open                        # open the dashboard
 npm run cli -- open --briefing             # open today's slate instead
 npm run cli -- dashboard                   # rebuild the dashboard from the database
+npm run cli -- migrate                     # back up, drop dead columns, vacuum (destructive)
 npm run serve                              # local briefing archive (127.0.0.1 only)
 npm run dev                                # the same server, rebuilding as you edit
 npm run cli -- discover "Back Market" Ramp # find a company's ATS board, print the config line
@@ -360,6 +364,10 @@ Output includes fit, ROI, lane, recommendation, strengths, risks, missing requir
 
 Measured on a real run of 28 jobs with `claude-opus-5` at `medium` effort: **100% prompt-cache hit rate, ~$0.048/job.** `analyze` reports uncached / cache-write / cache-read / output tokens separately and warns if the cache is never read, since caching is what makes analyzing a large slate affordable.
 
+**Two-tier analysis is on** as of 2026-09-09 (`analysis_detail.two_stage`). A cheap triage verdict runs first and only jobs that earn one get the full dossier, decided deterministically by `deservesDossier`. It was enabled on a routing benchmark — `benchmark-triage --mode routing --limit 45 --yes` — that measured **0 missed dossiers across 45 baselines**. Triage is a *router*, not a replacement: the verdict-accuracy bar still fails at 88.9% against 92%, so triage alone is not trusted to reach the final verdict.
+
+**The predicted cost saving has not yet appeared.** The first two-tier pass measured **$0.0474/job against a $0.0459/job single-stage baseline** — no reduction. Two of six jobs earned dossiers and those pay for both calls. Six jobs is a small sample, so this is not evidence the change is wrong; it is a reason not to record a projected saving as an achieved one until several daily passes have run.
+
 ### The analysis overrules the keyword engine
 
 Where the two layers disagree, the analysis wins — `reconcileWithAnalysis` maps its recommendation onto priority and blends ROI 70/30 toward it.
@@ -443,6 +451,35 @@ That middle state is the whole point. On the Vercel role, *"Have contributed to 
 Applied to the Vercel posting, this moved required coverage from a flattering number to an honest **24%**, and reproduced the same do-not-claim list the paid analysis produced, for free.
 
 `resume tailor` writes `resume.md`, `resume.html`, `resume.pdf`, and `resume-match.md` into the job's folder. **`autofill` attaches that PDF automatically**, preferring it over anything generic in `resumes/`.
+
+---
+
+## The verdict gate
+
+Both commands that spend — `resume tailor` and `apply` — read the standing analysis before
+calling a model, and stop on a posting the analyst did not endorse:
+
+```
+Vercel - DevRel Engineer, Agentic Infrastructure is not endorsed: the analyst said skip (fit 38).
+Its reasoning: The keyword engine scored this 57/60 on string matches for TypeScript, Next.js,
+Vercel and 'agentic', but it misread the role: this is Developer Relations,...
+
+Nothing was spent. If you disagree - and you may well be right:
+  npm run cli -- resume tailor 139d9f2720b7 --override
+```
+
+This exists because 22 of the first 43 applications were prepared against a standing `skip` or
+`network_or_watch` verdict. The tool had already formed the judgement, printed it in the
+briefing, and then sold the full package anyway without a word of friction.
+
+**It never hard-blocks.** The human outranks the analyst, and the reason for the gate is to
+make the disagreement visible at the moment money would be spent — not to overrule you.
+`--override` proceeds and records `overrodeVerdict` on the run, so the disagreement is
+deliberate and auditable. The reason line is the analyst's own words, truncated on a word
+boundary, never re-summarised.
+
+A job that has **not been analyzed** warns rather than refusing: there is no verdict to
+disagree with, and the only way to satisfy such a gate would be to spend on an analysis.
 
 ---
 
@@ -579,7 +616,7 @@ Three details in the unit that are load-bearing rather than boilerplate:
 
 - **The backup runs first, then the pass.** If a run corrupts something or a migration goes wrong, the copy taken moments earlier is the one you want. Backing up afterwards preserves the damage.
 - **`Persistent=true`.** Laptops are asleep at 07:15. Without it the run is silently skipped and the index quietly goes stale, which is the exact failure the schedule exists to prevent.
-- **`backup --keep 14`.** The database is 238MB. A daily copy with no retention is about 7GB a month, on the same disk as the thing being protected.
+- **`backup --keep 14`.** The database is 130MB (254MB before `migrate` dropped the unread `description_raw` column on 2026-09-09). A daily copy with no retention is several GB a month, on the same disk as the thing being protected.
 
 **The scheduled pass does not call the API.** `--analyze` is deliberately absent from the unit, so the schedule costs nothing: ingest, score, the GHOSTED sweep and the briefing are all free. To turn paid analysis on, add `-- --analyze` to the second `ExecStart` and `systemctl --user daemon-reload`. Spend is then bounded by `scoring.max_spend_per_run_usd`, checked *before* the call that would cross it, so an unattended run cannot cost more than that ceiling however many jobs arrived overnight — a ~$45/month worst case at the default $1.50.
 
@@ -687,7 +724,7 @@ External services are mocked. The suite runs offline in under a second.
 
 **Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
 
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, a fixture-driven regression harness for the autofill browser layer, answers learned from the browser and reused, 489 tests.
+Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, a fixture-driven regression harness for the autofill browser layer, answers learned from the browser and reused, 902 tests.
 
 A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
 
