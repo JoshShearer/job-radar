@@ -1,7 +1,7 @@
 import type { DB } from "./index.js";
 import { nowIso } from "./index.js";
 import { canonicalUrl, normalizeForIdentity, sha256 } from "../lib/hash.js";
-import type { Analysis, EnrichedJob, FilterResult, NormalizedJob, ScoreResult } from "../model/job.js";
+import type { Analysis, AnalysisTier, EnrichedJob, FilterResult, NormalizedJob, ScoreResult } from "../model/job.js";
 import type { Period } from "../lib/salary.js";
 import type { RemoteStatus } from "../lib/location.js";
 import type { EmploymentType, SeniorityLevel } from "../lib/seniority.js";
@@ -1101,8 +1101,28 @@ export class JobRepo {
 
   // ---- Analysis cache -----------------------------------------------------
 
-  cacheKey(descriptionHash: string, title: string, company: string, model: string, profileVersion: string): string {
-    return sha256([descriptionHash, title, company, model, profileVersion].join("|"));
+  /**
+   * The content address of one analysis.
+   *
+   * `tier` is part of the key, not decoration. Without it a cheap triage stub
+   * and a full dossier for the same posting collide on one row: the two-stage
+   * pass writes the stub, and every later read - including one that wants the
+   * dossier - gets the stub back forever. That defect was latent only because
+   * `two_stage` had never been switched on.
+   *
+   * Adding `tier` changes every existing key, so the pre-existing cache rows
+   * are invalidated once. That is cheap here: the lifetime hit rate is 0.7%
+   * (3 hits on 430 rows) and 89 of those rows are already orphaned.
+   */
+  cacheKey(
+    descriptionHash: string,
+    title: string,
+    company: string,
+    model: string,
+    profileVersion: string,
+    tier: AnalysisTier,
+  ): string {
+    return sha256([descriptionHash, title, company, model, profileVersion, tier].join("|"));
   }
 
   getCachedAnalysis(key: string): Analysis | null {
@@ -1122,15 +1142,28 @@ export class JobRepo {
     descriptionHash: string,
     model: string,
     analysis: Analysis,
-    usage: { input?: number; output?: number } = {},
+    usage: { input?: number; output?: number },
+    // Required, deliberately. A default of "full" would mean a caller that
+    // forgets it silently files a triage stub under the dossier's tier - which
+    // is defect 1 all over again, and just as invisible.
+    tier: AnalysisTier,
   ): void {
     this.db
       .prepare(
-        `INSERT INTO analysis_cache (cache_key, description_hash, model, analysis_json, input_tokens, output_tokens, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(cache_key) DO UPDATE SET analysis_json = excluded.analysis_json`,
+        `INSERT INTO analysis_cache (cache_key, description_hash, model, analysis_json, input_tokens, output_tokens, created_at, tier)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(cache_key) DO UPDATE SET analysis_json = excluded.analysis_json, tier = excluded.tier`,
       )
-      .run(key, descriptionHash, model, JSON.stringify(analysis), usage.input ?? null, usage.output ?? null, nowIso());
+      .run(
+        key,
+        descriptionHash,
+        model,
+        JSON.stringify(analysis),
+        usage.input ?? null,
+        usage.output ?? null,
+        nowIso(),
+        tier,
+      );
   }
 
   // ---- Runs ---------------------------------------------------------------

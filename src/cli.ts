@@ -1523,7 +1523,11 @@ program
         console.log("CLAUDE ANALYSIS");
         console.log("-".repeat(96));
         console.log(`Fit ${a.fitScore} | ROI ${a.applicationRoi} | ${a.recommendation.replace(/_/g, " ")}`);
-        console.log(`Interview probability ${a.interviewProbability}% | competition ${a.competitionEstimate}`);
+        console.log(
+          a.interviewProbability === null || a.competitionEstimate === null
+            ? `Interview probability not assessed (triage only)`
+            : `Interview probability ${a.interviewProbability}% | competition ${a.competitionEstimate}`,
+        );
         console.log("");
         console.log(a.reasoningSummary);
         console.log("");

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { deservesDossier, dossierReason } from "../src/analysis/detail.js";
 import { buildTriageJsonSchema, buildAnalysisJsonSchema, TRIAGE_FIELDS } from "../src/analysis/schema.js";
-import { triageSchemaFor, triageOnlyAnalysis, analysisSchemaFor } from "../src/model/job.js";
+import { triageSchemaFor, triageOnlyAnalysis, analysisSchemaFor, isTriageOnly, AnalysisSchema } from "../src/model/job.js";
 
 const LANES = ["full_stack", "solutions_eng"];
 const POLICY = { recommendations: ["apply_and_outreach", "apply", "network_or_watch"], minFit: 70 };
@@ -116,7 +116,34 @@ describe("triageOnlyAnalysis", () => {
     expect(a.reasoningSummary).toBe("One sentence.");
   });
 
-  it("still passes the full schema, so nothing malformed reaches the database", () => {
-    expect(analysisSchemaFor(LANES).safeParse(triageOnlyAnalysis(verdict())).success).toBe(true);
+  it("does not assess the two dossier scalars, rather than inventing them", () => {
+    // It used to answer 0 and "moderate", which rendered to a human as
+    // "Interview probability 0% | competition moderate" - a hardcoded constant
+    // presented as an analyst's conclusion.
+    const a = triageOnlyAnalysis(verdict());
+    expect(a.interviewProbability).toBeNull();
+    expect(a.competitionEstimate).toBeNull();
+    expect(isTriageOnly(a)).toBe(true);
+  });
+
+  it("is well-formed for storage, so nothing malformed reaches the database", () => {
+    expect(AnalysisSchema.safeParse(triageOnlyAnalysis(verdict())).success).toBe(true);
+  });
+
+  it("is rejected as a FULL response, because a dossier that answers null did not do the job", () => {
+    // The storage shape and the full-response shape are different questions.
+    // A stub stores fine; a full call that came back without these has failed.
+    expect(analysisSchemaFor(LANES).safeParse(triageOnlyAnalysis(verdict())).success).toBe(false);
+  });
+
+  it("still rejects a full response that omits the key entirely", () => {
+    // `.nullable()` and not `.optional()` is what preserves this: on Zod 4.4.3
+    // a nullable field still requires the key to be present.
+    const full = { ...triageOnlyAnalysis(verdict()), interviewProbability: 40, competitionEstimate: "high" };
+    const { strengths: _dropped, ...missingStrengths } = full;
+    expect(analysisSchemaFor(LANES).safeParse(missingStrengths).success).toBe(false);
+
+    const { interviewProbability: _p, ...missingProbability } = full;
+    expect(analysisSchemaFor(LANES).safeParse(missingProbability).success).toBe(false);
   });
 });

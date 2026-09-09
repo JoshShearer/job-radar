@@ -125,13 +125,18 @@ CREATE INDEX IF NOT EXISTS idx_events_type ON job_events(event_type);
 -- Cache of LLM analyses keyed by content, so unchanged jobs are never
 -- re-analyzed and re-paid for.
 CREATE TABLE IF NOT EXISTS analysis_cache (
-  cache_key        TEXT PRIMARY KEY,  -- hash(description_hash + title + company + model + profile_version)
+  cache_key        TEXT PRIMARY KEY,  -- hash(description_hash + title + company + model + profile_version + tier)
   description_hash TEXT NOT NULL,
   model            TEXT NOT NULL,
   analysis_json    TEXT NOT NULL,
   input_tokens     INTEGER,
   output_tokens    INTEGER,
-  created_at       TEXT NOT NULL
+  created_at       TEXT NOT NULL,
+  -- 'triage' (cheap verdict) or 'full' (verdict + dossier). Defaulting to
+  -- 'full' is provable rather than assumed: every row predates the two-stage
+  -- flag, and SUM(json_extract(stats_json,'$.triageOnly')) over the whole runs
+  -- table is 0 lifetime.
+  tier             TEXT NOT NULL DEFAULT 'full'
 );
 
 -- Interview intelligence: one row per stage of one process.

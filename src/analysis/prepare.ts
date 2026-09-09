@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CareerProfile } from "../config/schema.js";
-import type { EnrichedJob } from "../model/job.js";
+import type { Analysis, EnrichedJob } from "../model/job.js";
+import { isTriageOnly } from "../model/job.js";
 import { ApplicationPackSchema, applicationJsonSchema, type ApplicationPack } from "./application.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateWords } from "../lib/html.js";
@@ -22,6 +23,34 @@ export const APPLICATIONS_DIR = resolve(PROJECT_ROOT, "applications");
  *
  * That boundary is the point of the whole system, not a limitation of it.
  */
+/**
+ * What the pack model is told about the standing analysis.
+ *
+ * Three ways, not two. A triage-only analysis has a real verdict but an EMPTY
+ * dossier, and the two-way form read those empty fields out as fact - telling
+ * the model "Strengths:" with nothing after it, in the prompt that writes a
+ * document a human sends. An absent dossier has to say it is absent; asserting
+ * empty strengths is a claim, and a false one.
+ *
+ * Extracted so it can be tested without making a paid call.
+ */
+export function describePriorAnalysis(analysis: Analysis | null): string {
+  if (!analysis) return "No prior analysis - work from the posting alone.";
+
+  const verdict = `Fit ${analysis.fitScore} / ROI ${analysis.applicationRoi} / ${analysis.recommendation}`;
+  if (isTriageOnly(analysis)) {
+    return [verdict, "No dossier yet - triage only. Work from the posting."].join("\n");
+  }
+  return [
+    verdict,
+    `Differentiation: ${analysis.differentiation}`,
+    `Strengths: ${analysis.strengths.join(" | ")}`,
+    `Risks: ${analysis.risks.join(" | ")}`,
+    `Missing: ${analysis.missingRequirements.join(" | ")}`,
+    `Compensation: ${analysis.salaryReasoning}`,
+  ].join("\n");
+}
+
 export async function prepareApplication(
   job: EnrichedJob,
   profile: CareerProfile,
@@ -42,16 +71,7 @@ export async function prepareApplication(
     raw: null,
   });
 
-  const priorAnalysis = analysis
-    ? [
-        `Fit ${analysis.fitScore} / ROI ${analysis.applicationRoi} / ${analysis.recommendation}`,
-        `Differentiation: ${analysis.differentiation}`,
-        `Strengths: ${analysis.strengths.join(" | ")}`,
-        `Risks: ${analysis.risks.join(" | ")}`,
-        `Missing: ${analysis.missingRequirements.join(" | ")}`,
-        `Compensation: ${analysis.salaryReasoning}`,
-      ].join("\n")
-    : "No prior analysis - work from the posting alone.";
+  const priorAnalysis = describePriorAnalysis(analysis);
 
   const userPrompt = `You are preparing an application package. It will be read and edited by the candidate, then submitted BY HIM. Nothing you write is sent anywhere automatically.
 

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CareerProfile } from "../config/schema.js";
-import type { Analysis, EnrichedJob } from "../model/job.js";
-import { analysisSchemaFor, triageSchemaFor, triageOnlyAnalysis, type TriageVerdict } from "../model/job.js";
+import type { Analysis, AnalysisTier, EnrichedJob } from "../model/job.js";
+import { analysisSchemaFor, isTriageOnly, triageSchemaFor, triageOnlyAnalysis, type TriageVerdict } from "../model/job.js";
 import type { JobRepo } from "../db/repo.js";
 import { buildAnalysisJsonSchema, buildTriageJsonSchema } from "./schema.js";
 import { buildSystemPrompt, buildUserPrompt } from "./prompt.js";
@@ -10,7 +10,7 @@ import { log } from "../lib/log.js";
 
 import { estimateCostUsd, PRICING } from "../lib/cost.js";
 import { classifyAnalysisFailure, countsAgainstJob } from "./failures.js";
-import { deservesDossier } from "./detail.js";
+import { deservesDossier, type DossierPolicy } from "./detail.js";
 
 export const DEFAULT_MODEL = "claude-opus-5";
 
@@ -104,6 +104,46 @@ export interface AnalyzeSummary {
  *     after the first call in a run.
  *   - Descriptions are truncated to a fixed budget.
  */
+/**
+ * The best cached analysis that actually answers what this pass is asking for.
+ *
+ * Not a plain key lookup, because what the pass is asking for depends on a
+ * verdict it has not computed yet:
+ *
+ * - A full dossier always satisfies a pass, in either mode. Take it.
+ * - Single-stage mode wants a dossier and nothing less, so a triage stub is a
+ *   miss even when one exists.
+ * - Two-stage mode wants a dossier only for the jobs that earn one. A stored
+ *   stub IS the verdict that decides that, so it can answer the question
+ *   itself: a stub that does not earn a dossier is the complete and correct
+ *   result, and this job is free. A stub that DOES earn one is not the answer
+ *   - the dossier is - so it counts as a miss.
+ *
+ * Getting that last case wrong is how a stub becomes permanent: it would be
+ * served forever to a pass that was trying to buy the dossier.
+ */
+export function cachedAnalysisFor(
+  repo: JobRepo,
+  job: EnrichedJob,
+  model: string,
+  profileVersion: string,
+  twoStage: boolean,
+  dossierPolicy: DossierPolicy,
+): Analysis | null {
+  const at = (tier: AnalysisTier): Analysis | null =>
+    repo.getCachedAnalysis(repo.cacheKey(job.descriptionHash, job.title, job.company, model, profileVersion, tier));
+
+  const full = at("full");
+  if (full) return full;
+  if (!twoStage) return null;
+
+  const stub = at("triage");
+  if (!stub) return null;
+  // A stored stub carries every field `deservesDossier` reads, so the routing
+  // decision here is the one the live pass would make - for free.
+  return deservesDossier(stub, dossierPolicy) ? null : stub;
+}
+
 export async function runAnalysis(
   repo: JobRepo,
   profile: CareerProfile,
@@ -182,8 +222,7 @@ export async function runAnalysis(
   // Serve everything we can from cache before touching the network at all.
   const needsCall: EnrichedJob[] = [];
   for (const job of candidates) {
-    const key = repo.cacheKey(job.descriptionHash, job.title, job.company, opts.model, profileVersion);
-    const cached = repo.getCachedAnalysis(key);
+    const cached = cachedAnalysisFor(repo, job, opts.model, profileVersion, twoStage, dossierPolicy);
     if (cached) {
       repo.saveAnalysis(job.id, cached, opts.model);
       summary.fromCache++;
@@ -266,11 +305,25 @@ export async function runAnalysis(
         result = await analyzeOne(client, systemPrompt, job, opts, laneKeys);
       }
       repo.saveAnalysis(job.id, result.analysis, opts.model);
-      const key = repo.cacheKey(job.descriptionHash, job.title, job.company, opts.model, profileVersion);
-      repo.putCachedAnalysis(key, job.descriptionHash, opts.model, result.analysis, {
-        input: result.inputTokens,
-        output: result.outputTokens,
-      });
+      // Stored under the tier actually produced. Writing a triage stub under
+      // the dossier's key is defect 1 of JOB-40: every later read gets the stub.
+      const producedTier: AnalysisTier = isTriageOnly(result.analysis) ? "triage" : "full";
+      const key = repo.cacheKey(
+        job.descriptionHash,
+        job.title,
+        job.company,
+        opts.model,
+        profileVersion,
+        producedTier,
+      );
+      repo.putCachedAnalysis(
+        key,
+        job.descriptionHash,
+        opts.model,
+        result.analysis,
+        { input: result.inputTokens, output: result.outputTokens },
+        producedTier,
+      );
 
       summary.analyzed++;
       summary.inputTokens += result.inputTokens;
