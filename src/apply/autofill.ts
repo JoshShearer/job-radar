@@ -7,6 +7,7 @@ import { closedPostingMarker } from "../model/freshness.js";
 import type { Resume } from "../resume/schema.js";
 import type { Personal } from "../config/personal.js";
 import type { ApplicationPack } from "../analysis/application.js";
+import { describeVerdict, endorsementOf } from "../analysis/endorsement.js";
 import type { EnrichedJob } from "../model/job.js";
 import { log } from "../lib/log.js";
 import {
@@ -1107,6 +1108,7 @@ function stamp(): string {
 /** Human-readable summary of what happened. */
 export function renderOutcomes(job: EnrichedJob, result: AutofillResult): string {
   const L: string[] = [];
+  const endorsement = endorsementOf(job);
   const filled = result.outcomes.filter((o) => o.status === "filled");
   const needs = result.outcomes.filter((o) => o.status === "needs-you");
   const skipped = result.outcomes.filter((o) => o.status === "skipped");
@@ -1117,9 +1119,19 @@ export function renderOutcomes(job: EnrichedJob, result: AutofillResult): string
   L.push(`Form   : ${result.url}`);
   L.push(`Filled : ${filled.length}`);
   L.push(`For you: ${needs.length}`);
+  L.push(`Verdict: ${describeVerdict(endorsement)}`);
   L.push(`Status : NOT SUBMITTED - the submit button was never touched`);
   L.push("```");
   L.push("");
+
+  // The verdict travels with the filled form, so the person reviewing it before
+  // hitting submit sees the same judgement `apply` would have gated on. This
+  // report is the last thing read before a human commits to the application.
+  if (endorsement.tier === "unendorsed") {
+    L.push(`> **The analyst did not endorse this application.** It said ${endorsement.verdict}.`);
+    if (endorsement.reason) L.push(`> Its reasoning: ${endorsement.reason}`);
+    L.push("");
+  }
 
   if (needs.length) {
     L.push("## You need to handle these");
