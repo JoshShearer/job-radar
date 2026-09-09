@@ -84,3 +84,21 @@ It costs about 40s of the ~42s run (measured 2026-08-17; the previously document
 **Page-side code must not contain named functions.** Under `tsx` — which is how every `npm run cli` command runs — esbuild's `keepNames` rewrites a named function, including `const sleep = (ms) => ...`, into a call to a `__name()` helper that does not exist in a browser. Any `page.evaluate` body containing one dies with `ReferenceError: __name is not defined`. Vitest transpiles differently, so **the test suite cannot catch this**: `revealLazyContent` passed every test and threw on every real run, and a `.catch` hid it. Keep `page.evaluate` bodies to bare expressions, run loops in Node, and never swallow an evaluate error silently.
 
 The fixture's combobox behaviour is a shim standing in for react-select, so it cannot notice react-select changing the contract it depends on. Running `autofill` against a live posting stays part of shipping any `src/apply/` change; the harness supplements that, it does not replace it.
+
+## Agent skills
+
+### Issue tracker
+
+Linear, team **JOB**, via the `linear-jr` MCP server; `.claude/linear.md` holds the
+verified statuses and labels. GitHub carries pull requests only. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The JOB team has no triage labels and skills must not create any. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. This file holds the
+standing rules; ADRs hold reasoning for new decisions. See `docs/agents/domain.md`.
