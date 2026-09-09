@@ -37,6 +37,11 @@ export interface NormalizedJob {
 
   descriptionClean: string;
   descriptionHash: string;
+  /**
+   * Content address that survives cosmetic edits. Keys the analysis cache,
+   * where `descriptionHash` keys `job_events` so change history stays exact.
+   */
+  materialHash: string;
 
   department: string | null;
   team: string | null;

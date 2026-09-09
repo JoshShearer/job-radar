@@ -76,6 +76,7 @@ interface JobRow {
   salary_period: string | null;
   description_clean: string;
   description_hash: string;
+  material_hash: string;
   fit_score: number | null;
   compensation_score: number | null;
   compensation_band: string | null;
@@ -138,14 +139,14 @@ export class JobRepo {
             employment_type, seniority, department, team, industry, company_stage, company_size_estimate,
             date_posted, date_discovered, first_seen, last_seen,
             salary_min, salary_max, salary_currency, salary_period,
-            description_clean, description_hash, status
+            description_clean, description_hash, material_hash, status
           ) VALUES (
             @id, @dedupe_key, @external_id, @source, @ats, @source_url, @canonical_url, @application_url,
             @company, @company_normalized, @title, @title_normalized, @location, @remote_status,
             @employment_type, @seniority, @department, @team, @industry, @company_stage, @company_size_estimate,
             @date_posted, @date_discovered, @first_seen, @last_seen,
             @salary_min, @salary_max, @salary_currency, @salary_period,
-            @description_clean, @description_hash, 'NEW'
+            @description_clean, @description_hash, @material_hash, 'NEW'
           )`,
         )
         .run({
@@ -180,6 +181,7 @@ export class JobRepo {
           salary_period: job.salaryPeriod,
           description_clean: job.descriptionClean,
           description_hash: job.descriptionHash,
+          material_hash: job.materialHash,
         });
 
       this.recordSource(job.id, job.source, job.externalId, job.sourceUrl, now);
@@ -189,7 +191,13 @@ export class JobRepo {
     }
 
     // Existing record: detect meaningful change before overwriting.
+    // TWO DIFFERENT QUESTIONS, and conflating them is what gave the cache a
+    // 0.7% hit rate. "Did the text change at all?" belongs in `job_events`,
+    // where history should be byte-exact. "Is the standing analysis still
+    // about this posting?" is a question about MEANING, and a board
+    // re-rendering the same words in a different order is not a new posting.
     const descriptionChanged = existing.description_hash !== job.descriptionHash;
+    const materiallyChanged = existing.material_hash !== job.materialHash;
     const salaryChanged =
       existing.salary_min !== job.salaryMin ||
       existing.salary_max !== job.salaryMax ||
@@ -213,6 +221,7 @@ export class JobRepo {
           salary_period = @salary_period,
           description_clean = @description_clean,
           description_hash = @description_hash,
+          material_hash = @material_hash,
           -- Seeing the posting again undoes a park, and only a park. CLOSED is
           -- the one status a sweep sets on its own, so it is the one status a
           -- sweep may clear. Anything a person recorded is left alone.
@@ -237,6 +246,7 @@ export class JobRepo {
         salary_period: job.salaryPeriod,
         description_clean: job.descriptionClean,
         description_hash: job.descriptionHash,
+        material_hash: job.materialHash,
       });
 
     this.recordSource(existing.id, job.source, job.externalId, job.sourceUrl, now);
@@ -245,7 +255,12 @@ export class JobRepo {
       this.addEvent(existing.id, "description_changed", {
         from_hash: existing.description_hash,
         to_hash: job.descriptionHash,
+        // Recorded so the two can be told apart later without re-deriving it.
+        material: materiallyChanged,
       });
+    }
+
+    if (materiallyChanged) {
       // Content moved, so any cached analysis no longer describes this job.
       //
       // The failure record is cleared with it, and that is the point rather
@@ -1152,16 +1167,23 @@ export class JobRepo {
    * Adding `tier` changes every existing key, so the pre-existing cache rows
    * are invalidated once. That is cheap here: the lifetime hit rate is 0.7%
    * (3 hits on 430 rows) and 89 of those rows are already orphaned.
+   *
+   * `materialHash`, not `descriptionHash`: byte-level hashing threw away a
+   * paid-for analysis every time a board re-rendered the same words. And
+   * `evidenceVersion`, not `profileVersion`: hashing the whole profile
+   * invalidated everything on any edit to career-profile.yaml, a file that is
+   * edited constantly. Both changes narrow the key to what would actually have
+   * changed the analysis.
    */
   cacheKey(
-    descriptionHash: string,
+    materialHash: string,
     title: string,
     company: string,
     model: string,
-    profileVersion: string,
+    evidenceVersion: string,
     tier: AnalysisTier,
   ): string {
-    return sha256([descriptionHash, title, company, model, profileVersion, tier].join("|"));
+    return sha256([materialHash, title, company, model, evidenceVersion, tier].join("|"));
   }
 
   getCachedAnalysis(key: string): Analysis | null {
@@ -1178,7 +1200,7 @@ export class JobRepo {
 
   putCachedAnalysis(
     key: string,
-    descriptionHash: string,
+    materialHash: string,
     model: string,
     analysis: Analysis,
     usage: { input?: number; output?: number },
@@ -1195,7 +1217,7 @@ export class JobRepo {
       )
       .run(
         key,
-        descriptionHash,
+        materialHash,
         model,
         JSON.stringify(analysis),
         usage.input ?? null,
@@ -1326,6 +1348,7 @@ function toNormalized(r: JobRow): NormalizedJob {
     salaryPeriod: r.salary_period as Period | null,
     descriptionClean: r.description_clean,
     descriptionHash: r.description_hash,
+    materialHash: r.material_hash,
     department: r.department,
     team: r.team,
     companySizeEstimate: r.company_size_estimate,

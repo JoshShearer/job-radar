@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
 import { paths } from "../config/load.js";
 import { log } from "../lib/log.js";
+import { materialHash } from "../lib/hash.js";
 
 export type DB = Database.Database;
 
@@ -47,7 +48,20 @@ export function openDb(file = paths.db()): DB {
  *
  * Additive only. A destructive change needs a real versioned migration.
  */
-const COLUMN_MIGRATIONS: { table: string; column: string; definition: string }[] = [
+const COLUMN_MIGRATIONS: {
+  table: string;
+  column: string;
+  definition: string;
+  /**
+   * Run once, immediately after the column is added.
+   *
+   * Only ever fires on the pass that creates the column, so it is a one-time
+   * cost rather than something on the hot path. A column that needs a value
+   * for existing rows must fill it here - leaving it NULL and computing it
+   * lazily would mean two code paths for the same fact.
+   */
+  backfill?: (db: DB) => void;
+}[] = [
   // How the current fit/ROI numbers were arrived at:
   //   analyzed  - an LLM analysis backs them
   //   projected - deterministic, adjusted by the observed calibration bias
@@ -68,6 +82,26 @@ const COLUMN_MIGRATIONS: { table: string; column: string; definition: string }[]
   // written before `two_stage` was ever enabled, so 'full' is the provable
   // default, not a guess: lifetime SUM(stats_json.triageOnly) over `runs` is 0.
   { table: "analysis_cache", column: "tier", definition: "TEXT NOT NULL DEFAULT 'full'" },
+  // Content address that survives cosmetic edits. Backfilled from the text
+  // already stored, so no posting needs re-fetching - and without the backfill
+  // every existing job would look like a cache miss forever.
+  {
+    table: "jobs",
+    column: "material_hash",
+    definition: "TEXT NOT NULL DEFAULT ''",
+    backfill: (db) => {
+      const rows = db.prepare("SELECT id, description_clean FROM jobs").all() as {
+        id: string;
+        description_clean: string;
+      }[];
+      const update = db.prepare("UPDATE jobs SET material_hash = ? WHERE id = ?");
+      const all = db.transaction((batch: typeof rows) => {
+        for (const r of batch) update.run(materialHash(r.description_clean ?? ""), r.id);
+      });
+      all(rows);
+      log.debug(`migration: backfilled material_hash for ${rows.length} rows`);
+    },
+  },
 ];
 
 /**
@@ -84,6 +118,7 @@ export function applyColumnMigrations(db: DB): void {
     if (cols.some((c) => c.name === m.column)) continue;
     db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.definition}`);
     log.debug(`migration: added ${m.table}.${m.column}`);
+    m.backfill?.(db);
   }
 }
 

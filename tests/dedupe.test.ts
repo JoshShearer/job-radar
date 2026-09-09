@@ -7,7 +7,7 @@ import {
   locationBucket,
 } from "../src/pipeline/dedupe.js";
 import type { NormalizedJob } from "../src/model/job.js";
-import { sha256 } from "../src/lib/hash.js";
+import { sha256, materialHash } from "../src/lib/hash.js";
 
 function job(over: Partial<NormalizedJob> = {}): NormalizedJob {
   const description = over.descriptionClean ?? "We are hiring a senior engineer to build things.";
@@ -32,6 +32,7 @@ function job(over: Partial<NormalizedJob> = {}): NormalizedJob {
     salaryPeriod: null,
     descriptionClean: description,
     descriptionHash: over.descriptionHash ?? sha256(description),
+    materialHash: over.materialHash ?? materialHash(description),
     department: null,
     team: null,
     companySizeEstimate: null,
