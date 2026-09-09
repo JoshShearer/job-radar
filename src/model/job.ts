@@ -118,13 +118,26 @@ export const AnalysisSchema = z.object({
   salaryReasoning: z
     .string()
     .describe("Why that classification, including any inference from company stage or level."),
+  // Nullable, and null means EXACTLY ONE thing: this posting was only triaged,
+  // so the analyst never formed these judgements. `triageOnlyAnalysis` used to
+  // fill them with 0 and "moderate", which rendered as "Interview probability
+  // 0% | competition moderate" - a hardcoded constant presented to a human as
+  // an analyst's conclusion. That is the "never invent" rule, in the one place
+  // it is easiest to break by accident.
+  //
+  // `.nullable()` and NOT `.optional()`: on Zod 4.4.3 a nullable field still
+  // REJECTS a missing key, so a full response that simply forgot the field
+  // fails validation exactly as it did before. `.optional()` would accept it,
+  // quietly turning "malformed output is rejected" soft.
   interviewProbability: z
     .number()
     .min(0)
     .max(100)
+    .nullable()
     .describe("0-100 estimated chance of reaching a first conversation if the candidate applies."),
   competitionEstimate: z
     .enum(["low", "moderate", "high", "very_high"])
+    .nullable()
     .describe("Expected applicant volume based on company profile and role genericness."),
   outreachTargets: z
     .array(z.string())
@@ -136,6 +149,15 @@ export const AnalysisSchema = z.object({
 });
 
 export type Analysis = z.infer<typeof AnalysisSchema>;
+
+/**
+ * Which half of the analysis a stored row holds.
+ *
+ * `triage` is the cheap verdict alone; `full` also carries the dossier
+ * (strengths, risks, missing requirements, outreach targets). They are
+ * different products at different prices and must never share a cache row.
+ */
+export type AnalysisTier = "triage" | "full";
 
 /**
  * The analysis schema with `lane` narrowed to the lanes this profile defines.
@@ -187,8 +209,9 @@ export function triageOnlyAnalysis(v: TriageVerdict): Analysis {
     missingRequirements: [],
     differentiation: "",
     salaryReasoning: "",
-    interviewProbability: 0,
-    competitionEstimate: "moderate",
+    // Null, not 0 and "moderate". The analyst did not assess these.
+    interviewProbability: null,
+    competitionEstimate: null,
     outreachTargets: [],
   };
 }
@@ -196,7 +219,24 @@ export function triageOnlyAnalysis(v: TriageVerdict): Analysis {
 export function analysisSchemaFor(laneKeys: readonly string[]) {
   return AnalysisSchema.extend({
     lane: z.enum(["other", ...laneKeys] as unknown as [string, ...string[]]),
+    // Re-required as non-null. The base schema is nullable so a TRIAGE-ONLY
+    // analysis can honestly say "not assessed"; a FULL response that answers
+    // null has not done the job it was paid for, and is rejected.
+    interviewProbability: AnalysisSchema.shape.interviewProbability.unwrap(),
+    competitionEstimate: AnalysisSchema.shape.competitionEstimate.unwrap(),
   });
+}
+
+/**
+ * Was this analysis produced by the cheap triage pass alone?
+ *
+ * One definition, so the meaning of "null scalars" is not re-derived at every
+ * render site. Null on these two fields is set only by `triageOnlyAnalysis`
+ * and only ever means "the dossier half was never bought" - `analysisSchemaFor`
+ * rejects a full response that answers null, so the two cannot be confused.
+ */
+export function isTriageOnly(analysis: Analysis): boolean {
+  return analysis.interviewProbability === null;
 }
 
 /** A job joined with its scoring and (optional) LLM analysis. */

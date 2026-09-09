@@ -328,7 +328,12 @@ function renderJob(job: EnrichedJob, index: number): string[] {
     `| **Posted** | ${job.datePosted ? job.datePosted.slice(0, 10) : "not stated"}` +
       `${ageDays === null ? "" : ` (${formatAge(ageDays)} old)`} |`,
   );
-  if (a) L.push(`| **Interview probability** | ${a.interviewProbability}% (competition: ${a.competitionEstimate}) |`);
+  if (a)
+    L.push(
+      a.interviewProbability === null || a.competitionEstimate === null
+        ? `| **Interview probability** | not assessed (triage only) |`
+        : `| **Interview probability** | ${a.interviewProbability}% (competition: ${a.competitionEstimate}) |`,
+    );
   L.push(`| **Apply** | ${job.applicationUrl ?? job.sourceUrl} |`);
   L.push("");
 
