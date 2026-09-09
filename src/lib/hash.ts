@@ -51,3 +51,39 @@ export function canonicalUrl(raw: string | null | undefined): string | null {
     return raw.trim() || null;
   }
 }
+
+/**
+ * A content address that survives cosmetic edits to a posting.
+ *
+ * `descriptionHash` is `sha256(descriptionClean)` - byte-level, and that is
+ * right for `job_events`, where change history should be exact. It is wrong for
+ * the analysis cache: 4,349 `description_changed` events were recorded across
+ * 13,674 jobs, one ClickUp posting changed 32 times, and Greenhouse and Ashby
+ * both average 0.33 changes per job. Each one threw away an analysis that had
+ * been paid for, usually because a board re-rendered the same text.
+ *
+ * So this reduces a description to a TOKEN MULTISET: lowercased, punctuation
+ * folded to spaces, tokens sorted. Sorting is what makes it order-independent -
+ * moving the benefits section above the requirements no longer counts as a
+ * change - while keeping duplicates means adding or removing real sentences
+ * still does.
+ *
+ * DELIBERATELY CONSERVATIVE. No stopword list, no boilerplate stripping, no
+ * stemming, and above all no model call - this is deterministic string work
+ * that has to be reproducible over the whole index. The asymmetry decides it:
+ * a change wrongly called MATERIAL costs $0.046, and a change wrongly called
+ * IMMATERIAL means serving a verdict formed against text that no longer
+ * exists. So every ambiguous case is left looking material.
+ *
+ * `+`, `#` and `.` survive folding so `c++`, `c#` and `node.js` stay distinct
+ * from `c` and `node`.
+ */
+export function materialHash(descriptionClean: string): string {
+  const tokens = descriptionClean
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .sort();
+  return sha256(tokens.join(" "));
+}

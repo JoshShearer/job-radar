@@ -119,6 +119,64 @@ export interface AnalyzeSummary {
  *   - Descriptions are truncated to a fixed budget.
  */
 /**
+ * The deterministic evidence handed to the analyst, in two halves.
+ *
+ * ONE FUNCTION RETURNING BOTH, because the note is built where the call is
+ * made and the cache key is computed in the outer loop. Two copies would drift,
+ * and a key that hashes different text than the model saw is worse than no key
+ * at all - so the truncation here (`slice(0, 12)` / `slice(0, 8)`) is the same
+ * truncation the model receives, not an approximation of it.
+ *
+ * `stable` deliberately EXCLUDES `fitScore` and `applicationRoi`. `project()`
+ * rewrites exactly those two from the observed calibration on every scoring
+ * run, and the calibration moves whenever a new analysis lands - so they churn
+ * for every un-analyzed job, which is precisely the population the cache
+ * serves. Hashing them would invalidate the cache continuously, which is worse
+ * than the `profileVersion` this replaces.
+ *
+ * Hashing only the system prompt would be the opposite error: the signals and
+ * the compensation band reach the model through the USER turn, so a change to
+ * either would silently reuse an analysis computed under different evidence.
+ */
+export interface DeterministicNote {
+  /** What the model is shown. */
+  full: string;
+  /** The calibration-stable half, for the cache key. */
+  stable: string;
+}
+
+export function buildDeterministicNote(job: EnrichedJob): DeterministicNote {
+  const comp = `Compensation band: ${job.compensationBand ?? "UNKNOWN"} - ${job.compensationNote ?? ""}`;
+  const positive = job.positiveSignals.length ? `Matched signals: ${job.positiveSignals.slice(0, 12).join("; ")}` : "";
+  const negative = job.negativeSignals.length ? `Concerns: ${job.negativeSignals.slice(0, 8).join("; ")}` : "";
+
+  return {
+    full: [
+      `Fit score: ${job.fitScore ?? "n/a"} / Application ROI: ${job.applicationRoi ?? "n/a"} / Lane: ${job.lane ?? "n/a"}`,
+      comp,
+      positive,
+      negative,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    stable: [`Lane: ${job.lane ?? "n/a"}`, comp, positive, negative].filter(Boolean).join("\n"),
+  };
+}
+
+/**
+ * What the analyst was shown, as one address.
+ *
+ * Replaces `profileVersion = sha256(JSON.stringify(profile))`, which
+ * invalidated EVERY cached analysis on any edit to career-profile.yaml - and
+ * that file is edited constantly. It hashes the system prompt and the
+ * calibration-stable evidence instead: the things that, if they changed, would
+ * genuinely have produced a different analysis.
+ */
+export function evidenceVersion(systemPrompt: string, job: EnrichedJob): string {
+  return sha256(`${systemPrompt}\n---\n${buildDeterministicNote(job).stable}`).slice(0, 12);
+}
+
+/**
  * The best cached analysis that actually answers what this pass is asking for.
  *
  * Not a plain key lookup, because what the pass is asking for depends on a
@@ -140,12 +198,13 @@ export function cachedAnalysisFor(
   repo: JobRepo,
   job: EnrichedJob,
   model: string,
-  profileVersion: string,
+  systemPrompt: string,
   twoStage: boolean,
   dossierPolicy: DossierPolicy,
 ): Analysis | null {
+  const evidence = evidenceVersion(systemPrompt, job);
   const at = (tier: AnalysisTier): Analysis | null =>
-    repo.getCachedAnalysis(repo.cacheKey(job.descriptionHash, job.title, job.company, model, profileVersion, tier));
+    repo.getCachedAnalysis(repo.cacheKey(job.materialHash, job.title, job.company, model, evidence, tier));
 
   const full = at("full");
   if (full) return full;
@@ -220,22 +279,21 @@ export async function runAnalysis(
   }
 
   // The lane set the analyst is allowed to choose from, straight from config.
-  // It is part of `profile`, so it is already inside `profileVersion` and
-  // therefore inside the cache key: adding a lane invalidates cached analyses
-  // that could not have known about it, which is exactly right.
+  // It reaches the model through the system prompt, so it is inside
+  // `evidenceVersion` and therefore inside the cache key: adding a lane
+  // invalidates analyses that could not have known about it, which is right.
   const laneKeys = Object.keys(profile.lanes);
   const twoStage = opts.twoStage ?? profile.analysis_detail.two_stage;
   const dossierPolicy = {
     recommendations: profile.analysis_detail.dossier_for,
     minFit: profile.analysis_detail.dossier_min_fit,
   };
-  const profileVersion = sha256(JSON.stringify(profile)).slice(0, 12);
   const systemPrompt = buildSystemPrompt(profile);
 
   // Serve everything we can from cache before touching the network at all.
   const needsCall: EnrichedJob[] = [];
   for (const job of candidates) {
-    const cached = cachedAnalysisFor(repo, job, opts.model, profileVersion, twoStage, dossierPolicy);
+    const cached = cachedAnalysisFor(repo, job, opts.model, systemPrompt, twoStage, dossierPolicy);
     if (cached) {
       repo.saveAnalysis(job.id, cached, opts.model);
       summary.fromCache++;
@@ -320,16 +378,16 @@ export async function runAnalysis(
       // the dossier's key is defect 1 of JOB-40: every later read gets the stub.
       const producedTier: AnalysisTier = isTriageOnly(result.analysis) ? "triage" : "full";
       const key = repo.cacheKey(
-        job.descriptionHash,
+        job.materialHash,
         job.title,
         job.company,
         opts.model,
-        profileVersion,
+        evidenceVersion(systemPrompt, job),
         producedTier,
       );
       repo.putCachedAnalysis(
         key,
-        job.descriptionHash,
+        job.materialHash,
         opts.model,
         result.analysis,
         { input: result.usage.input, output: result.usage.output },
@@ -473,14 +531,7 @@ export async function analyzeOne(
    */
   tier: "triage" | "full" = "full",
 ): Promise<OneResult> {
-  const deterministicNote = [
-    `Fit score: ${job.fitScore ?? "n/a"} / Application ROI: ${job.applicationRoi ?? "n/a"} / Lane: ${job.lane ?? "n/a"}`,
-    `Compensation band: ${job.compensationBand ?? "UNKNOWN"} - ${job.compensationNote ?? ""}`,
-    job.positiveSignals.length ? `Matched signals: ${job.positiveSignals.slice(0, 12).join("; ")}` : "",
-    job.negativeSignals.length ? `Concerns: ${job.negativeSignals.slice(0, 8).join("; ")}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const note = buildDeterministicNote(job);
 
   const response = await client.messages.create({
     model: opts.model,
@@ -509,7 +560,7 @@ export async function analyzeOne(
           : buildAnalysisJsonSchema(laneKeys)) as unknown as Record<string, unknown>,
       },
     },
-    messages: [{ role: "user", content: buildUserPrompt(job, deterministicNote) }],
+    messages: [{ role: "user", content: buildUserPrompt(job, note.full) }],
   });
 
   if (response.stop_reason === "refusal") {

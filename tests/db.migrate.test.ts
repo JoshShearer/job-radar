@@ -49,6 +49,7 @@ function job(over: Partial<NormalizedJob> = {}): NormalizedJob {
     salaryPeriod: null,
     descriptionClean: "We need a frontend leader who ships React at scale.",
     descriptionHash: "hash-1",
+    materialHash: "material-1",
     department: null,
     team: null,
     companySizeEstimate: null,

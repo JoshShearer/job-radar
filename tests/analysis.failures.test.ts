@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { classifyAnalysisFailure, countsAgainstJob } from "../src/analysis/failures.js";
+import { materialHash } from "../src/lib/hash.js";
 import { memoryRepo, seedJob } from "./helpers/db.js";
 import type { AnalysisDiversity } from "../src/db/repo.js";
 import type { NormalizedJob } from "../src/model/job.js";
@@ -142,6 +143,7 @@ describe("a changed posting earns fresh attempts", () => {
       datePosted: now, dateDiscovered: now,
       salaryMin: null, salaryMax: null, salaryCurrency: "USD", salaryPeriod: null,
       descriptionClean: "original", descriptionHash: "hash-a",
+      materialHash: materialHash(over.descriptionClean ?? "original"),
       department: null, team: null, companySizeEstimate: null, companyStage: null, industry: null,
       ...over,
     } as NormalizedJob;
