@@ -141,7 +141,7 @@ describe("a changed posting earns fresh attempts", () => {
       remoteStatus: "remote", employmentType: "full_time", seniority: "senior",
       datePosted: now, dateDiscovered: now,
       salaryMin: null, salaryMax: null, salaryCurrency: "USD", salaryPeriod: null,
-      descriptionRaw: "original", descriptionClean: "original", descriptionHash: "hash-a",
+      descriptionClean: "original", descriptionHash: "hash-a",
       department: null, team: null, companySizeEstimate: null, companyStage: null, industry: null,
       ...over,
     } as NormalizedJob;

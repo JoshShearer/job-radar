@@ -70,7 +70,6 @@ export function normalizeJob(raw: SourceJob, profile: CareerProfile): Normalized
     salaryMax: salary.max,
     salaryCurrency: salary.currency,
     salaryPeriod: salary.period,
-    descriptionRaw: raw.descriptionHtml.slice(0, 200_000),
     descriptionClean,
     descriptionHash,
     department: raw.department ?? null,
