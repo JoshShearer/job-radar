@@ -6,6 +6,7 @@ import { estimateCostUsd } from "../lib/cost.js";
 import { log } from "../lib/log.js";
 import { analyzeOne } from "./analyzer.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { isApplyVerdict as isApply } from "./endorsement.js";
 
 /**
  * Does the cheap triage form reach the same VERDICT as the full dossier form?
@@ -49,8 +50,6 @@ export interface TriageBenchmark {
   spuriousApplies: TriageBenchmarkRow[];
 }
 
-const APPLY_VERDICTS = new Set(["apply", "apply_and_outreach"]);
-const isApply = (r: string): boolean => APPLY_VERDICTS.has(r);
 
 export async function benchmarkTriage(
   repo: JobRepo,

@@ -22,6 +22,7 @@ import { loadPersonal, personalPath } from "./config/personal.js";
 import { autofillApplication, renderOutcomes, snapshotFields } from "./apply/autofill.js";
 import { capturableAnswers, saveAnswers, type FieldSnapshot } from "./apply/learn.js";
 import { chooseResume } from "./apply/resume-file.js";
+import { describeVerdict, endorsementOf } from "./analysis/endorsement.js";
 import { loadResume, resumeExists, resumePath, saveResume } from "./resume/load.js";
 import { allBullets, lintResume, type Resume } from "./resume/schema.js";
 import {
@@ -235,11 +236,20 @@ program
   .option("--open", "open the generated pack in your browser", false)
   .option("--stale-ok", "prepare even if the posting looks closed", false)
   .option("--force", "regenerate the pack even if one for this posting already exists", false)
+  .option("--override", "prepare even though the analyst did not endorse applying", false)
   .option("--full", "also generate outreach drafts, interview prep and a negotiation strategy", false)
   .action(
     async (
       jobId: string,
-      opts: { model?: string; effort?: string; open: boolean; staleOk: boolean; force: boolean; full: boolean },
+      opts: {
+        model?: string;
+        effort?: string;
+        open: boolean;
+        staleOk: boolean;
+        force: boolean;
+        override: boolean;
+        full: boolean;
+      },
     ) => {
     const profile = loadProfile();
     await withRepo("apply", async (repo) => {
@@ -252,13 +262,18 @@ program
 
       if (refuseIfClosed(repo, job, opts.staleOk, "apply")) {
         process.exitCode = 1;
-        return { ok: false };
+        return { ok: false, refused: "closed", jobId: job.id };
       }
 
-      log.info(`Preparing application material for ${job.company} - ${job.title}`);
-      if (!job.analysis) {
-        log.warn("This job has not been analyzed yet. Run `analyze` first for a much better package.");
+      if (refuseIfUnendorsed(job, opts.override, "apply")) {
+        process.exitCode = 1;
+        return { ok: false, refused: "unendorsed", jobId: job.id, verdict: job.analysis?.recommendation ?? null };
       }
+      // Recorded, not just printed. An override is a deliberate disagreement
+      // with the analyst, and the run log is where that is auditable later.
+      const overrodeVerdict = overrideRecord(job, opts.override);
+
+      log.info(`Preparing application material for ${job.company} - ${job.title}`);
 
       // Same reasoning as `resume tailor`: a re-run of the chain must not pay
       // for the pack again, and the cover note is the part that would silently
@@ -367,6 +382,7 @@ program
         ok: true,
         dir,
         reused: !usage,
+        ...overrodeVerdict,
         ...(usage ? { ...usage, estimatedCostUsd: estimateCostUsd(usage, packModel) } : { estimatedCostUsd: 0 }),
       };
     });
@@ -510,8 +526,12 @@ resumeCmd
   .option("--no-pdf", "skip PDF generation")
   .option("--stale-ok", "prepare even if the posting looks closed", false)
   .option("--force", "re-select bullets even if a plan for this posting already exists", false)
+  .option("--override", "prepare even though the analyst did not endorse applying", false)
   .action(
-    async (jobId: string, opts: { model?: string; effort?: string; pdf: boolean; staleOk: boolean; force: boolean }) => {
+    async (
+      jobId: string,
+      opts: { model?: string; effort?: string; pdf: boolean; staleOk: boolean; force: boolean; override: boolean },
+    ) => {
     const resume = loadResume();
     const errors = lintResume(resume).filter((i) => i.level === "error");
     if (errors.length) {
@@ -531,8 +551,15 @@ resumeCmd
 
       if (refuseIfClosed(repo, job, opts.staleOk, "resume tailor")) {
         process.exitCode = 1;
-        return { ok: false };
+        return { ok: false, refused: "closed", jobId: job.id };
       }
+
+      if (refuseIfUnendorsed(job, opts.override, "resume tailor")) {
+        process.exitCode = 1;
+        return { ok: false, refused: "unendorsed", jobId: job.id, verdict: job.analysis?.recommendation ?? null };
+      }
+      // See `apply`: the deliberate disagreement belongs in the run log.
+      const overrodeVerdict = overrideRecord(job, opts.override);
 
       const bullets = allBullets(resume).map((b) => ({ bullet: b.bullet, sourceLabel: b.sourceLabel }));
       const match = matchResumeToJob(resume, job.descriptionClean, bullets);
@@ -649,6 +676,7 @@ resumeCmd
         ok: true,
         dir,
         reused: !usage,
+        ...overrodeVerdict,
         ...(usage ? { ...usage, estimatedCostUsd: estimateCostUsd(usage, tailorModel) } : { estimatedCostUsd: 0 }),
       };
     });
@@ -745,6 +773,64 @@ function refuseIfClosed(repo: JobRepo, job: EnrichedJob, override: boolean, comm
       `  npm run cli -- ${command} ${job.id} --stale-ok`,
   );
   return true;
+}
+
+/**
+ * Stop before preparing an application the analyst said not to make.
+ *
+ * Shaped deliberately like `refuseIfClosed`: gate only the two commands that
+ * spend, print what is known, name the override, and never hide the posting
+ * anywhere else. The difference is what is being disagreed with - a closed
+ * posting is a fact about the board, an unendorsed verdict is a judgement, and
+ * the person applying may well be right where the model is wrong.
+ *
+ * `unanalyzed` deliberately does NOT refuse. There is no verdict to disagree
+ * with, and the only way to satisfy such a gate would be to spend on an
+ * analysis - turning a warning into a bill. It warns and proceeds.
+ *
+ * Returns true when the caller should stop.
+ */
+function refuseIfUnendorsed(job: EnrichedJob, override: boolean, command: string): boolean {
+  const e = endorsementOf(job);
+
+  if (e.tier === "unanalyzed") {
+    log.warn(`This job has not been analyzed. Run \`analyze\` first for a much better package.`);
+    return false;
+  }
+
+  if (e.tier === "endorsed") {
+    log.info(`Analyst verdict: ${describeVerdict(e)}`);
+    return false;
+  }
+
+  if (override) {
+    log.warn(
+      `Overriding the analyst: verdict is ${describeVerdict(e)}, preparing anyway.` +
+        (e.reason ? `\n  Its reasoning: ${e.reason}` : ""),
+    );
+    return false;
+  }
+
+  console.error(
+    `${job.company} - ${job.title} is not endorsed: the analyst said ${describeVerdict(e)}.\n` +
+      (e.reason ? `Its reasoning: ${e.reason}\n` : "It recorded no reasoning.\n") +
+      `\nNothing was spent. If you disagree - and you may well be right:\n` +
+      `  npm run cli -- ${command} ${job.id} --override`,
+  );
+  return true;
+}
+
+/**
+ * The run-stats fragment recording that a human overrode the analyst.
+ *
+ * Empty when there was nothing to override, so an ordinary endorsed run does
+ * not carry a misleading `overrodeVerdict: null` that a later query would have
+ * to special-case.
+ */
+function overrideRecord(job: EnrichedJob, override: boolean): { overrodeVerdict?: string } {
+  if (!override) return {};
+  const e = endorsementOf(job);
+  return e.tier === "unendorsed" && e.verdict ? { overrodeVerdict: e.verdict } : {};
 }
 
 /**
