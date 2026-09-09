@@ -488,6 +488,37 @@ export class JobRepo {
    * `--min-fit`, which is a deliberate human choice rather than a standing
    * default nobody re-derives.
    */
+  /**
+   * How many postings are eligible for analysis right now.
+   *
+   * The same eligibility `needingAnalysis` applies, without the ranking or the
+   * diversity caps - so `analyze --slate` can size the whole slate rather than
+   * guessing a limit, and a partial pass can report how much is left.
+   */
+  eligibleForAnalysis(diversity: AnalysisDiversity, minFit?: number | null): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) c FROM jobs j
+          WHERE j.analysis_json IS NULL
+            AND j.filter_passed = 1
+            AND j.fit_score IS NOT NULL
+            AND (? IS NULL OR COALESCE(j.raw_fit_score, j.fit_score) >= ?)
+            AND j.status NOT IN ('SKIPPED','REJECTED','WITHDRAWN','CLOSED')
+            AND (? IS NULL OR j.date_posted IS NULL
+                 OR julianday('now') - julianday(j.date_posted) <= ?)
+            AND (? IS NULL OR COALESCE(j.analysis_failures, 0) < ?)`,
+      )
+      .get(
+        minFit ?? null,
+        minFit ?? null,
+        diversity.evergreenDays,
+        diversity.evergreenDays,
+        diversity.maxAttempts,
+        diversity.maxAttempts,
+      ) as { c: number };
+    return row.c;
+  }
+
   needingAnalysis(limit: number, diversity: AnalysisDiversity, minFit?: number | null): EnrichedJob[] {
     const {
       perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty,

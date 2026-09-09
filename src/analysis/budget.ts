@@ -31,6 +31,7 @@ export interface AnalyzeFlags {
   maxSpend?: string;
   includeEvergreen?: boolean;
   twoStage?: boolean;
+  slate?: boolean;
   dryRun?: boolean;
 }
 
@@ -71,6 +72,7 @@ export function resolveAnalyzeOptions(
     maxSpendUsd: parseNonNegativeFlag(flags.maxSpend, "--max-spend") ?? profile.scoring.max_spend_per_run_usd,
     includeEvergreen: flags.includeEvergreen ?? false,
     twoStage: flags.twoStage || undefined,
+    slate: flags.slate || undefined,
     dryRun: flags.dryRun ?? false,
   };
 }
