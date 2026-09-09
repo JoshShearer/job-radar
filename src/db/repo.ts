@@ -74,7 +74,6 @@ interface JobRow {
   salary_max: number | null;
   salary_currency: string;
   salary_period: string | null;
-  description_raw: string;
   description_clean: string;
   description_hash: string;
   fit_score: number | null;
@@ -139,14 +138,14 @@ export class JobRepo {
             employment_type, seniority, department, team, industry, company_stage, company_size_estimate,
             date_posted, date_discovered, first_seen, last_seen,
             salary_min, salary_max, salary_currency, salary_period,
-            description_raw, description_clean, description_hash, status
+            description_clean, description_hash, status
           ) VALUES (
             @id, @dedupe_key, @external_id, @source, @ats, @source_url, @canonical_url, @application_url,
             @company, @company_normalized, @title, @title_normalized, @location, @remote_status,
             @employment_type, @seniority, @department, @team, @industry, @company_stage, @company_size_estimate,
             @date_posted, @date_discovered, @first_seen, @last_seen,
             @salary_min, @salary_max, @salary_currency, @salary_period,
-            @description_raw, @description_clean, @description_hash, 'NEW'
+            @description_clean, @description_hash, 'NEW'
           )`,
         )
         .run({
@@ -179,7 +178,6 @@ export class JobRepo {
           salary_max: job.salaryMax,
           salary_currency: job.salaryCurrency,
           salary_period: job.salaryPeriod,
-          description_raw: job.descriptionRaw,
           description_clean: job.descriptionClean,
           description_hash: job.descriptionHash,
         });
@@ -213,7 +211,6 @@ export class JobRepo {
           salary_max = @salary_max,
           salary_currency = @salary_currency,
           salary_period = @salary_period,
-          description_raw = @description_raw,
           description_clean = @description_clean,
           description_hash = @description_hash,
           -- Seeing the posting again undoes a park, and only a park. CLOSED is
@@ -238,7 +235,6 @@ export class JobRepo {
         salary_max: job.salaryMax,
         salary_currency: job.salaryCurrency,
         salary_period: job.salaryPeriod,
-        description_raw: job.descriptionRaw,
         description_clean: job.descriptionClean,
         description_hash: job.descriptionHash,
       });
@@ -1328,7 +1324,6 @@ function toNormalized(r: JobRow): NormalizedJob {
     salaryMax: r.salary_max,
     salaryCurrency: r.salary_currency,
     salaryPeriod: r.salary_period as Period | null,
-    descriptionRaw: r.description_raw,
     descriptionClean: r.description_clean,
     descriptionHash: r.description_hash,
     department: r.department,

@@ -54,7 +54,6 @@ CREATE TABLE IF NOT EXISTS jobs (
   salary_currency          TEXT NOT NULL DEFAULT 'USD',
   salary_period            TEXT,
 
-  description_raw          TEXT NOT NULL DEFAULT '',
   description_clean        TEXT NOT NULL DEFAULT '',
   description_hash         TEXT NOT NULL,
 

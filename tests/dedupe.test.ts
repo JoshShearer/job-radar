@@ -30,7 +30,6 @@ function job(over: Partial<NormalizedJob> = {}): NormalizedJob {
     salaryMax: null,
     salaryCurrency: "USD",
     salaryPeriod: null,
-    descriptionRaw: description,
     descriptionClean: description,
     descriptionHash: over.descriptionHash ?? sha256(description),
     department: null,

@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
 import { loadEnvFile } from "./config/env.js";
-import { closeDb, openDb } from "./db/index.js";
+import { applyDestructiveMigrations, closeDb, openDb } from "./db/index.js";
 import { JobRepo } from "./db/repo.js";
 import { runIngest } from "./pipeline/ingest.js";
 import { runScoring } from "./pipeline/rescore.js";
@@ -2154,6 +2154,61 @@ interview
       console.log(`${rows.length} entries.`);
       return { count: rows.length };
     });
+  });
+
+// ---- migrate ----------------------------------------------------------------
+
+program
+  .command("migrate")
+  .description("Back up, then physically drop dead columns and reclaim the space (DESTRUCTIVE)")
+  .option("-o, --out <dir>", "backup directory", resolve(PROJECT_ROOT, "data", "backups"))
+  .option("--skip-backup", "do not back up first - only if you have one already", false)
+  .action((opts: { out: string; skipBackup: boolean }) => {
+    const src = paths.db();
+    const before = statSync(src).size;
+
+    // BACK UP FIRST, AND PROVE IT. A truncated backup - a full disk during the
+    // copy, most likely - is worse than no backup, because it looks like one.
+    // So the size is compared before anything destructive runs.
+    if (!opts.skipBackup) {
+      mkdirSync(opts.out, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const dest = resolve(opts.out, `job-radar-${stamp}.sqlite`);
+      const pre = openDb();
+      pre.pragma("wal_checkpoint(TRUNCATE)");
+      closeDb();
+      copyFileSync(src, dest);
+      const copied = statSync(dest).size;
+      if (copied !== statSync(src).size) {
+        console.error(`Backup is ${copied} bytes but the database is ${statSync(src).size}. Refusing to migrate.`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`Backed up to ${dest} (${(copied / 1_048_576).toFixed(0)} MB)`);
+    } else {
+      console.log("Skipping backup, as asked.");
+    }
+
+    const db = openDb();
+    const dropped = applyDestructiveMigrations(db);
+    if (dropped.length === 0) {
+      console.log("Nothing to drop - already migrated.");
+    } else {
+      for (const d of dropped) console.log(`Dropped ${d}`);
+    }
+
+    // VACUUM rewrites the file to reclaim the freed pages. Dropping a column
+    // alone frees nothing on disk. It cannot run inside a transaction, which
+    // is one of the reasons this is a command and not part of `openDb()`.
+    console.log("Vacuuming...");
+    db.exec("VACUUM");
+    closeDb();
+
+    const after = statSync(src).size;
+    console.log(
+      `${(before / 1_048_576).toFixed(0)} MB -> ${(after / 1_048_576).toFixed(0)} MB ` +
+        `(reclaimed ${((before - after) / 1_048_576).toFixed(0)} MB)`,
+    );
   });
 
 // ---- backup ---------------------------------------------------------------

@@ -87,6 +87,45 @@ export function applyColumnMigrations(db: DB): void {
   }
 }
 
+/**
+ * Columns to physically remove, with the reason each is dead.
+ *
+ * SEPARATE FROM `COLUMN_MIGRATIONS` ON PURPOSE. That list is additive-only by
+ * rule, and it runs from `openDb()` - on the hot path of every command and
+ * every test. A destructive change must never run there: it has to be
+ * deliberate, backed up first, and followed by a VACUUM that cannot execute
+ * inside a transaction. So this list is applied only by `job-radar migrate`.
+ */
+const DESTRUCTIVE_MIGRATIONS: { table: string; column: string; why: string }[] = [
+  // 114 MB, written on every ingest and never read once. The only references
+  // were the write path, the type, the 200 KB truncation, and the row mapper -
+  // no query, no scorer, no filter, no report. `deploy/job-radar-daily.service`
+  // backs the database up daily, so it was paid for every day, forever.
+  { table: "jobs", column: "description_raw", why: "written but never read (114 MB)" },
+];
+
+/**
+ * Physically drop dead columns. Destructive, explicit, never automatic.
+ *
+ * Guarded by `PRAGMA table_info` so it is idempotent and a no-op on a database
+ * created after the column was removed from `schema.ts`.
+ *
+ * `ALTER TABLE ... DROP COLUMN` needs SQLite 3.35+; the bundled better-sqlite3
+ * is 3.53.4. It refuses on an indexed column, so anything added here must be
+ * checked against `sqlite_master` first.
+ */
+export function applyDestructiveMigrations(db: DB): string[] {
+  const dropped: string[] = [];
+  for (const m of DESTRUCTIVE_MIGRATIONS) {
+    const cols = db.prepare(`PRAGMA table_info(${m.table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === m.column)) continue;
+    db.exec(`ALTER TABLE ${m.table} DROP COLUMN ${m.column}`);
+    dropped.push(`${m.table}.${m.column} - ${m.why}`);
+    log.debug(`destructive migration: dropped ${m.table}.${m.column}`);
+  }
+  return dropped;
+}
+
 export function closeDb(): void {
   handle?.close();
   handle = null;
