@@ -775,16 +775,44 @@ analysis_detail:
   # deliberately asymmetric, because a missed dossier silently demotes a role
   # below a human's attention while an extra one costs $0.046.
   #
-  # STILL false, and deliberately so: the routing benchmark has NOT been run.
-  # Flipping this on the strength of the verdict-mode numbers, or on a routing
-  # run that scored 0 misses on a small sample, would be an unmeasured change
-  # wearing a measurement's clothes - which is the thing this comment block
-  # exists to prevent. `routingGate` reports INCONCLUSIVE below 40 for the same
-  # reason.
+  # ---- MEASURED, and this is why it is now true ---------------------------
   #
-  # To flip it:  npm run cli -- benchmark-triage --mode routing --limit 45 --yes
-  # and set this to true only on a PASS.
-  two_stage: false
+  # `benchmark-triage --mode routing --limit 45 --yes` on 2026-09-09, Opus,
+  # 45 dossier-routing baselines drawn by `deservesDossier` itself:
+  #
+  #     routing agreement    36/45 = 80.0%
+  #     MISSED DOSSIERS      0        <- the blocking metric
+  #     extra dossiers       9        <- a cost line, ~$0.046 each
+  #     spent                $1.23
+  #
+  # PASS. Measured against dossier_for=[apply_and_outreach, apply,
+  # network_or_watch] and dossier_min_fit=70.
+  #
+  # The same run re-measured the VERDICT question and it still fails:
+  #
+  #     apply-vs-not agreement   40/45 = 88.9%   (bar: 92%)
+  #     mean absolute fit delta  6.4 points
+  #     missed applies           2
+  #     invented applies         3
+  #
+  # BOTH numbers are correct answers to different questions, and the gap
+  # between them is the whole point. The two missed applies were
+  # `apply -> network_or_watch`:
+  #
+  #     Brilliant  Senior/Staff Software Engineer (Interactives)
+  #     Algolia    Senior Software Engineer, Growth (Fullstack)
+  #
+  # `dossier_for` sends BOTH verdicts to a dossier, so both still earn one and
+  # a human sees exactly what they would have seen before. That is why missed
+  # applies is 2 while missed dossiers is 0. Triage cannot REPLACE the dossier
+  # - the 88.9% says so, and that finding stands. It can decide WHO GETS one.
+  #
+  # The 9 extra dossiers are the price: triage is more generous than the full
+  # form, so it buys some dossiers that were not strictly needed. At $0.046
+  # each against ~$0.036 saved per skip that no longer gets one, the trade
+  # still clears - and the asymmetry is deliberate, because a missed dossier
+  # hides a role from a human and an extra one only costs money.
+  two_stage: true
   # Verdicts that always earn the dossier. Anything a human might act on.
   dossier_for: [apply_and_outreach, apply, network_or_watch]
   # ...and a safety valve. A `skip` at fit 70+ is more likely a model that has
