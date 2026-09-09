@@ -64,6 +64,10 @@ const COLUMN_MIGRATIONS: { table: string; column: string; definition: string }[]
   { table: "jobs", column: "analysis_failure_reason", definition: "TEXT" },
   { table: "jobs", column: "analysis_failure_kind", definition: "TEXT" },
   { table: "jobs", column: "analysis_failed_at", definition: "TEXT" },
+  // Which half of the analysis a cache row holds. Every pre-existing row was
+  // written before `two_stage` was ever enabled, so 'full' is the provable
+  // default, not a guess: lifetime SUM(stats_json.triageOnly) over `runs` is 0.
+  { table: "analysis_cache", column: "tier", definition: "TEXT NOT NULL DEFAULT 'full'" },
 ];
 
 /**
