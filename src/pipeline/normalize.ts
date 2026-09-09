@@ -2,7 +2,7 @@ import type { SourceJob } from "../sources/types.js";
 import type { NormalizedJob } from "../model/job.js";
 import type { CareerProfile } from "../config/schema.js";
 import { htmlToText } from "../lib/html.js";
-import { sha256, shortHash, normalizeForIdentity } from "../lib/hash.js";
+import { sha256, shortHash, normalizeForIdentity, materialHash as computeMaterialHash } from "../lib/hash.js";
 import { assessLocation } from "../lib/location.js";
 import { classifyEmployment, classifySeniority } from "../lib/seniority.js";
 import { mergeSalary, parseSalary, type ParsedSalary } from "../lib/salary.js";
@@ -49,6 +49,7 @@ export function normalizeJob(raw: SourceJob, profile: CareerProfile): Normalized
   const seniority = classifySeniority(raw.title);
   const employmentType = classifyEmployment(raw.title, raw.employmentTypeRaw, descriptionClean);
   const descriptionHash = sha256(descriptionClean);
+  const materialHash = computeMaterialHash(descriptionClean);
   const id = shortHash(`${raw.source}|${raw.externalId}`, 12);
 
   return {
@@ -72,6 +73,7 @@ export function normalizeJob(raw: SourceJob, profile: CareerProfile): Normalized
     salaryPeriod: salary.period,
     descriptionClean,
     descriptionHash,
+    materialHash,
     department: raw.department ?? null,
     team: raw.team ?? null,
     companySizeEstimate: null,
