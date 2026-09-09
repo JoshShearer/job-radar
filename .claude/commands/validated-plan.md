@@ -1,6 +1,6 @@
 ---
-description: Plan mode with an adversarial critic loop - iterates the plan until it scores 80+
-argument-hint: "<what to plan> [--threshold=80] [--max-passes=3]"
+description: Plan mode with an adversarial critic loop - iterates the plan until no HIGH findings remain
+argument-hint: "<what to plan> [--max-passes=3] [--threshold=N]"
 ---
 
 # /validated-plan -- Plan, Critique, Revise, Repeat
@@ -10,14 +10,43 @@ are asked to approve it.
 
 Ordinary plan mode ends the moment the plan reads well. This command does not end there: it
 hands the finished draft to the **critic** agent, applies the findings, and re-critiques --
-looping until the plan scores at or above the threshold. **The finalized, passing plan is
-the deliverable.**
+looping until no HIGH finding survives a pass. **The finalized plan is the deliverable.**
+
+## The gate is HIGH findings, not the score
+
+**Read this before changing the threshold.** The score is reported; it is not what the loop
+waits for. That is a deliberate correction to an earlier version of this command, which
+looped on `score >= 80` and could not terminate.
+
+The Mode 3 rubric weights Soundness 25%, Requirements / Codebase / Gaps 20% each, and Scope
+15%. Work the arithmetic against the rubric's own calibration anchors:
+
+| Dimension ratings | Score |
+|---|---|
+| Soundness 6, all others 8 | 75 |
+| Soundness 7, all others 8 | 78 |
+| **Soundness 8, all others 8** | **80** |
+| Everything 7 | 70 |
+
+**80 requires a straight 8 on every dimension at once.** The anchor for 7-8 is "minor gaps
+or unverified assumptions"; for 5-6 it is "notable gaps that could cause rework". A HIGH
+finding *is* a notable gap, so an honest critic filing one must rate that dimension 5-6 --
+which caps the total at **75, below the gate, no matter how good the plan is.**
+
+So `--threshold=80` asks an adversarial reviewer for a clean bill of health. On a plan of
+any real complexity it will not give one, and the loop burns its whole budget while the
+plan improves and the number does not. Observed on a real run: **62 -> 70 -> 66** across
+three passes, with every pass's findings correctly applied and the plan materially better
+each time.
+
+Gate on **unresolved HIGH findings** instead. The score stays in the report because the
+trend is informative, and a stalled score in the 50s still means the *approach* is wrong.
 
 ## Usage
 
-- `/validated-plan <what to plan>` -- plan and validate to the default threshold (80)
-- `/validated-plan <what> --threshold=90` -- demand a higher bar
-- `/validated-plan <what> --max-passes=5` -- allow more revision rounds (default 3)
+- `/validated-plan <what to plan>` -- plan and validate until no HIGH findings remain
+- `/validated-plan <what> --threshold=90` -- also require a numeric score (see the warning above)
+- `/validated-plan <what> --max-passes=4` -- allow more revision rounds (default 3, max 4)
 - `/validated-plan JOB-1234` -- a bare issue key: fetch the issue first, plan against it
 
 Related: `/critique plan` reviews a plan **once**, without the loop. `/ship` runs the
@@ -27,12 +56,13 @@ equivalent gate against code. This command is the planning-time counterpart.
 
 | | |
 |---|---|
-| **Delivers** | One plan file plus its full revision history -- normally one that scored >= threshold |
-| **When the gate is not met** | The plan is still delivered, carrying a `GATE NOT MET` banner with its score and unresolved findings (Step 4). Falling short is a disclosed outcome, not a hidden one |
+| **Delivers** | One plan file plus its full revision history -- normally one with no unresolved HIGH findings |
+| **Gate** | **No unresolved HIGH findings.** The score is reported, not waited on -- see above |
+| **When the gate is not met** | The plan is still delivered, carrying a `GATE NOT MET` banner with its score, trend, and unresolved findings (Step 4). Falling short is a disclosed outcome, not a hidden one |
 | **Never delivers** | A plan that failed the gate, presented as if it passed |
-| **Scale** | 0-100. PASS >= 80, CONCERNS 50-79, BLOCK < 50 |
-| **Default budget** | 3 critic passes |
-| **Writes during the loop** | The plan file only -- *provided plan mode was entered* (Step 1) |
+| **Scale** | 0-100, reported only. PASS >= 80, CONCERNS 50-79, BLOCK < 50 |
+| **Default budget** | 3 critic passes. **Hard maximum 4** |
+| **Writes during the loop** | The plan file only -- *provided plan mode was entered* (Step 1) -- and **never while a critic is running** (3a) |
 
 ---
 
@@ -41,13 +71,19 @@ equivalent gate against code. This command is the planning-time counterpart.
 From `$ARGUMENTS`, extract:
 
 - **Task** -- everything that is not a flag. This is what gets planned.
-- **`--threshold=N`** -- passing score. Default **80**. Clamp to 0-100.
-- **`--max-passes=N`** -- maximum critic passes. Default **3**. Clamp to 1-6.
+- **`--threshold=N`** -- an *additional* numeric bar on top of the HIGH-findings gate.
+  **Unset by default.** Only apply one if the user passed it, and if they passed 80 or
+  above, say once that the rubric makes it near-unreachable (see "The gate is HIGH
+  findings") and proceed as they asked. Clamp to 0-100.
+- **`--max-passes=N`** -- maximum critic passes. Default **3**. **Clamp to 1-4.** If the
+  user asks for more than 4, cap it and say so: past four passes the loop is re-reviewing
+  its own revisions rather than the plan, and the fix is a redraft or a human, not another
+  critic.
 
 If the task names an issue in this repo's tracker, **fetch it** and use its summary,
 description, and acceptance criteria as the requirements baseline. This repo tracks work in
-**Linear** (`JOB-\d+`); `/create-issue` in this same directory shows the exact tooling, and is the
-reference to follow rather than a tool name hardcoded here.
+**Linear** (`JOB-\d+`); `/create-issue` in this same directory shows the exact
+tooling, and is the reference to follow rather than a tool name hardcoded here.
 
 Fetching is not optional when a key is given. **Requirements Coverage is the only dimension of
 the critic's rubric measured against something outside the plan** -- every other dimension
@@ -82,8 +118,7 @@ scores badly on **Codebase Alignment** and **Soundness**, and burns a pass disco
 Ground the draft:
 
 - Read the files the plan proposes to change. Cite them as `path:line`.
-- Check `CLAUDE.md` and any `.claude/rules/*.md` whose `paths:` frontmatter matches the
-  files in scope. These encode hard-won invariants; a plan that violates one is a BLOCK.
+- Check `CLAUDE.md`, and any path-scoped rules files this repo keeps under `.claude/`. These encode hard-won invariants; a plan that violates one is a BLOCK.
 - Confirm every helper, hook, or utility the plan says it will reuse actually exists.
 - Prefer a `general-purpose` or `Explore` subagent for broad fan-out searches so the main
   context stays clean for the loop.
@@ -132,6 +167,23 @@ absence as cleanliness. Holding both versions, it can. Keep the previous plan te
 context across the loop; do not write a copy to disk, since plan mode permits writes only to
 the plan file itself.
 
+**Do not touch the plan file while a critic is running.** It reads the file itself, so an
+edit mid-pass produces findings against text that no longer exists -- two of them on the run
+that motivated this rule, both already fixed before the report arrived, and both counted
+against the score anyway. Queue every revision until the verdict is in. If you notice a
+defect of your own mid-pass, hold it and apply it in 3c with the rest.
+
+**Tell the critic two things that keep its severities honest**, in the prompt alongside the
+findings:
+
+- **Do not penalise scope that the acceptance criteria mandate.** Scope Feasibility is for
+  work the plan failed to anticipate, not for work the requirements demand. Without this,
+  every fix lowers the score, because every fix adds scope -- observed as Scope Feasibility
+  falling 7 -> 6 purely from absorbing the previous pass's findings.
+- **Label each finding `new` or `carried`**, and say whether a `new` one concerns text that
+  a previous finding introduced. This is what makes 3b's self-generated-findings guard
+  checkable rather than a judgment call.
+
 **Spawn a NEW reviewer every pass.** This repo has no `critic` agent -- `/critique` inlines its
 protocol -- so each pass spawns a fresh **`general-purpose` subagent** and hands it the Plan
 Review Path from `critique.md` verbatim. Never continue the previous pass's reviewer by messaging
@@ -157,22 +209,40 @@ claim, in the plan or to the user, that later passes were blind.
 baseline the critic drops Requirements Coverage and renormalizes over the remaining four
 dimensions -- all of which assess the plan against itself or the codebase, both of which the
 planner controls. So a baseline-less 82 is not the same achievement as a baselined 82, and the
-two are not comparable. If you reach the threshold without a baseline, say that in the delivery
+two are not comparable. If you clear the gate without a baseline, say that in the delivery
 summary and in the verdict record. Do not let "no acceptance criteria were handy" quietly
-become the easier path to a passing score.
+become the easier path to a clean run. Note that dropping Requirements Coverage also removes
+the one dimension the loop cannot move -- it sat at 8 for all three passes of the run that
+motivated these rules -- so a baseline-less run is both easier and noisier.
 
-### 3b. Read the Score
+### 3b. Read the Verdict
 
-Parse `**Score:**` from the critic's verdict block.
+Parse `**Score:**` and the findings list from the critic's verdict block.
 
-- **Score >= threshold** -- the gate is met. Go to Step 4. The comparison is on the integer
-  the critic reports, which it rounds half-up from the weighted total; 79.5 is reported as 80
-  and passes at the default threshold.
-- **Score < threshold** -- continue to 3c.
+**The gate is the findings, not the number:**
+
+- **No HIGH findings** (and any `--threshold` the user set is met) -- the gate is met. Go to
+  Step 4.
+- **Any HIGH finding** -- continue to 3c, whatever the score says.
 - **No parsable score** -- treat as a failed pass, not a passing one. Re-spawn a fresh critic
   once with an explicit instruction to emit the verdict block. **The re-spawn does not consume
   a pass** -- the budget counts completed reviews, and a malformed verdict reviewed nothing.
   If it fails again, stop and report; never infer a score.
+
+**Then check two termination conditions before spending another pass.**
+
+**Regression guard.** If the score fell while the plan body only *gained* content, that is
+critic variance, not decline -- a fresh critic each pass has no anchor, and ±8 between
+passes on an improving plan has been observed. Do not spend a pass chasing it. Apply the
+findings, then go to Step 4 and report both scores, the trend, and the fact that the plan
+did not shrink.
+
+**Self-generated-findings guard.** Count how many of this pass's HIGH findings are about
+text that a *previous* pass's findings put there. If it is most of them, the loop is
+reviewing its own revisions rather than the plan: each fix adds specificity, and
+specificity is surface. Stop, apply them, and say so in Step 4's banner. On the run that
+motivated this rule, **all four** of pass 3's HIGH findings were about pass 1 and pass 2's
+fixes.
 
 ### 3c. Revise
 
@@ -212,8 +282,8 @@ logged as an accepted risk, and no Goal, Requirements, Approach, Files, Verifica
 section was touched.
 
 When it fires, the loop cannot improve further. Stop iterating and go to Step 4 with the
-current score, reporting that it converged below threshold. Spending the remaining passes
-re-litigates a plan that is not changing.
+current score, reporting that it converged with findings outstanding. Spending the remaining
+passes re-litigates a plan that is not changing.
 
 **Judge the body, not the file's mtime or byte count.** Appending a record of having refuted
 three findings is not progress, and it is exactly what an unchanged plan looks like from the
@@ -221,11 +291,11 @@ outside.
 
 ## Step 4: Converged, or Out of Passes
 
-### Threshold met
+### Gate met -- no HIGH findings survived
 
-Report the passing score and the pass count. Proceed to Step 5.
+Report the score, the pass count, and what was fixed. Proceed to Step 5.
 
-### Threshold NOT met after max-passes (or the no-progress guard fired)
+### Gate NOT met after max-passes (or any guard in 3b fired)
 
 **Do not present the plan as validated, and do not ask whether to approve it anyway.**
 
@@ -238,15 +308,16 @@ moment this command is most tempted to launder a failure into a pass.
 Write a banner as the **first thing in the plan file**, above the Goal:
 
 ```markdown
-> ## ⚠ GATE NOT MET -- {score}/100, threshold {threshold}
+> ## ⚠ GATE NOT MET -- {N} unresolved HIGH finding(s), score {score}/100
 >
-> This plan did **not** reach the passing score after {N} critic pass(es).
-> {"The score stalled: the last pass changed nothing in the plan body." if the no-progress guard fired}
+> {N} critic pass(es). Score by pass: {e.g. 62 -> 70 -> 66}.
+> {"Stopped early: " + which 3b guard fired, if one did}
 >
 > **Unresolved findings:**
 > - **F{n} ({severity})** -- {finding, and why it was not resolved}
 >
-> Score by pass: {e.g. 48 -> 61 -> 67}. {"Improving but short." | "Stalled." | "Regressing."}
+> {If the score moved but HIGH findings persisted, say which -- they are different
+> outcomes and the reader needs to know which one this is.}
 ```
 
 Then call `ExitPlanMode` (Step 5) with a summary that leads with the shortfall. The user sees
@@ -262,6 +333,14 @@ the banner, and the native approve/reject gate does the rest:
 passes on the same design will not fix it, and saying so plainly is more useful than another
 round. Recommend a redraft when that is what the numbers show.
 
+**A score that moves within a narrow band while HIGH findings keep arriving means something
+different**, and it is the common case: the plan is getting better and the metric cannot see
+it. Say that, rather than implying the plan is stuck. The useful recommendation there is a
+human read, or implementing the plan and letting `/ship`'s gate review real code -- a plan
+review has a floor it cannot get under, because a plan is a set of claims about code that
+does not exist yet, and past a certain specificity the remaining findings are about the
+task's difficulty rather than the plan's quality.
+
 ## Step 5: Deliver
 
 The plan file now contains the plan, its revision history, and -- if the gate was not met --
@@ -271,9 +350,9 @@ approval.
 Precede it with a short summary. On success:
 
 ```
-Validated plan ready.
+Validated plan ready. No HIGH findings survived the last pass.
 
-Score:   86/100 (PASS) -- threshold 80
+Score:   86/100 (reported, not the gate)
 Passes:  3
 Fixed:   2 HIGH, 3 MEDIUM
 Accepted risks: 1 (see plan)
@@ -284,9 +363,9 @@ On a shortfall, lead with it -- never bury it under the word "ready":
 ```
 Plan did NOT meet the gate.
 
-Score:   67/100 (CONCERNS) -- threshold 80
-Passes:  3 of 3 (48 -> 61 -> 67)
 Unresolved: 1 HIGH, 2 MEDIUM (listed at the top of the plan)
+Passes:  3 of 3
+Score:   67/100 (reported; the gate is the HIGH finding)
 
 Approve to proceed anyway, or reject to keep iterating.
 ```
@@ -317,8 +396,9 @@ Write the final verdict to `.claude/last-plan-critique.md`:
 ```
 
 **Write to `.claude/last-plan-critique.md`, never `.claude/last-critique.md`.** The latter is
-the code-review verdict that `/ship` reads and keys on a commit hash; a plan is not a commit, and
-overwriting it would make `/ship` skip its own gate on the strength of a plan review.
+the code-review verdict that `/ship` reads and keys on a commit hash; a plan is not a
+commit, and overwriting it would make `/ship` skip its own gate on the strength of a plan
+review.
 
 ---
 
@@ -347,16 +427,26 @@ The loop scores its own work, so it degrades into theater unless these hold:
    references before accepting it.
 6. **Report the real number.** If it ends at 74, say 74. A fabricated pass is worse than no
    gate, because it is trusted.
+7. **The loop must be able to terminate.** Before adding any numeric bar, work the rubric
+   arithmetic and check that an honest critic filing findings can actually clear it. A gate
+   that requires the reviewer to find nothing is not a quality bar, it is a budget burner --
+   which is what `--threshold=80` was, and why the gate is now HIGH findings. If you tighten
+   this command, tighten it somewhere a good plan can still pass.
+8. **More passes is rarely the answer.** Four is the ceiling for a reason: by pass four the
+   critic is mostly reviewing the previous passes' revisions. If HIGH findings persist at
+   four, the plan needs a human or a different approach, not a fifth critic.
 
 ## Error Handling
 
 | Scenario | Action |
 |---|---|
 | No task in `$ARGUMENTS` | Ask what to plan; do not enter plan mode |
-| Jira key given but MCP unavailable | Warn, ask the user for the acceptance criteria, continue |
+| Issue key given but Linear MCP unavailable | Warn, ask the user for the acceptance criteria, continue |
 | Critic emits no parsable score | Re-spawn a **fresh** critic once with explicit format instruction; then stop and report. Never infer a score |
 | Critic BLOCKs (<50) on pass 1 | Do not patch: return to Step 2 and reconsider the approach |
-| Score oscillates (up then down) | Later findings contradict earlier fixes. Stop, banner both scores and the contradiction, `ExitPlanMode` |
+| Score oscillates (up then down) | Usually critic variance, not decline -- see 3b's regression guard. Stop, apply the findings, banner both scores and the trend, `ExitPlanMode` |
+| Most of a pass's HIGH findings target the previous pass's fixes | 3b's self-generated-findings guard. Stop; the loop is reviewing itself |
+| User asks for more than 4 passes | Cap at 4 and say why: past four the critic reviews revisions, not the plan. Offer a human read or `/ship`'s gate on real code instead |
 | Plan mode declined at Step 1 | Say so; offer to plan to a user-named path with the same loop, or stop. Do not call the result a plan-mode plan |
 | Plan file path not in system message | Stop and report -- do not guess a path and write a plan somewhere unread |
 | Max passes hit | Step 4 -- banner the shortfall into the plan, then `ExitPlanMode`. Never auto-approve, never ask for approval outside `ExitPlanMode` |
