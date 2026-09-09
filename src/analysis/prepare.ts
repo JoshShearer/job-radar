@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import type { CareerProfile } from "../config/schema.js";
 import type { Analysis, EnrichedJob } from "../model/job.js";
 import { isTriageOnly } from "../model/job.js";
+import { readUsage, type TokenUsage } from "../lib/cost.js";
 import { ApplicationPackSchema, applicationJsonSchema, type ApplicationPack } from "./application.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateWords } from "../lib/html.js";
@@ -55,7 +56,7 @@ export async function prepareApplication(
   job: EnrichedJob,
   profile: CareerProfile,
   opts: { model: string; effort: string; full?: boolean },
-): Promise<{ pack: ApplicationPack; usage: { input: number; cacheWrite: number; cacheRead: number; output: number } }> {
+): Promise<{ pack: ApplicationPack; usage: TokenUsage; usageMissing: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
 
@@ -133,15 +134,8 @@ Return only the structured object.`;
     );
   }
 
-  return {
-    pack: parsed.data,
-    usage: {
-      input: response.usage.input_tokens,
-      cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
-      cacheRead: response.usage.cache_read_input_tokens ?? 0,
-      output: response.usage.output_tokens,
-    },
-  };
+  const reading = readUsage(response, `apply ${job.id} (pack)`);
+  return { pack: parsed.data, usage: reading.usage, usageMissing: reading.missing };
 }
 
 /** Render the pack as Markdown. */

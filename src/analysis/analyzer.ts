@@ -8,7 +8,7 @@ import { buildSystemPrompt, buildUserPrompt } from "./prompt.js";
 import { sha256 } from "../lib/hash.js";
 import { log } from "../lib/log.js";
 
-import { estimateCostUsd, PRICING } from "../lib/cost.js";
+import { addUsage, emptyUsage, estimateCostUsd, PRICING, readUsage, type TokenUsage } from "../lib/cost.js";
 import { classifyAnalysisFailure, countsAgainstJob } from "./failures.js";
 import { deservesDossier, type DossierPolicy } from "./detail.js";
 
@@ -67,13 +67,27 @@ export interface AnalyzeSummary {
   analyzed: number;
   fromCache: number;
   failed: number;
-  /** Uncached input tokens, billed at full rate. */
-  inputTokens: number;
-  /** Tokens written to the prompt cache, billed at 1.25x. */
-  cacheCreationTokens: number;
-  /** Tokens served from the prompt cache, billed at 0.1x. */
-  cacheReadTokens: number;
-  outputTokens: number;
+  /**
+   * One envelope, the same shape every command that spends reports.
+   *
+   * This used to be four loose `inputTokens` / `cacheCreationTokens` / ...
+   * fields while `resume tailor` and `apply` reported
+   * `input` / `cacheWrite` / `cacheRead` / `output`. Dollar totals worked
+   * because `estimatedCostUsd` was common, but no single query could total
+   * TOKENS across the tool.
+   */
+  usage: TokenUsage;
+  /** Calls that were billed but reported no usage. A data-quality count, not a failure. */
+  usageMissing: number;
+  /**
+   * Which postings this pass actually paid for.
+   *
+   * `analyze` is a batch, so it carries a list where the single-job commands
+   * carry one `jobId`. Both are what makes per-application attribution
+   * possible - "what did this application cost me?" was unanswerable while the
+   * run log recorded totals with nothing to attribute them to.
+   */
+  jobIds: string[];
   estimatedCostUsd: number;
   /** True when the pass ended on the spend ceiling rather than the job list. */
   stoppedOnBudget?: boolean;
@@ -168,10 +182,9 @@ export async function runAnalysis(
     analyzed: 0,
     fromCache: 0,
     failed: 0,
-    inputTokens: 0,
-    cacheCreationTokens: 0,
-    cacheReadTokens: 0,
-    outputTokens: 0,
+    usage: emptyUsage(),
+    usageMissing: 0,
+    jobIds: [],
     estimatedCostUsd: 0,
     failureKinds: {},
     parkedAfterFailure: 0,
@@ -292,10 +305,8 @@ export async function runAnalysis(
           result = {
             analysis: full.analysis,
             triage: verdict,
-            inputTokens: triaged.inputTokens + full.inputTokens,
-            cacheCreationTokens: triaged.cacheCreationTokens + full.cacheCreationTokens,
-            cacheReadTokens: triaged.cacheReadTokens + full.cacheReadTokens,
-            outputTokens: triaged.outputTokens + full.outputTokens,
+            usage: addUsage(triaged.usage, full.usage),
+            usageMissing: triaged.usageMissing || full.usageMissing,
           };
           summary.dossiers++;
         } else {
@@ -321,24 +332,15 @@ export async function runAnalysis(
         job.descriptionHash,
         opts.model,
         result.analysis,
-        { input: result.inputTokens, output: result.outputTokens },
+        { input: result.usage.input, output: result.usage.output },
         producedTier,
       );
 
       summary.analyzed++;
-      summary.inputTokens += result.inputTokens;
-      summary.cacheCreationTokens += result.cacheCreationTokens;
-      summary.cacheReadTokens += result.cacheReadTokens;
-      summary.outputTokens += result.outputTokens;
-      summary.estimatedCostUsd = estimateCostUsd(
-        {
-          input: summary.inputTokens,
-          cacheWrite: summary.cacheCreationTokens,
-          cacheRead: summary.cacheReadTokens,
-          output: summary.outputTokens,
-        },
-        opts.model,
-      );
+      summary.jobIds.push(job.id);
+      summary.usage = addUsage(summary.usage, result.usage);
+      if (result.usageMissing) summary.usageMissing++;
+      summary.estimatedCostUsd = estimateCostUsd(summary.usage, opts.model);
 
       log.info(
         `  [${i + 1}/${needsCall.length}] ${job.company} - ${job.title} -> ` +
@@ -380,17 +382,9 @@ export async function runAnalysis(
     }
   }
 
-  summary.estimatedCostUsd = estimateCostUsd(
-    {
-      input: summary.inputTokens,
-      cacheWrite: summary.cacheCreationTokens,
-      cacheRead: summary.cacheReadTokens,
-      output: summary.outputTokens,
-    },
-    opts.model,
-  );
+  summary.estimatedCostUsd = estimateCostUsd(summary.usage, opts.model);
 
-  if (summary.analyzed > 1 && summary.cacheReadTokens === 0) {
+  if (summary.analyzed > 1 && (summary.usage.cacheRead ?? 0) === 0) {
     // Caching is the mechanism that makes analysing a large slate affordable.
     // Silence here would hide a regression, so say it out loud.
     log.warn(
@@ -406,10 +400,10 @@ export interface OneResult {
   analysis: Analysis;
   /** Set only on a triage call, so the caller can apply the dossier policy. */
   triage: TriageVerdict | null;
-  inputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-  outputTokens: number;
+  /** One envelope, the same shape every command that spends reports. */
+  usage: TokenUsage;
+  /** The call was billed but reported no receipt. Counted, never thrown on. */
+  usageMissing: boolean;
 }
 
 /**
@@ -557,15 +551,14 @@ export async function analyzeOne(
     );
   }
 
+  const reading = readUsage(response, `analyze ${job.id} (${tier})`);
   return {
     analysis:
       tier === "triage"
         ? triageOnlyAnalysis(parsed.data as TriageVerdict)
         : (parsed.data as Analysis),
     triage: tier === "triage" ? (parsed.data as TriageVerdict) : null,
-    inputTokens: response.usage.input_tokens,
-    cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
-    cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-    outputTokens: response.usage.output_tokens,
+    usage: reading.usage,
+    usageMissing: reading.missing,
   };
 }

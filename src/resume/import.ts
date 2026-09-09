@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ResumeSchema, type Resume } from "./schema.js";
+import { readUsage } from "../lib/cost.js";
 
 /**
  * Turn an existing resume into the structured master file.
@@ -178,6 +179,6 @@ Set verified: true only for concrete things the candidate did that they could de
   return {
     resume: parsed.data,
     uncertain: raw.uncertain ?? [],
-    usage: { input: response.usage.input_tokens, output: response.usage.output_tokens },
+    usage: readUsage(response, "resume import").usage,
   };
 }

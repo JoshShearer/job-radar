@@ -1,3 +1,5 @@
+import { log } from "./log.js";
+
 /**
  * What a model call cost.
  *
@@ -42,6 +44,77 @@ export const PRICING: Record<string, { input: number; output: number }> = {
 /** Cache writes cost more than plain input; cache reads cost far less. */
 export const CACHE_WRITE_MULTIPLIER = 1.25;
 export const CACHE_READ_MULTIPLIER = 0.1;
+
+/** A usage envelope plus whether the provider actually reported one. */
+export interface UsageReading {
+  usage: TokenUsage;
+  /**
+   * True when the response carried no usable usage metadata.
+   *
+   * The call still happened and was still billed - this says the RECEIPT is
+   * missing, not that the purchase was free.
+   */
+  missing: boolean;
+}
+
+/**
+ * The one place a provider response is turned into a `TokenUsage`.
+ *
+ * Four call sites used to do this by hand, and three of them agreed on a
+ * shape while `analyze` used a fourth - which is why no single query could
+ * total tokens across the tool. That is the same shape of gap that let a $17
+ * day record $0: a convention rather than a mechanism.
+ *
+ * IT DOES NOT THROW ON MISSING USAGE, and that restraint is load-bearing.
+ * Throwing here would discard work already paid for and route into
+ * `classifyAnalysisFailure`, where anything not classified `api` counts
+ * against the job and consumes one of its two attempts. A provider reporting
+ * quirk would then park a perfectly analysable job - inverting the purpose of
+ * the attempt budget, which exists to stop re-buying DETERMINISTIC failures.
+ *
+ * So: keep the result, return zeros, and say so loudly.
+ */
+export function readUsage(response: unknown, where: string): UsageReading {
+  const raw = (response as { usage?: Record<string, unknown> } | null)?.usage;
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+  const input = num(raw?.["input_tokens"]);
+  const output = num(raw?.["output_tokens"]);
+
+  // Both absent means no receipt at all. One present is enough to record.
+  if (input === null && output === null) {
+    log.warn(
+      `${where}: the response carried no usage metadata. The call was still billed; ` +
+        `this run's token totals are short by one call.`,
+    );
+    return { usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 }, missing: true };
+  }
+
+  return {
+    usage: {
+      input: input ?? 0,
+      cacheWrite: num(raw?.["cache_creation_input_tokens"]) ?? 0,
+      cacheRead: num(raw?.["cache_read_input_tokens"]) ?? 0,
+      output: output ?? 0,
+    },
+    missing: false,
+  };
+}
+
+/** Add one usage envelope into a running total. */
+export function addUsage(total: TokenUsage, next: TokenUsage): TokenUsage {
+  return {
+    input: total.input + next.input,
+    cacheWrite: (total.cacheWrite ?? 0) + (next.cacheWrite ?? 0),
+    cacheRead: (total.cacheRead ?? 0) + (next.cacheRead ?? 0),
+    output: total.output + next.output,
+  };
+}
+
+/** A zeroed envelope, so an accumulator starts from one known shape. */
+export function emptyUsage(): TokenUsage {
+  return { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+}
 
 export function estimateCostUsd(usage: TokenUsage, model: string): number {
   const price = PRICING[model] ?? PRICING["claude-opus-5"]!;

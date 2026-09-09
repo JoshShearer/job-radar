@@ -126,6 +126,30 @@ export function applyDestructiveMigrations(db: DB): string[] {
   return dropped;
 }
 
+/**
+ * One-off data cleanups, applied by `migrate` alongside the schema changes.
+ *
+ * These are historical by nature - each entry names a specific mess and the
+ * fix that stopped it recurring - so a hardcoded date here is a fact about
+ * what happened, not a magic number.
+ */
+export function applyDataCleanups(db: DB): string[] {
+  const done: string[] = [];
+
+  // 1,098 `dashboard` rows written on 2026-08-14 by a rebuild loop: each
+  // watcher-triggered render wrote a run row, which grew the database file,
+  // which the watcher saw as a data change, which triggered another render.
+  // The mechanism is already fixed by JOB_RADAR_NO_RUN_LOG (src/cli.ts) and
+  // exactly one legitimate dashboard run has been logged since, on 2026-08-20
+  // - which the date bound deliberately keeps. This is cleanup, not a fix.
+  const purged = db
+    .prepare("DELETE FROM runs WHERE command = 'dashboard' AND started_at < '2026-08-20'")
+    .run();
+  if (purged.changes > 0) done.push(`purged ${purged.changes} runaway dashboard run row(s)`);
+
+  return done;
+}
+
 export function closeDb(): void {
   handle?.close();
   handle = null;
