@@ -6,6 +6,7 @@ import type { Period } from "../lib/salary.js";
 import type { RemoteStatus } from "../lib/location.js";
 import type { EmploymentType, SeniorityLevel } from "../lib/seniority.js";
 import { IN_FLIGHT_STATUSES, type Priority, type Status } from "../model/status.js";
+import { deservesDossier, type DossierPolicy } from "../analysis/detail.js";
 
 /**
  * How one analysis pass spreads its budget across companies.
@@ -713,13 +714,55 @@ export class JobRepo {
    * a role forever, an invented apply wastes an afternoon. So the sample takes
    * half from each side.
    */
-  analyzedSample(limit: number): Array<{ job: EnrichedJob; analysis: Analysis }> {
+  analyzedSample(
+    limit: number,
+    opts: { split?: "apply" | "dossier"; policy?: DossierPolicy } = {},
+  ): Array<{ job: EnrichedJob; analysis: Analysis }> {
+    const split = opts.split ?? "apply";
     const half = Math.max(1, Math.floor(limit / 2));
+
+    // A BASELINE MUST BE A DOSSIER. Once `two_stage` is on, triage stubs land
+    // in `analysis_json` too - and a stub drawn as a baseline would have the
+    // benchmark comparing the triage form against the triage form, reporting
+    // near-perfect agreement while measuring nothing at all. `analysisSchemaFor`
+    // guarantees a full response carries these scalars, so a null one is
+    // exactly and only a stub.
+    const DOSSIER_ONLY = "json_extract(analysis_json, '$.interviewProbability') IS NOT NULL";
+
+    if (split === "dossier") {
+      // Partitioned in JS by `deservesDossier` itself, NOT by a SQL IN list
+      // against `dossier_for`. The function also routes on
+      // `fitScore >= dossier_min_fit`, and a gate that disagrees with the
+      // function it gates measures nothing.
+      const policy = opts.policy;
+      if (!policy) throw new Error('analyzedSample: split "dossier" requires a DossierPolicy.');
+
+      const all = this.db
+        .prepare(
+          `SELECT * FROM jobs
+            WHERE analysis_json IS NOT NULL AND filter_passed = 1 AND ${DOSSIER_ONLY}
+            ORDER BY application_roi DESC`,
+        )
+        .all() as JobRow[];
+
+      const parsed = all.map((r) => ({ row: r, analysis: JSON.parse(r.analysis_json as string) as Analysis }));
+      const earns = parsed.filter((p) => deservesDossier(p.analysis, policy));
+      const doesNot = parsed.filter((p) => !deservesDossier(p.analysis, policy));
+
+      const picked = [...earns.slice(0, half)];
+      picked.push(...doesNot.slice(0, limit - picked.length));
+      // Top up from whichever side still has rows, so a lopsided corpus still
+      // returns `limit` rather than silently halving the sample.
+      if (picked.length < limit) picked.push(...earns.slice(half, half + (limit - picked.length)));
+
+      return picked.map((p) => ({ job: toEnriched(p.row), analysis: p.analysis }));
+    }
+
     const pick = (applyish: boolean, n: number): JobRow[] =>
       this.db
         .prepare(
           `SELECT * FROM jobs
-            WHERE analysis_json IS NOT NULL AND filter_passed = 1
+            WHERE analysis_json IS NOT NULL AND filter_passed = 1 AND ${DOSSIER_ONLY}
               AND json_extract(analysis_json, '$.recommendation')
                   ${applyish ? "IN" : "NOT IN"} ('apply','apply_and_outreach')
             ORDER BY application_roi DESC

@@ -759,6 +759,31 @@ analysis_detail:
   # A first run scored 96% and was wrong: the sampler returned apply baselines
   # only, so "invented applies: 0" meant nothing had been tested rather than
   # nothing had gone wrong. The sampler is balanced now.
+  #
+  # ---- The numbers above answer the WRONG QUESTION (JOB-41) ----------------
+  #
+  # Everything above measures whether triage can REPLACE the dossier. The code
+  # never does that: it uses triage only as a ROUTER deciding who earns one.
+  # Those are different questions, and the four "invented applies" are exactly
+  # where they come apart - all four were `network_or_watch -> apply`, and
+  # `dossier_for` below sends BOTH of those to a dossier. All four route
+  # identically. The verdict bar counts them as failures; the router does not
+  # notice them at all.
+  #
+  # `benchmark-triage --mode routing` measures the question the code asks.
+  # Its gate is `missedDossiers == 0` on >=40 dossier-routing baselines -
+  # deliberately asymmetric, because a missed dossier silently demotes a role
+  # below a human's attention while an extra one costs $0.046.
+  #
+  # STILL false, and deliberately so: the routing benchmark has NOT been run.
+  # Flipping this on the strength of the verdict-mode numbers, or on a routing
+  # run that scored 0 misses on a small sample, would be an unmeasured change
+  # wearing a measurement's clothes - which is the thing this comment block
+  # exists to prevent. `routingGate` reports INCONCLUSIVE below 40 for the same
+  # reason.
+  #
+  # To flip it:  npm run cli -- benchmark-triage --mode routing --limit 45 --yes
+  # and set this to true only on a PASS.
   two_stage: false
   # Verdicts that always earn the dossier. Anything a human might act on.
   dossier_for: [apply_and_outreach, apply, network_or_watch]

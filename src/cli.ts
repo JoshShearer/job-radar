@@ -67,7 +67,7 @@ import type { EnrichedJob } from "./model/job.js";
 import { resolveJob } from "./db/resolve.js";
 import { confirmYesNo } from "./lib/prompt.js";
 import { formatSalary } from "./lib/salary.js";
-import { benchmarkTriage } from "./analysis/benchmark.js";
+import { benchmarkTriage, routingGate, MIN_ROUTING_SAMPLE, type BenchmarkMode } from "./analysis/benchmark.js";
 import { scanInbox } from "./inbox/scan.js";
 import { GmailSource, EmlDirectorySource } from "./inbox/source.js";
 import { ghostable } from "./inbox/ghost.js";
@@ -1264,29 +1264,51 @@ program
   .option("--model <id>", `model to use (default ${DEFAULT_MODEL})`)
   .option("--effort <level>", `reasoning effort (default ${DEFAULT_EFFORT})`)
   .option("--yes", "actually make the calls; without this it only estimates", false)
-  .action(async (opts: { limit: string; model?: string; effort?: string; yes: boolean }) => {
+  .option(
+    "--mode <mode>",
+    "verdict (can triage REPLACE the dossier?) or routing (can it decide WHO GETS one?)",
+    "verdict",
+  )
+  .action(async (opts: { limit: string; model?: string; effort?: string; yes: boolean; mode: string }) => {
     const profile = loadProfile();
     const limit = Number(opts.limit) || 25;
     const model = opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL;
+    if (opts.mode !== "verdict" && opts.mode !== "routing") {
+      console.error(`--mode must be "verdict" or "routing", not "${opts.mode}".`);
+      process.exitCode = 1;
+      return;
+    }
+    const mode = opts.mode as BenchmarkMode;
     await withRepo("benchmark-triage", async (repo) => {
-      const sample = repo.analyzedSample(limit);
+      const policy = {
+        recommendations: profile.analysis_detail.dossier_for,
+        minFit: profile.analysis_detail.dossier_min_fit,
+      };
+      const sample =
+        mode === "routing" ? repo.analyzedSample(limit, { split: "dossier", policy }) : repo.analyzedSample(limit);
       if (!opts.yes) {
         // This spends real money, so it says so and stops. The estimate is
         // rough on purpose - it is a guard against a surprise, not an invoice.
         console.log("");
         console.log(`Would re-run ${sample.length} already-analyzed job(s) through the triage form.`);
-        console.log(`Model: ${model}. Rough estimate: $${(sample.length * 0.02).toFixed(2)}.`);
-        console.log(`Sample skews toward apply/network verdicts on purpose - a uniform sample`);
-        console.log(`would be mostly skips and would say nothing about the decision that matters.`);
+        console.log(`Mode: ${mode}. Model: ${model}. Rough estimate: $${(sample.length * 0.02).toFixed(2)}.`);
+        if (mode === "routing") {
+          console.log(`Sample is partitioned by \`deservesDossier\` itself, so the gate cannot`);
+          console.log(`disagree with the function it gates. Needs >=${MIN_ROUTING_SAMPLE} baselines to be conclusive.`);
+        } else {
+          console.log(`Sample skews toward apply/network verdicts on purpose - a uniform sample`);
+          console.log(`would be mostly skips and would say nothing about the decision that matters.`);
+        }
         console.log("");
         console.log("Re-run with --yes to actually make the calls.");
-        return { estimated: sample.length };
+        return { estimated: sample.length, mode };
       }
 
       const result = await benchmarkTriage(repo, profile, {
         limit,
         model,
         effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
+        mode,
       });
 
       const pct = (result.agreementRate * 100).toFixed(1);
@@ -1311,17 +1333,51 @@ program
         }
       }
 
+      // Both questions are reported on every run - the calls have been paid for
+      // either way - but only the mode's own number is the gate.
+      const routingPct = (result.routingAgreementRate * 100).toFixed(1);
+      console.log("");
+      console.log(`Routing agreement: ${result.compared - result.missedDossiers.length - result.extraDossiers.length}/${result.compared} = ${routingPct}%`);
+      console.log(`  missed dossiers: ${result.missedDossiers.length} (blocking)`);
+      console.log(`  extra dossiers : ${result.extraDossiers.length} (a cost line, ~$0.046 each)`);
+      for (const r of result.missedDossiers) {
+        console.log(`  MISSED: ${r.company} - ${r.title}: ${r.baselineRecommendation} -> ${r.triageRecommendation}`);
+      }
+
       console.log("");
       const BAR = 0.92;
-      if (result.agreementRate >= BAR) {
-        console.log(`PASS: ${pct}% is at or above the ${(BAR * 100).toFixed(0)}% bar.`);
-        console.log(`Set analysis_detail.two_stage: true in config/career-profile.yaml.`);
+      if (mode === "verdict") {
+        if (result.agreementRate >= BAR) {
+          console.log(`PASS: ${pct}% is at or above the ${(BAR * 100).toFixed(0)}% bar.`);
+          console.log(`Set analysis_detail.two_stage: true in config/career-profile.yaml.`);
+        } else {
+          console.log(`FAIL: ${pct}% is below the ${(BAR * 100).toFixed(0)}% bar.`);
+          console.log(`Leave analysis_detail.two_stage: false. The dossier's forced strengths and`);
+          console.log(`risks fields are likely doing real reasoning work, not just producing prose.`);
+          console.log(`That answers "can triage REPLACE the dossier?". The code only uses triage`);
+          console.log(`as a ROUTER - re-run with --mode routing to measure what it actually does.`);
+        }
       } else {
-        console.log(`FAIL: ${pct}% is below the ${(BAR * 100).toFixed(0)}% bar.`);
-        console.log(`Leave analysis_detail.two_stage: false. The dossier's forced strengths and`);
-        console.log(`risks fields are likely doing real reasoning work, not just producing prose.`);
+        const gate = routingGate(result);
+        console.log(`${gate.verdict}: ${gate.reason}`);
+        console.log(
+          `Measured against dossier_for=[${result.policy.recommendations.join(", ")}], dossier_min_fit=${result.policy.minFit}.`,
+        );
+        if (gate.verdict === "PASS") {
+          console.log(`Set analysis_detail.two_stage: true in config/career-profile.yaml.`);
+        } else if (gate.verdict === "INCONCLUSIVE") {
+          console.log(`Re-run with --limit ${MIN_ROUTING_SAMPLE} or more. Do NOT read 0 misses on a small`);
+          console.log(`sample as a pass - that is an unmeasured change wearing a measurement's clothes.`);
+        }
       }
-      return { compared: result.compared, agreementRate: result.agreementRate };
+      return {
+        mode,
+        compared: result.compared,
+        agreementRate: result.agreementRate,
+        routingAgreementRate: result.routingAgreementRate,
+        missedDossiers: result.missedDossiers.length,
+        extraDossiers: result.extraDossiers.length,
+      };
     });
   });
 
