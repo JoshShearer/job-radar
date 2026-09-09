@@ -23,6 +23,9 @@ import { autofillApplication, renderOutcomes, snapshotFields } from "./apply/aut
 import { capturableAnswers, saveAnswers, type FieldSnapshot } from "./apply/learn.js";
 import { chooseResume } from "./apply/resume-file.js";
 import { describeVerdict, endorsementOf } from "./analysis/endorsement.js";
+import { fetchDossier } from "./analysis/analyzer.js";
+import { isTriageOnly } from "./model/job.js";
+import type { CareerProfile } from "./config/schema.js";
 import { loadResume, resumeExists, resumePath, saveResume } from "./resume/load.js";
 import { allBullets, lintResume, type Resume } from "./resume/schema.js";
 import {
@@ -175,8 +178,13 @@ program
   .option("--max-spend <usd>", "stop the pass before estimated spend crosses this (default from config)")
   .option("--include-evergreen", "also analyze postings past evergreen_days (they are not recommended)", false)
   .option("--two-stage", "cheap verdict first, dossier only for jobs that earn one", false)
+  .option(
+    "--slate",
+    "triage the whole eligible slate rather than the top --limit by rank (implies --two-stage)",
+    false,
+  )
   .option("--dry-run", "show what would be analyzed without calling the API", false)
-  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; includeEvergreen: boolean; twoStage: boolean; dryRun: boolean }) => {
+  .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; includeEvergreen: boolean; twoStage: boolean; slate: boolean; dryRun: boolean }) => {
     const profile = loadProfile();
     await withRepo("analyze", async (repo) => {
       const summary = await runAnalysis(
@@ -275,7 +283,8 @@ program
         return { ok: false, refused: "closed", jobId: job.id };
       }
 
-      if (refuseIfUnendorsed(job, opts.override, "apply")) {
+      const applyModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL;
+      if (await refuseIfUnendorsed(repo, profile, job, opts.override, "apply", applyModel, opts.effort ?? "high")) {
         process.exitCode = 1;
         return { ok: false, refused: "unendorsed", jobId: job.id, verdict: job.analysis?.recommendation ?? null };
       }
@@ -560,6 +569,7 @@ resumeCmd
       return;
     }
 
+    const profile = loadProfile();
     await withRepo("resume-tailor", async (repo) => {
       const job = repo.get(jobId);
       if (!job) {
@@ -573,7 +583,10 @@ resumeCmd
         return { ok: false, refused: "closed", jobId: job.id };
       }
 
-      if (refuseIfUnendorsed(job, opts.override, "resume tailor")) {
+      const tailorGateModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL;
+      if (
+        await refuseIfUnendorsed(repo, profile, job, opts.override, "resume tailor", tailorGateModel, opts.effort ?? "high")
+      ) {
         process.exitCode = 1;
         return { ok: false, refused: "unendorsed", jobId: job.id, verdict: job.analysis?.recommendation ?? null };
       }
@@ -815,7 +828,15 @@ function refuseIfClosed(repo: JobRepo, job: EnrichedJob, override: boolean, comm
  *
  * Returns true when the caller should stop.
  */
-function refuseIfUnendorsed(job: EnrichedJob, override: boolean, command: string): boolean {
+async function refuseIfUnendorsed(
+  repo: JobRepo,
+  profile: CareerProfile,
+  job: EnrichedJob,
+  override: boolean,
+  command: string,
+  model: string,
+  effort: string,
+): Promise<boolean> {
   const e = endorsementOf(job);
 
   if (e.tier === "unanalyzed") {
@@ -825,6 +846,31 @@ function refuseIfUnendorsed(job: EnrichedJob, override: boolean, command: string
 
   if (e.tier === "endorsed") {
     log.info(`Analyst verdict: ${describeVerdict(e)}`);
+    // THE DOSSIER FIRES ON INTENT, and it fires HERE - inside the one helper
+    // that already decides whether this application is worth spending on.
+    // A second place deciding that is a second place to get it wrong, and the
+    // two would drift.
+    //
+    // Only for an endorsed posting: buying a dossier for one the analyst told
+    // you to skip is exactly the spend this gate exists to stop.
+    if (job.analysis && isTriageOnly(job.analysis)) {
+      log.info("Triage only so far. Fetching the dossier before preparing...");
+      try {
+        const got = await fetchDossier(repo, profile, job, { model, effort });
+        if (got) {
+          job.analysis = got.analysis;
+          log.info(
+            got.fromCache
+              ? "  dossier served from cache - $0.00"
+              : `  dossier: ${describeSpend(got.usage, model)}`,
+          );
+        }
+      } catch (err) {
+        // Never block preparing on a failed fetch. The triage verdict is a
+        // real verdict; the dossier only makes the package better.
+        log.warn(`  could not fetch the dossier: ${(err as Error).message}. Preparing from triage.`);
+      }
+    }
     return false;
   }
 

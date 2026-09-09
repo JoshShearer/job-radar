@@ -45,6 +45,14 @@ export interface AnalyzeOptions {
   /** Override `analysis_detail.two_stage` for this pass. */
   twoStage?: boolean;
   /**
+   * Cover the whole eligible slate rather than the top `limit` by rank.
+   *
+   * Implies two-stage: a dossier for every eligible posting is ~$58 against
+   * ~$12.55 for triage, and the cost case for going wide only holds at the
+   * triage price.
+   */
+  slate?: boolean;
+  /**
    * Consider postings past `evergreen_days` as well.
    *
    * Off by default. An evergreen posting is excluded from recommendations, so
@@ -217,12 +225,72 @@ export function cachedAnalysisFor(
   return deservesDossier(stub, dossierPolicy) ? null : stub;
 }
 
+/**
+ * Buy the dossier for one posting, at the moment someone acts on it.
+ *
+ * The counterpart to running triage wide. `analyze` is a speculative batch
+ * enrichment: of 329 analyzed jobs, 242 still sit at NEW and 54 closed before
+ * anyone looked - 10% utilization - while 12 of 43 applications went to jobs
+ * never analyzed at all, because the verdict was absent when it was needed.
+ * Triage answers "is this worth a human's attention?" across the slate; the
+ * dossier answers "apply, and with what angle?", which is only worth asking
+ * once a human has decided to act.
+ *
+ * REQUESTS `tier: "full"` EXPLICITLY. Without it the cache returns the triage
+ * stub written by the wide pass and the dossier is never fetched - the exact
+ * collision JOB-40 separated the tiers to prevent.
+ *
+ * Returns null when there is nothing to do, so the caller can tell "already
+ * had a dossier" from "bought one".
+ */
+export async function fetchDossier(
+  repo: JobRepo,
+  profile: CareerProfile,
+  job: EnrichedJob,
+  opts: { model: string; effort: string },
+): Promise<{ analysis: Analysis; usage: TokenUsage; fromCache: boolean } | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
+
+  const systemPrompt = buildSystemPrompt(profile);
+  const laneKeys = Object.keys(profile.lanes);
+  const evidence = evidenceVersion(systemPrompt, job);
+  const key = repo.cacheKey(job.materialHash, job.title, job.company, opts.model, evidence, "full");
+
+  const cached = repo.getCachedAnalysis(key);
+  if (cached) {
+    repo.saveAnalysis(job.id, cached, opts.model);
+    return { analysis: cached, usage: emptyUsage(), fromCache: true };
+  }
+
+  const client = new Anthropic({ apiKey });
+  const result = await analyzeOne(
+    client,
+    systemPrompt,
+    job,
+    { limit: 1, model: opts.model, effort: opts.effort, dryRun: false },
+    laneKeys,
+    "full",
+  );
+
+  repo.saveAnalysis(job.id, result.analysis, opts.model);
+  repo.putCachedAnalysis(
+    key,
+    job.materialHash,
+    opts.model,
+    result.analysis,
+    { input: result.usage.input, output: result.usage.output },
+    "full",
+  );
+  return { analysis: result.analysis, usage: result.usage, fromCache: false };
+}
+
 export async function runAnalysis(
   repo: JobRepo,
   profile: CareerProfile,
   opts: AnalyzeOptions,
 ): Promise<AnalyzeSummary> {
-  const candidates = repo.needingAnalysis(opts.limit, {
+  const diversity = {
     perCompanyCap: profile.analysis_diversity.per_company_cap,
     backfillCap: profile.analysis_diversity.per_company_backfill_cap,
     coldAfter: profile.analysis_diversity.cold_after,
@@ -235,7 +303,26 @@ export async function runAnalysis(
     // decisions are the same decision.
     evergreenDays: opts.includeEvergreen ? null : profile.scoring.evergreen_days,
     maxAttempts: profile.scoring.analysis_max_attempts,
-  }, opts.minFit);
+  };
+
+  // TRIAGE ON THE SLATE, not on the top of it.
+  //
+  // `analyze` was a speculative batch enrichment of the top-K index: 10% of
+  // what it bought was ever used, while 12 of 43 applications went to jobs it
+  // had never reached. With triage at roughly a fifth of a dossier's price,
+  // the useful question changes from "which few can we afford?" to "how much
+  // of the slate can we cover?".
+  //
+  // Spend is still bounded DIRECTLY, by `--limit` and `max_spend_per_run_usd`,
+  // never by a fit proxy - JOB-32 retired that and it is not coming back. So a
+  // slate pass that cannot finish in one run simply stops on the ceiling and
+  // resumes tomorrow, which is what makes the backfill a multi-run one.
+  const eligible = repo.eligibleForAnalysis(diversity, opts.minFit);
+  const limit = opts.slate ? Math.max(opts.limit, eligible) : opts.limit;
+  const candidates = repo.needingAnalysis(limit, diversity, opts.minFit);
+  if (opts.slate) {
+    log.info(`Slate pass: ${eligible} eligible, ${candidates.length} selected. Spend stops the pass, not the list.`);
+  }
   const summary: AnalyzeSummary = {
     considered: candidates.length,
     analyzed: 0,
@@ -283,7 +370,9 @@ export async function runAnalysis(
   // `evidenceVersion` and therefore inside the cache key: adding a lane
   // invalidates analyses that could not have known about it, which is right.
   const laneKeys = Object.keys(profile.lanes);
-  const twoStage = opts.twoStage ?? profile.analysis_detail.two_stage;
+  // `--slate` implies two-stage. Going wide is only affordable at the triage
+  // price, and the ticket's cost model assumes it.
+  const twoStage = opts.slate || (opts.twoStage ?? profile.analysis_detail.two_stage);
   const dossierPolicy = {
     recommendations: profile.analysis_detail.dossier_for,
     minFit: profile.analysis_detail.dossier_min_fit,
