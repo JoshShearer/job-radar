@@ -35,7 +35,6 @@ export interface NormalizedJob {
   salaryCurrency: string;
   salaryPeriod: Period | null;
 
-  descriptionRaw: string;
   descriptionClean: string;
   descriptionHash: string;
 
