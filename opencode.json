@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "linear-jr": {
+      "type": "remote",
+      "url": "https://mcp.linear.app/mcp"
+    }
+  }
+}
