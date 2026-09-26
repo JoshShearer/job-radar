@@ -318,7 +318,7 @@ Show the full verdict. For CONCERNS or BLOCK, list actionable items with `file:l
 
 1. **Be specific.** "This could have bugs" is useless. A finding has the shape
    "`<file>:<line>` does X, so input Y produces wrong result Z" — cite the line you actually
-   read. `enforceProvenance` lives in `src/resume/tailor.ts`, the vocabulary and rewrite
+   read. `enforceProvenance` lives in `src/resume/render.ts`, the vocabulary and rewrite
    checks it calls live in `src/resume/provenance.ts`; name whichever one you traced.
 2. **Construct failure scenarios, not hypotheticals.** Trace the call chain.
 3. **Don't nitpick style.** There is no linter here, but style is still not your job.

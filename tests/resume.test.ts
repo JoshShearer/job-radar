@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { ResumeSchema, lintResume, allBullets, monthsBetween } from "../src/resume/schema.js";
 import { extractRequirements, skillsMentioned, matchResumeToJob, careerYears, yearsDemanded } from "../src/resume/requirements.js";
 import { checkRewrite, checkSelection, buildVocabulary } from "../src/resume/provenance.js";
-import { enforceProvenance, type TailorPlan } from "../src/resume/tailor.js";
-import { composeResume } from "../src/resume/render.js";
+import type { TailorPlan } from "../src/resume/tailor.js";
+import { composeResume, enforceProvenance } from "../src/resume/render.js";
 import { canonicalSkill, containsSkill, extractNumericClaims } from "../src/lib/text.js";
 
 const resume = ResumeSchema.parse({
@@ -259,6 +259,18 @@ describe("provenance", () => {
     const v = checkSelection(resume, ["b-acme-1", "b-nope", "b-acme-3"]);
     expect(v.map((x) => x.kind)).toEqual(["unknown_bullet", "unverified_bullet"]);
   });
+
+  it("rejects a real, verified bullet cited under a role it does not belong to", () => {
+    // "b-old-1" exists and is verified, but it is Oldco's bullet, not Acme's.
+    const v = checkSelection(resume, ["b-acme-1", "b-old-1"], "role-acme");
+    expect(v).toHaveLength(1);
+    expect(v[0]?.kind).toBe("wrong_role");
+    expect(v[0]?.bulletId).toBe("b-old-1");
+  });
+
+  it("does not flag wrong_role when no expected owner is given", () => {
+    expect(checkSelection(resume, ["b-old-1"])).toHaveLength(0);
+  });
 });
 
 describe("enforceProvenance repairs a plan rather than failing", () => {
@@ -301,8 +313,53 @@ describe("enforceProvenance repairs a plan rather than failing", () => {
     expect(p.roles[0]?.rewrites).toHaveLength(0);
 
     // Composition then falls back to the true text, not the invented one.
-    const composed = composeResume(resume, p);
+    const { composed } = composeResume(resume, p);
     expect(composed.roles[0]?.bullets[0]).toBe("Built a Next.js storefront serving 200+ pages.");
+  });
+
+  it("reverts an invented headline or summary to the master wording", () => {
+    // Regression for JOB-46: enforceProvenance used to check only bulletIds
+    // and rewrites, never the plan's free-text headline/summary, so a model
+    // could invent a technology or figure there and have it render as-is.
+    const p = plan();
+    p.headline = "Senior Kubernetes Engineer"; // "Kubernetes" is not master vocabulary
+    p.summary = "Shipped 500+ production releases."; // no such figure in the master resume
+    const { violations, reverted } = enforceProvenance(resume, p);
+
+    expect(reverted).toContain("basics.headline");
+    expect(reverted).toContain("basics.summary");
+    expect(p.headline).toBe(resume.basics.headline);
+    expect(p.summary).toBe(resume.basics.summary);
+    expect(violations.some((v) => v.kind === "invented_skill")).toBe(true);
+    expect(violations.some((v) => v.kind === "invented_metric")).toBe(true);
+  });
+
+  it("does not revert a headline/summary rewrite that stays evidenced", () => {
+    const p = plan();
+    p.headline = "Senior TypeScript Engineer"; // TypeScript is genuinely claimed
+    p.summary = "Builds Next.js products.";
+    const { reverted } = enforceProvenance(resume, p);
+    expect(reverted).not.toContain("basics.headline");
+    expect(reverted).not.toContain("basics.summary");
+    expect(p.headline).toBe("Senior TypeScript Engineer");
+    expect(p.summary).toBe("Builds Next.js products.");
+  });
+
+  it("drops a citation to a real, verified bullet cited under the wrong role", () => {
+    // Regression for JOB-46: a plan citing role B's verified bullet id under
+    // role A used to render fine, because composeResume resolved bullet ids
+    // through a single global map built from every role's bullets combined.
+    // "b-old-1" is real and verified, but it belongs to role-old, not role-acme.
+    const p = plan();
+    p.roles[0]!.bulletIds = ["b-acme-1", "b-old-1"];
+    const { violations } = enforceProvenance(resume, p);
+
+    expect(violations.some((v) => v.kind === "wrong_role" && v.bulletId === "b-old-1")).toBe(true);
+    expect(p.roles[0]?.bulletIds).not.toContain("b-old-1");
+
+    const { composed } = composeResume(resume, p);
+    const acmeRole = composed.roles.find((r) => r.company === "Acme");
+    expect(acmeRole?.bullets).not.toContain("Maintained a PostgreSQL reporting pipeline.");
   });
 });
 
@@ -316,8 +373,8 @@ describe("composeResume", () => {
       ],
       projectIds: [], omitted: [], gapsToExpect: [], doNotClaim: [],
     };
-    const c = composeResume(resume, p);
-    expect(c.roles.map((r) => r.company)).toEqual(["Acme", "Oldco"]);
+    const { composed } = composeResume(resume, p);
+    expect(composed.roles.map((r) => r.company)).toEqual(["Acme", "Oldco"]);
   });
 
   it("drops a role whose bullets were all rejected", () => {
@@ -326,7 +383,23 @@ describe("composeResume", () => {
       roles: [{ roleId: "role-acme", bulletIds: [], rewrites: [] }],
       projectIds: [], omitted: [], gapsToExpect: [], doNotClaim: [],
     };
-    expect(composeResume(resume, p).roles).toHaveLength(0);
+    expect(composeResume(resume, p).composed.roles).toHaveLength(0);
+  });
+
+  it("resolves each role's bullets from that role's own list, never a global index", () => {
+    // Structural second gate, independent of enforcement: composeResume
+    // builds a per-role bullet map, so `role-acme`'s bulletIds can only ever
+    // resolve to bullets `role-acme` itself owns. Cross-referencing "b-old-1"
+    // (real, verified, but belongs to role-old) under role-acme structurally
+    // cannot resolve, even setting aside that enforcement would also strip it.
+    const p: TailorPlan = {
+      positioning: "", headline: "H", summary: "S", skillGroups: [],
+      roles: [{ roleId: "role-acme", bulletIds: ["b-acme-1", "b-old-1"], rewrites: [] }],
+      projectIds: [], omitted: [], gapsToExpect: [], doNotClaim: [],
+    };
+    const { composed } = composeResume(resume, p);
+    const acmeRole = composed.roles.find((r) => r.company === "Acme");
+    expect(acmeRole?.bullets).toEqual(["Built a Next.js storefront serving 200+ pages."]);
   });
 });
 
