@@ -100,8 +100,11 @@ gate being broken rather than the code being clean, and check the range first.
 **Auto-pass**: all changes are docs, lockfiles, or whitespace → log and proceed.
 Exception: `.claude/` changes always require review.
 
-**Check for an existing verdict**: read `.claude/last-critique.md`. If its recorded commit
-matches `HEAD`, reuse it. Otherwise run `/critique`.
+**Check for an existing verdict**: read `.claude/last-critique.md`. **If it carries a `**Mode:**`
+line whose value is not `Code Review`, discard it and run a fresh `/critique`** — plan review
+scores on the same 0–100 scale, so reusing one here would ship unreviewed code on the strength of
+a review that never read any code (no `**Mode:**` line means it predates the field and is a code
+review). Otherwise: if its recorded commit matches `HEAD`, reuse it; else run `/critique`.
 
 | Verdict | Action |
 |---|---|

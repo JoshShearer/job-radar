@@ -80,6 +80,13 @@ On the dashboard, **no conversion rate is ever shown without the sample it came 
 
 ## Architecture
 
+See the [C4 architecture map](docs/C4_MAP.md) for system context, containers, modules,
+and runtime flows, and the [2026-09-25 architectural review](docs/ARCHITECTURE_REVIEW_2026-09-25.md)
+for implementation-backed findings and prioritized recommendations.
+
+The [architecture implementation plan](docs/ARCHITECTURE_IMPLEMENTATION_PLAN.md)
+breaks the review into dependency-aware tasks with links to the published Linear issues.
+
 ```
 src/
 ├── cli.ts                 Command surface (commander)
