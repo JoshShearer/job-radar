@@ -37,7 +37,7 @@ import {
 import { scaffoldResume } from "./resume/init.js";
 import { importResume } from "./resume/import.js";
 import { matchResumeToJob } from "./resume/requirements.js";
-import { enforceProvenance, tailorResume, TailorSchema } from "./resume/tailor.js";
+import { tailorResume, TailorSchema } from "./resume/tailor.js";
 import { decideReuse, hashFile, readStamps, writeStamp } from "./apply/reuse.js";
 import { describeSpend, emptyUsage, estimateCostUsd } from "./lib/cost.js";
 import {
@@ -618,14 +618,16 @@ resumeCmd
       let reverted: Awaited<ReturnType<typeof tailorResume>>["reverted"];
       let usage: Awaited<ReturnType<typeof tailorResume>>["usage"] | null = null;
       let usageMissing = false;
+      let composed: ReturnType<typeof composeResume>["composed"];
 
       if (reuse.reuse && savedPlan?.success) {
         log.info(reuse.why);
         plan = savedPlan.data;
         // Provenance is re-checked on every reuse, never assumed to still hold:
         // the master resume may have moved under a citation that was valid when
-        // the plan was made.
-        ({ violations, reverted } = enforceProvenance(resume, plan));
+        // the plan was made. `composeResume` runs that check internally, so
+        // this one call is both the enforcement pass and the composition.
+        ({ composed, violations, reverted } = composeResume(resume, plan));
       } else {
         if (!reuse.reuse && savedPlan?.success) log.info(reuse.why);
         const fresh = await tailorResume(resume, job, match, {
@@ -634,9 +636,11 @@ resumeCmd
         });
         ({ plan, violations, reverted, usage } = fresh);
         usageMissing = fresh.usageMissing;
+        // tailorResume already ran enforcement once for this report; compose
+        // from the now-repaired plan (composeResume re-runs it, harmlessly).
+        composed = composeResume(resume, plan).composed;
       }
 
-      const composed = composeResume(resume, plan);
       const contact = buildContactLine();
       const md = renderResumeMarkdown(resume, composed, contact);
       const html = renderResumeHtml(resume, composed, contact);
@@ -750,10 +754,10 @@ resumeCmd
       // Re-check provenance on every render. The master resume may have been
       // edited since the plan was made, and a citation that was valid then
       // could name a bullet that has since changed or been removed.
+      // `composeResume` runs that check internally, so this one call is both
+      // the enforcement pass and the composition.
       const plan = parsed.data;
-      const { violations, reverted } = enforceProvenance(resume, plan);
-
-      const composed = composeResume(resume, plan);
+      const { composed, violations, reverted } = composeResume(resume, plan);
       const contact = buildContactLine();
       const base = resumeName(resume.basics.name, job.company, "");
       writeFileSync(resolve(dir, `${base}md`), renderResumeMarkdown(resume, composed, contact), "utf8");
