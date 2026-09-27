@@ -7,6 +7,7 @@ import type { RemoteStatus } from "../lib/location.js";
 import type { EmploymentType, SeniorityLevel } from "../lib/seniority.js";
 import { IN_FLIGHT_STATUSES, type Priority, type Status } from "../model/status.js";
 import { deservesDossier, type DossierPolicy } from "../analysis/detail.js";
+import type { AnalysisIdentity } from "../analysis/identity.js";
 
 /**
  * How one analysis pass spreads its budget across companies.
@@ -43,6 +44,45 @@ export interface UpsertOutcome {
   descriptionChanged: boolean;
   salaryChanged: boolean;
 }
+
+/**
+ * JOB-51. Eligibility used to be `analysis_json IS NULL` alone, which is
+ * correct for "never analyzed" but silently wrong for "analyzed against
+ * different inputs": `upsert()` overwrites title/location/employment/salary
+ * unconditionally, and none of that touched `analysis_json IS NULL`, so a job
+ * re-titled from "Senior Engineer" to "Director of Engineering" (description
+ * unchanged - `material_hash` never invalidates it either) stayed permanently
+ * ineligible while a stale verdict kept being read back as current.
+ *
+ * This widens eligibility to "never analyzed, OR the standing analysis is
+ * unverifiable, OR one of its snapshotted inputs disagrees with the job's
+ * CURRENT state" - computed in SQL (via the shared `sha256` scalar function
+ * registered in `registerSha256`, src/db/index.ts) so `needingAnalysis` can
+ * still rank and `LIMIT` in the database rather than hydrating the whole
+ * table to filter in JS.
+ *
+ * A `NULL` snapshot column (legacy row, written before JOB-51) counts as
+ * unverifiable, not fresh - the honest default is "compete for a slot again",
+ * matching `staleAnalysisFields` in src/analysis/identity.ts.
+ *
+ * `j.` is the alias both call sites already use (`FROM jobs j`).
+ */
+const STALE_OR_UNANALYZED_SQL = `(
+  j.analysis_json IS NULL
+  OR j.analysis_title_hash IS NULL
+  OR j.analysis_location_hash IS NULL
+  OR j.analysis_employment_hash IS NULL
+  OR j.analysis_compensation_hash IS NULL
+  OR j.analysis_evidence_hash IS NULL
+  OR j.analysis_title_hash != sha256(j.title)
+  OR j.analysis_location_hash != sha256(j.location || '|' || j.remote_status)
+  OR j.analysis_employment_hash != sha256(j.employment_type)
+  OR j.analysis_compensation_hash != sha256(
+       COALESCE(j.salary_min, '') || '|' || COALESCE(j.salary_max, '') || '|' ||
+       j.salary_currency || '|' || COALESCE(j.salary_period, '')
+     )
+  OR j.analysis_evidence_hash != ?
+)`;
 
 interface JobRow {
   id: string;
@@ -96,6 +136,15 @@ interface JobRow {
   analysis_json: string | null;
   analysis_model: string | null;
   analyzed_at: string | null;
+  // JOB-51: the identity an analysis was formed against, snapshotted at
+  // `saveAnalysis` time. NULL on any row this migration did not backfill
+  // (deliberately - see COLUMN_MIGRATIONS in src/db/index.ts) as well as on
+  // any row that has never been analyzed.
+  analysis_title_hash: string | null;
+  analysis_location_hash: string | null;
+  analysis_employment_hash: string | null;
+  analysis_compensation_hash: string | null;
+  analysis_evidence_hash: string | null;
   status: string;
   status_changed_at: string | null;
   resume_version: string | null;
@@ -361,10 +410,39 @@ export class JobRepo {
       });
   }
 
-  saveAnalysis(jobId: string, analysis: Analysis, model: string): void {
+  /**
+   * `identity` is required, deliberately, matching `tier` on
+   * `putCachedAnalysis`: a caller that forgets it would write an analysis with
+   * no snapshot to compare against, which is indistinguishable from a legacy
+   * row - eligible/pending is the SAFE failure mode for that, but a live call
+   * site forgetting the parameter is a bug worth a compile error, not a
+   * silently-degraded snapshot.
+   */
+  saveAnalysis(jobId: string, analysis: Analysis, model: string, identity: AnalysisIdentity): void {
     this.db
-      .prepare("UPDATE jobs SET analysis_json = ?, analysis_model = ?, analyzed_at = ? WHERE id = ?")
-      .run(JSON.stringify(analysis), model, nowIso(), jobId);
+      .prepare(
+        `UPDATE jobs SET
+           analysis_json = @analysis_json,
+           analysis_model = @analysis_model,
+           analyzed_at = @analyzed_at,
+           analysis_title_hash = @title_hash,
+           analysis_location_hash = @location_hash,
+           analysis_employment_hash = @employment_hash,
+           analysis_compensation_hash = @compensation_hash,
+           analysis_evidence_hash = @evidence_hash
+         WHERE id = @id`,
+      )
+      .run({
+        id: jobId,
+        analysis_json: JSON.stringify(analysis),
+        analysis_model: model,
+        analyzed_at: nowIso(),
+        title_hash: identity.titleHash,
+        location_hash: identity.locationHash,
+        employment_hash: identity.employmentHash,
+        compensation_hash: identity.compensationHash,
+        evidence_hash: identity.evidenceHash,
+      });
     this.addEvent(jobId, "analyzed", { model, recommendation: analysis.recommendation });
   }
 
@@ -497,11 +575,11 @@ export class JobRepo {
    * diversity caps - so `analyze --slate` can size the whole slate rather than
    * guessing a limit, and a partial pass can report how much is left.
    */
-  eligibleForAnalysis(diversity: AnalysisDiversity, minFit?: number | null): number {
+  eligibleForAnalysis(diversity: AnalysisDiversity, currentEvidenceHash: string, minFit?: number | null): number {
     const row = this.db
       .prepare(
         `SELECT COUNT(*) c FROM jobs j
-          WHERE j.analysis_json IS NULL
+          WHERE ${STALE_OR_UNANALYZED_SQL}
             AND j.filter_passed = 1
             AND j.fit_score IS NOT NULL
             AND (? IS NULL OR COALESCE(j.raw_fit_score, j.fit_score) >= ?)
@@ -511,6 +589,7 @@ export class JobRepo {
             AND (? IS NULL OR COALESCE(j.analysis_failures, 0) < ?)`,
       )
       .get(
+        currentEvidenceHash,
         minFit ?? null,
         minFit ?? null,
         diversity.evergreenDays,
@@ -521,7 +600,12 @@ export class JobRepo {
     return row.c;
   }
 
-  needingAnalysis(limit: number, diversity: AnalysisDiversity, minFit?: number | null): EnrichedJob[] {
+  needingAnalysis(
+    limit: number,
+    diversity: AnalysisDiversity,
+    currentEvidenceHash: string,
+    minFit?: number | null,
+  ): EnrichedJob[] {
     const {
       perCompanyCap, backfillCap, coldAfter, unexploredBonus, coldPenalty,
       freshDays, freshBonus, evergreenDays, maxAttempts,
@@ -554,7 +638,7 @@ export class JobRepo {
          )
          SELECT j.* FROM jobs j
            LEFT JOIN company_state cs ON cs.cn = j.company_normalized
-          WHERE j.analysis_json IS NULL
+          WHERE ${STALE_OR_UNANALYZED_SQL}
             AND j.filter_passed = 1
             AND j.fit_score IS NOT NULL
             AND (? IS NULL OR COALESCE(j.raw_fit_score, j.fit_score) >= ?)
@@ -584,6 +668,7 @@ export class JobRepo {
           LIMIT ?`,
       )
       .all(
+        currentEvidenceHash,
         minFit ?? null,
         minFit ?? null,
         evergreenDays,
@@ -1253,6 +1338,19 @@ export class JobRepo {
    * invalidated everything on any edit to career-profile.yaml, a file that is
    * edited constantly. Both changes narrow the key to what would actually have
    * changed the analysis.
+   *
+   * JOB-51 adds `identity.locationHash` / `.employmentHash` / `.compensationHash`.
+   * Without them, the fix to `needingAnalysis` (make a job re-eligible when
+   * these inputs move) is only half the story: the job would compete for a
+   * slot again, but a paid re-analysis would immediately be served the OLD
+   * cache row keyed on the OLD location/employment/comp, because none of
+   * those were part of the key before. `title` is already a raw argument
+   * here, so `identity.titleHash` is deliberately not added again - that
+   * would be the same fact hashed twice. `evidenceVersion` (a parameter, not
+   * `identity.evidenceHash`) stays the finer-grained one `analyzer.ts`
+   * already computes from the stable deterministic note; this narrows the
+   * key further, in the same direction as every change this docstring
+   * already describes.
    */
   cacheKey(
     materialHash: string,
@@ -1261,8 +1359,21 @@ export class JobRepo {
     model: string,
     evidenceVersion: string,
     tier: AnalysisTier,
+    identity: Pick<AnalysisIdentity, "locationHash" | "employmentHash" | "compensationHash">,
   ): string {
-    return sha256([materialHash, title, company, model, evidenceVersion, tier].join("|"));
+    return sha256(
+      [
+        materialHash,
+        title,
+        company,
+        model,
+        evidenceVersion,
+        tier,
+        identity.locationHash,
+        identity.employmentHash,
+        identity.compensationHash,
+      ].join("|"),
+    );
   }
 
   getCachedAnalysis(key: string): Analysis | null {
@@ -1464,6 +1575,13 @@ function toEnriched(r: JobRow): EnrichedJob {
     negativeSignals: parseJsonArray(r.negative_signals),
     analysis,
     analyzedAt: r.analyzed_at,
+    analysisIdentity: {
+      titleHash: r.analysis_title_hash,
+      locationHash: r.analysis_location_hash,
+      employmentHash: r.analysis_employment_hash,
+      compensationHash: r.analysis_compensation_hash,
+      evidenceHash: r.analysis_evidence_hash,
+    },
     firstSeen: r.first_seen,
     lastSeen: r.last_seen,
     notes: r.notes,

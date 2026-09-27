@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyAnalysisFailure, countsAgainstJob } from "../src/analysis/failures.js";
 import { materialHash } from "../src/lib/hash.js";
-import { memoryRepo, seedJob } from "./helpers/db.js";
+import { memoryRepo, seedJob, TEST_EVIDENCE_HASH } from "./helpers/db.js";
 import type { AnalysisDiversity } from "../src/db/repo.js";
 import type { NormalizedJob } from "../src/model/job.js";
 
@@ -116,10 +116,10 @@ describe("a job that keeps failing is not re-bought", () => {
     repo.recordAnalysisFailure(bad, "schema", "first");
     // One failure: still eligible, because the rate is a steady few percent and
     // one retry is worth about five cents.
-    expect(repo.needingAnalysis(10, DIVERSITY).map((j) => j.id)).toContain("bad");
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH).map((j) => j.id)).toContain("bad");
 
     repo.recordAnalysisFailure(bad, "schema", "second");
-    expect(repo.needingAnalysis(10, DIVERSITY).map((j) => j.id)).toEqual(["good"]);
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH).map((j) => j.id)).toEqual(["good"]);
   });
 
   it("keeps offering everything when the limit is off", () => {
@@ -127,7 +127,7 @@ describe("a job that keeps failing is not re-bought", () => {
     const bad = seedJob(db, { id: "bad", applicationRoi: 99, fitScore: 99 });
     repo.recordAnalysisFailure(bad, "schema", "a");
     repo.recordAnalysisFailure(bad, "schema", "b");
-    expect(repo.needingAnalysis(10, { ...DIVERSITY, maxAttempts: null })).toHaveLength(1);
+    expect(repo.needingAnalysis(10, { ...DIVERSITY, maxAttempts: null }, TEST_EVIDENCE_HASH)).toHaveLength(1);
   });
 });
 
@@ -163,7 +163,7 @@ describe("a changed posting earns fresh attempts", () => {
     repo.recordAnalysisFailure(job.id, "truncated", "cut off");
     repo.recordAnalysisFailure(job.id, "truncated", "cut off again");
     expect(repo.analysisFailures()[0]!.failures).toBe(2);
-    expect(repo.needingAnalysis(10, DIVERSITY).map((j) => j.id)).not.toContain("j1");
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH).map((j) => j.id)).not.toContain("j1");
 
     // Same posting, new text. This is the real upsert path, not a hand-written
     // UPDATE - a test that fakes the mechanism it claims to check is worse than
@@ -172,7 +172,7 @@ describe("a changed posting earns fresh attempts", () => {
     expect(outcome.descriptionChanged).toBe(true);
 
     expect(repo.analysisFailures()).toEqual([]);
-    expect(repo.needingAnalysis(10, DIVERSITY).map((j) => j.id)).toContain("j1");
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH).map((j) => j.id)).toContain("j1");
   });
 
   it("leaves the failure record alone when the posting is merely re-seen", () => {
@@ -189,7 +189,7 @@ describe("a changed posting earns fresh attempts", () => {
     repo.upsert(normalized(), "dedupe-j1");
 
     expect(repo.analysisFailures()[0]!.failures).toBe(2);
-    expect(repo.needingAnalysis(10, DIVERSITY).map((j) => j.id)).not.toContain("j1");
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH).map((j) => j.id)).not.toContain("j1");
   });
 });
 
@@ -207,7 +207,7 @@ describe("an API failure is visible but does not spend an attempt", () => {
     expect(repo.recordAnalysisFailure(id, "api", "timeout", false)).toBe(0);
 
     // Three API failures, still fully eligible.
-    expect(repo.needingAnalysis(10, DIVERSITY).map((j) => j.id)).toContain("j1");
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH).map((j) => j.id)).toContain("j1");
 
     // ...and still visible, which is the other half of the point.
     const row = repo.analysisFailures()[0]!;
@@ -222,6 +222,6 @@ describe("an API failure is visible but does not spend an attempt", () => {
     expect(repo.recordAnalysisFailure(id, "truncated", "cut off", true)).toBe(1);
     repo.recordAnalysisFailure(id, "api", "timeout again", false);
     expect(repo.recordAnalysisFailure(id, "schema", "bad", true)).toBe(2);
-    expect(repo.needingAnalysis(10, DIVERSITY).map((j) => j.id)).not.toContain("j1");
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH).map((j) => j.id)).not.toContain("j1");
   });
 });

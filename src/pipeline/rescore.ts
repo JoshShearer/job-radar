@@ -11,6 +11,8 @@ import {
   type Calibration,
   type CalibrationPair,
 } from "./calibration.js";
+import { computeAnalysisIdentity, staleAnalysisFields } from "../analysis/identity.js";
+import { analysisSchemaFor, isTriageOnly, triageSchemaFor } from "../model/job.js";
 import { log } from "../lib/log.js";
 
 export interface ScoreSummary {
@@ -23,6 +25,13 @@ export interface ScoreSummary {
   reconciled: number;
   /** Jobs whose score was projected using the measured calibration. */
   projected: number;
+  /**
+   * Jobs that carry an `analysis_json` too stale to trust (JOB-51): one of
+   * its snapshotted inputs has moved, or it no longer matches the live
+   * schema for its tier. Excluded from `reconciled`, folded into `projected`
+   * instead - the same treatment a never-analyzed job gets.
+   */
+  staleAnalysis: number;
   calibration: Calibration;
 }
 
@@ -71,19 +80,46 @@ export function runScoring(repo: JobRepo, profile: CareerProfile, db: DB): Score
   let reconciled = 0;
   let projected = 0;
   const byPriority: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
+  const laneKeys = Object.keys(profile.lanes);
+  let staleAnalysis = 0;
 
   for (const { job, filter, base, rawFit } of scored) {
     let score = base.score;
     let confidence = "raw";
 
-    if (job.analysis && filter.passed) {
+    // JOB-51: an attached `analysis_json` is trusted for reconciliation only
+    // when it still describes THIS job. `upsert()` overwrites
+    // title/location/employment/salary unconditionally and `material_hash`
+    // only tracks the description, so a re-titled or re-leveled posting could
+    // otherwise keep reconciling against a verdict formed for a different
+    // role - reading a corrected keyword score as "the analyst agreed" when
+    // the analyst never saw the current posting.
+    //
+    // A schema mismatch is folded into the same "cannot be trusted" bucket
+    // (decision: AC bullet 5) rather than a new state - CLAUDE.md wants three
+    // states for `resume match`, not six here. Either way the job falls
+    // through to the calibration-projection branch below, exactly as if it
+    // had never been analyzed.
+    const isStale = (): boolean => {
+      if (!job.analysis) return false;
+      const current = computeAnalysisIdentity(job, profile);
+      if (staleAnalysisFields(job.analysisIdentity, current).length > 0) return true;
+      const schema = isTriageOnly(job.analysis) ? triageSchemaFor(laneKeys) : analysisSchemaFor(laneKeys);
+      return !schema.safeParse(job.analysis).success;
+    };
+
+    if (job.analysis && filter.passed && !isStale()) {
       // A hard-filter rejection stands regardless of what the analysis said -
       // the analysis cannot make an onsite-in-Seattle role workable.
       const merged = reconcileWithAnalysis(score, job.analysis);
       if (merged.priority !== score.priority) reconciled++;
       score = merged;
       confidence = "analyzed";
-    } else if (filter.passed && calibration.usable) {
+    } else if (job.analysis && filter.passed) {
+      staleAnalysis++;
+    }
+
+    if (confidence !== "analyzed" && filter.passed && calibration.usable) {
       // No analysis yet. Project what an analysis would most likely say, so
       // this job is comparable to the analyzed ones in the same ranking
       // instead of sitting above them on an uncorrected number.
@@ -120,10 +156,11 @@ export function runScoring(repo: JobRepo, profile: CareerProfile, db: DB): Score
     `Scored ${jobs.length} jobs: ${passed} passed filters, ${rejected} rejected, ` +
       `A=${byPriority.A} B=${byPriority.B} C=${byPriority.C} D=${byPriority.D}` +
       (reconciled > 0 ? ` | ${reconciled} priorities overridden by analysis` : "") +
-      (projected > 0 ? ` | ${projected} projected from calibration` : ""),
+      (projected > 0 ? ` | ${projected} projected from calibration` : "") +
+      (staleAnalysis > 0 ? ` | ${staleAnalysis} standing analyses stale, treated as unanalyzed` : ""),
   );
 
-  return { scored: jobs.length, passed, rejected, byPriority, topScore, reconciled, projected, calibration };
+  return { scored: jobs.length, passed, rejected, byPriority, topScore, reconciled, projected, staleAnalysis, calibration };
 }
 
 /**
