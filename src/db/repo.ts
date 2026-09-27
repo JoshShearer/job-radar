@@ -489,6 +489,60 @@ export class JobRepo {
     })();
   }
 
+  /**
+   * "An email caused a job transition" as a single transaction: the same
+   * compare-and-swap status write as `setStatusIfCurrent`, plus the
+   * `email_events` audit row that explains it, committed or rolled back
+   * together (JOB-47 PR2). Before this, `scanInbox` issued the status write
+   * and the audit insert as two separate autocommitted statements - a
+   * failure on the second left a `status_changed` event with nothing in
+   * `email_events` explaining why the job moved.
+   *
+   * Returns false, with NOTHING written (no status change, no audit row), if
+   * the job's current status no longer equals `expectedStatus` - the same
+   * refusal `setStatusIfCurrent` makes, extended to cover the row that would
+   * have recorded the (now-stale) decision.
+   */
+  applyEmailOutcome(args: {
+    jobId: string;
+    expectedStatus: Status;
+    newStatus: Status;
+    statusNote?: string;
+    email: {
+      messageId: string;
+      source: string;
+      from: string;
+      subject: string;
+      receivedAt: string;
+      kinds: string[];
+      evidence: string[];
+      resolution: string;
+      note: string | null;
+    };
+  }): boolean {
+    return this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(args.jobId) as
+        | { status: string }
+        | undefined;
+      if (!existing || existing.status !== args.expectedStatus) return false;
+      this.writeStatus(args.jobId, existing.status, args.newStatus, args.statusNote);
+      this.insertEmailEvent({
+        messageId: args.email.messageId,
+        source: args.email.source,
+        from: args.email.from,
+        subject: args.email.subject,
+        receivedAt: args.email.receivedAt,
+        kinds: args.email.kinds,
+        evidence: args.email.evidence,
+        resolution: args.email.resolution,
+        jobId: args.jobId,
+        appliedStatus: args.newStatus,
+        note: args.email.note,
+      });
+      return true;
+    })();
+  }
+
   // ---- Reads --------------------------------------------------------------
 
   get(idOrPrefix: string): EnrichedJob | null {
@@ -959,6 +1013,28 @@ export class JobRepo {
   }
 
   recordEmailEvent(e: {
+    messageId: string;
+    source: string;
+    from: string;
+    subject: string;
+    receivedAt: string;
+    kinds: string[];
+    evidence: string[];
+    resolution: string;
+    jobId: string | null;
+    appliedStatus: string | null;
+    note: string | null;
+  }): void {
+    this.insertEmailEvent(e);
+  }
+
+  /**
+   * Shared INSERT for the `email_events` audit row. Not transactional on its
+   * own, matching `writeStatus` above - `recordEmailEvent` runs it as the
+   * sole (autocommitted) statement, while `applyEmailOutcome` runs it inside
+   * the same `this.db.transaction(...)` as the status write it explains.
+   */
+  private insertEmailEvent(e: {
     messageId: string;
     source: string;
     from: string;

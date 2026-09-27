@@ -123,14 +123,39 @@ export async function scanInbox(
     }
 
     if (opts.apply) {
-      repo.setStatus(job.id, target as Status, `${target} from email ${email.id}`);
+      // Status write + audit row as one transaction (JOB-47 PR2), so a
+      // failure on either leaves neither behind. `expectedStatus` is the
+      // status the match was evaluated against a moment ago; if something
+      // else moved the job in the meantime the write is refused rather than
+      // blindly overwritten for this email.
+      const applied = repo.applyEmailOutcome({
+        jobId: job.id,
+        expectedStatus: job.status as Status,
+        newStatus: target as Status,
+        statusNote: `${target} from email ${email.id}`,
+        email: {
+          messageId: email.id, source: source.name, from: email.from, subject: email.subject,
+          receivedAt: email.receivedAt, kinds, evidence, resolution: "matched", note: match.why,
+        },
+      });
+      if (!applied) {
+        record(
+          "matched", job.id, null,
+          `refused: status changed since match (expected ${job.status})`,
+          kinds, evidence,
+        );
+        continue;
+      }
+    } else {
+      // Dry run: record() no-ops on !opts.apply, so nothing is actually
+      // written here - only summary.changes below reports what WOULD happen.
+      record("matched", job.id, target, match.why, kinds, evidence);
     }
     summary.transitioned++;
     summary.changes.push({
       jobId: job.id, company: job.company, title: job.title,
       from: job.status, to: target, messageId: email.id,
     });
-    record("matched", job.id, target, match.why, kinds, evidence);
     log.info(`  ${job.company} - ${job.title}: ${job.status} -> ${target}`);
   }
 
