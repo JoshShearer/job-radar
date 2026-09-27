@@ -1,16 +1,26 @@
 import { describe, it, expect } from "vitest";
 import Database from "better-sqlite3";
-import { memoryRepo } from "./helpers/db.js";
+import { memoryRepo, saveAnalysisFresh } from "./helpers/db.js";
 import { SCHEMA_SQL } from "../src/db/schema.js";
 import { applyColumnMigrations } from "../src/db/index.js";
 import { JobRepo } from "../src/db/repo.js";
 import { triageOnlyAnalysis, type Analysis, type TriageVerdict } from "../src/model/job.js";
 import { describePriorAnalysis } from "../src/analysis/prepare.js";
 import { cachedAnalysisFor, evidenceVersion } from "../src/analysis/analyzer.js";
+import type { AnalysisIdentity } from "../src/analysis/identity.js";
 import { buildDailyReport } from "../src/report/daily.js";
 import { seedJob } from "./helpers/db.js";
 import type { CareerProfile, SourcesConfig } from "../src/config/schema.js";
 import type { EnrichedJob } from "../src/model/job.js";
+
+/** A fixed identity for tests that only care about tier/material/evidence separation. */
+const IDENTITY: AnalysisIdentity = {
+  titleHash: "title-1",
+  locationHash: "loc-1",
+  employmentHash: "emp-1",
+  compensationHash: "comp-1",
+  evidenceHash: "evidence-1",
+};
 
 /**
  * The three defects in JOB-40 are all latent until `two_stage` is switched on,
@@ -52,23 +62,38 @@ describe("the cache key separates the two tiers", () => {
   it("gives a triage stub and a dossier different addresses", () => {
     // Defect 1: they used to collide, so the stub was returned to every later
     // read forever - including one that was trying to buy the dossier.
-    const triage = repo.cacheKey(...args, "evidence-v1", "triage");
-    const full = repo.cacheKey(...args, "evidence-v1", "full");
+    const triage = repo.cacheKey(...args, "evidence-v1", "triage", IDENTITY);
+    const full = repo.cacheKey(...args, "evidence-v1", "full", IDENTITY);
     expect(triage).not.toBe(full);
   });
 
   it("still separates on every other input", () => {
-    const base = repo.cacheKey(...args, "evidence-v1", "full");
-    expect(repo.cacheKey("other-hash", "Staff Engineer", "Acme", "claude-opus-5", "evidence-v1", "full")).not.toBe(base);
-    expect(repo.cacheKey(...args, "evidence-v2", "full")).not.toBe(base);
+    const base = repo.cacheKey(...args, "evidence-v1", "full", IDENTITY);
+    expect(
+      repo.cacheKey("other-hash", "Staff Engineer", "Acme", "claude-opus-5", "evidence-v1", "full", IDENTITY),
+    ).not.toBe(base);
+    expect(repo.cacheKey(...args, "evidence-v2", "full", IDENTITY)).not.toBe(base);
+  });
+
+  it("separates on location/employment/compensation too (JOB-51)", () => {
+    // Without this, a job made re-eligible by the widened `needingAnalysis`
+    // (title/location/employment/compensation moved) would still be served
+    // the OLD cache row on re-analysis, keyed on the OLD values - the fix to
+    // eligibility would be undone by the cache the moment a paid call landed.
+    const base = repo.cacheKey(...args, "evidence-v1", "full", IDENTITY);
+    expect(repo.cacheKey(...args, "evidence-v1", "full", { ...IDENTITY, locationHash: "loc-2" })).not.toBe(base);
+    expect(repo.cacheKey(...args, "evidence-v1", "full", { ...IDENTITY, employmentHash: "emp-2" })).not.toBe(base);
+    expect(repo.cacheKey(...args, "evidence-v1", "full", { ...IDENTITY, compensationHash: "comp-2" })).not.toBe(
+      base,
+    );
   });
 
   it("stores and returns each tier independently", () => {
     const { repo: r } = memoryRepo();
     const stub = triageOnlyAnalysis(verdict());
     const dossier = fullAnalysis();
-    const kTriage = r.cacheKey(...args, "p", "triage");
-    const kFull = r.cacheKey(...args, "p", "full");
+    const kTriage = r.cacheKey(...args, "p", "triage", IDENTITY);
+    const kFull = r.cacheKey(...args, "p", "full", IDENTITY);
 
     r.putCachedAnalysis(kTriage, "material-hash", "claude-opus-5", stub, {}, "triage");
     r.putCachedAnalysis(kFull, "material-hash", "claude-opus-5", dossier, {}, "full");
@@ -149,7 +174,7 @@ describe("cachedAnalysisFor decides what a cached row is allowed to answer", () 
 
   const store = (tier: "triage" | "full", analysis: Analysis) => {
     const { repo } = memoryRepo();
-    const key = repo.cacheKey("m1", "Staff Engineer", "Acme", MODEL, evidenceVersion(SYSTEM, job), tier);
+    const key = repo.cacheKey("m1", "Staff Engineer", "Acme", MODEL, evidenceVersion(SYSTEM, job), tier, IDENTITY);
     repo.putCachedAnalysis(key, "m1", MODEL, analysis, {}, tier);
     return repo;
   };
@@ -157,7 +182,9 @@ describe("cachedAnalysisFor decides what a cached row is allowed to answer", () 
   it("serves a stored dossier to either mode", () => {
     for (const twoStage of [false, true]) {
       const repo = store("full", fullAnalysis());
-      expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, twoStage, policy)?.strengths).toEqual(["Ships React at scale"]);
+      expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, twoStage, policy, IDENTITY)?.strengths).toEqual([
+        "Ships React at scale",
+      ]);
     }
   });
 
@@ -165,31 +192,31 @@ describe("cachedAnalysisFor decides what a cached row is allowed to answer", () 
     // Single-stage wants a dossier and nothing less. Serving the stub is
     // exactly the bug: the pass would report a cache hit and never buy one.
     const repo = store("triage", triageOnlyAnalysis(verdict({ recommendation: "skip", fitScore: 20 })));
-    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, false, policy)).toBeNull();
+    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, false, policy, IDENTITY)).toBeNull();
   });
 
   it("serves a stub to a two-stage pass when the stub does not earn a dossier", () => {
     // This is the free case: the stored verdict already answers the only
     // question this pass would have asked.
     const repo = store("triage", triageOnlyAnalysis(verdict({ recommendation: "skip", fitScore: 20 })));
-    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy)?.recommendation).toBe("skip");
+    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy, IDENTITY)?.recommendation).toBe("skip");
   });
 
   it("treats a stub that DOES earn a dossier as a miss, so the stub never becomes permanent", () => {
     // The defect in one line: without this the stub is served forever to a
     // pass whose whole purpose was to buy the dossier it is standing in for.
     const repo = store("triage", triageOnlyAnalysis(verdict({ recommendation: "network_or_watch" })));
-    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy)).toBeNull();
+    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy, IDENTITY)).toBeNull();
   });
 
   it("routes a stub on fit as well as recommendation, matching deservesDossier", () => {
     const repo = store("triage", triageOnlyAnalysis(verdict({ recommendation: "skip", fitScore: 85 })));
-    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy)).toBeNull();
+    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy, IDENTITY)).toBeNull();
   });
 
   it("is a miss when nothing is stored at all", () => {
     const { repo } = memoryRepo();
-    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy)).toBeNull();
+    expect(cachedAnalysisFor(repo, job, MODEL, SYSTEM, true, policy, IDENTITY)).toBeNull();
   });
 });
 
@@ -203,7 +230,7 @@ describe("no value the analyst did not produce is rendered as though it did", ()
   function briefingFor(analysis: Analysis): string {
     const { repo, db } = memoryRepo();
     const id = seedJob(db, { company: "Acme", title: "Staff Engineer", fitScore: 80 });
-    repo.saveAnalysis(id, analysis, "claude-opus-5");
+    saveAnalysisFresh(repo, db, id, analysis, "claude-opus-5");
     return buildDailyReport({ repo, profile, sources }).markdown;
   }
 

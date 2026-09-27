@@ -266,6 +266,21 @@ export interface EnrichedJob extends NormalizedJob {
   negativeSignals: string[];
   analysis: Analysis | null;
   analyzedAt: string | null;
+  /**
+   * The identity `analysis` was formed against, snapshotted at analysis time
+   * (JOB-51). Every field is `null` when there is no analysis, or when there
+   * is one but it predates this column and was never backfilled - a legacy
+   * row is unverifiable, not asserted fresh. Structurally the same shape as
+   * `StoredAnalysisIdentity` in src/analysis/identity.ts; not imported from
+   * there so the model layer does not depend on the analysis layer.
+   */
+  analysisIdentity: {
+    titleHash: string | null;
+    locationHash: string | null;
+    employmentHash: string | null;
+    compensationHash: string | null;
+    evidenceHash: string | null;
+  };
   firstSeen: string;
   lastSeen: string;
   notes: string | null;

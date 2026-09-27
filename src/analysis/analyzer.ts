@@ -5,6 +5,7 @@ import { analysisSchemaFor, isTriageOnly, triageSchemaFor, triageOnlyAnalysis, t
 import type { JobRepo } from "../db/repo.js";
 import { buildAnalysisJsonSchema, buildTriageJsonSchema } from "./schema.js";
 import { buildSystemPrompt, buildUserPrompt } from "./prompt.js";
+import { computeAnalysisIdentity, type AnalysisIdentity } from "./identity.js";
 import { sha256 } from "../lib/hash.js";
 import { log } from "../lib/log.js";
 
@@ -209,10 +210,11 @@ export function cachedAnalysisFor(
   systemPrompt: string,
   twoStage: boolean,
   dossierPolicy: DossierPolicy,
+  identity: AnalysisIdentity,
 ): Analysis | null {
   const evidence = evidenceVersion(systemPrompt, job);
   const at = (tier: AnalysisTier): Analysis | null =>
-    repo.getCachedAnalysis(repo.cacheKey(job.materialHash, job.title, job.company, model, evidence, tier));
+    repo.getCachedAnalysis(repo.cacheKey(job.materialHash, job.title, job.company, model, evidence, tier, identity));
 
   const full = at("full");
   if (full) return full;
@@ -254,12 +256,13 @@ export async function fetchDossier(
 
   const systemPrompt = buildSystemPrompt(profile);
   const laneKeys = Object.keys(profile.lanes);
+  const identity = computeAnalysisIdentity(job, profile);
   const evidence = evidenceVersion(systemPrompt, job);
-  const key = repo.cacheKey(job.materialHash, job.title, job.company, opts.model, evidence, "full");
+  const key = repo.cacheKey(job.materialHash, job.title, job.company, opts.model, evidence, "full", identity);
 
   const cached = repo.getCachedAnalysis(key);
   if (cached) {
-    repo.saveAnalysis(job.id, cached, opts.model);
+    repo.saveAnalysis(job.id, cached, opts.model, identity);
     return { analysis: cached, usage: emptyUsage(), fromCache: true };
   }
 
@@ -273,7 +276,7 @@ export async function fetchDossier(
     "full",
   );
 
-  repo.saveAnalysis(job.id, result.analysis, opts.model);
+  repo.saveAnalysis(job.id, result.analysis, opts.model, identity);
   repo.putCachedAnalysis(
     key,
     job.materialHash,
@@ -317,9 +320,15 @@ export async function runAnalysis(
   // never by a fit proxy - JOB-32 retired that and it is not coming back. So a
   // slate pass that cannot finish in one run simply stops on the ceiling and
   // resumes tomorrow, which is what makes the backfill a multi-run one.
-  const eligible = repo.eligibleForAnalysis(diversity, opts.minFit);
+  //
+  // Computed once, up front, and reused for every eligibility check and cache
+  // lookup below: `evidenceHash` depends only on the profile (JOB-51), not on
+  // any one job, so there is exactly one "current" value for this whole pass.
+  const systemPrompt = buildSystemPrompt(profile);
+  const currentEvidenceHash = sha256(systemPrompt);
+  const eligible = repo.eligibleForAnalysis(diversity, currentEvidenceHash, opts.minFit);
   const limit = opts.slate ? Math.max(opts.limit, eligible) : opts.limit;
-  const candidates = repo.needingAnalysis(limit, diversity, opts.minFit);
+  const candidates = repo.needingAnalysis(limit, diversity, currentEvidenceHash, opts.minFit);
   if (opts.slate) {
     log.info(`Slate pass: ${eligible} eligible, ${candidates.length} selected. Spend stops the pass, not the list.`);
   }
@@ -377,14 +386,14 @@ export async function runAnalysis(
     recommendations: profile.analysis_detail.dossier_for,
     minFit: profile.analysis_detail.dossier_min_fit,
   };
-  const systemPrompt = buildSystemPrompt(profile);
 
   // Serve everything we can from cache before touching the network at all.
   const needsCall: EnrichedJob[] = [];
   for (const job of candidates) {
-    const cached = cachedAnalysisFor(repo, job, opts.model, systemPrompt, twoStage, dossierPolicy);
+    const identity = computeAnalysisIdentity(job, profile);
+    const cached = cachedAnalysisFor(repo, job, opts.model, systemPrompt, twoStage, dossierPolicy, identity);
     if (cached) {
-      repo.saveAnalysis(job.id, cached, opts.model);
+      repo.saveAnalysis(job.id, cached, opts.model, identity);
       summary.fromCache++;
     } else {
       needsCall.push(job);
@@ -462,7 +471,8 @@ export async function runAnalysis(
       } else {
         result = await analyzeOne(client, systemPrompt, job, opts, laneKeys);
       }
-      repo.saveAnalysis(job.id, result.analysis, opts.model);
+      const identity = computeAnalysisIdentity(job, profile);
+      repo.saveAnalysis(job.id, result.analysis, opts.model, identity);
       // Stored under the tier actually produced. Writing a triage stub under
       // the dossier's key is defect 1 of JOB-40: every later read gets the stub.
       const producedTier: AnalysisTier = isTriageOnly(result.analysis) ? "triage" : "full";
@@ -473,6 +483,7 @@ export async function runAnalysis(
         opts.model,
         evidenceVersion(systemPrompt, job),
         producedTier,
+        identity,
       );
       repo.putCachedAnalysis(
         key,

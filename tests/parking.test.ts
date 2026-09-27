@@ -133,7 +133,7 @@ describe("planParking", () => {
   });
 });
 
-import { memoryRepo, seedJob } from "./helpers/db.js";
+import { memoryRepo, seedJob, TEST_EVIDENCE_HASH } from "./helpers/db.js";
 
 /**
  * The SQL side of parking. `planParking` already refuses to nominate a
@@ -176,10 +176,14 @@ describe("parked postings leave the pools", () => {
     const { repo, db } = memoryRepo();
     seedJob(db, { id: "closed", company: "Alpha", applicationRoi: 99, fitScore: 99, status: "CLOSED" });
     seedJob(db, { id: "open", company: "Beta", applicationRoi: 10, fitScore: 10, status: "NEW" });
-    const picked = repo.needingAnalysis(10, {
-      perCompanyCap: 2, backfillCap: 3, coldAfter: 6, unexploredBonus: 8, coldPenalty: 15,
-      freshDays: 21, freshBonus: 12, evergreenDays: null, maxAttempts: 2,
-    });
+    const picked = repo.needingAnalysis(
+      10,
+      {
+        perCompanyCap: 2, backfillCap: 3, coldAfter: 6, unexploredBonus: 8, coldPenalty: 15,
+        freshDays: 21, freshBonus: 12, evergreenDays: null, maxAttempts: 2,
+      },
+      TEST_EVIDENCE_HASH,
+    );
     expect(picked.map((j) => j.id)).toEqual(["open"]);
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { memoryRepo, seedJob } from "./helpers/db.js";
+import { memoryRepo, saveAnalysisFresh, seedJob } from "./helpers/db.js";
 import { routingGate, MIN_ROUTING_SAMPLE, type TriageBenchmark, type TriageBenchmarkRow } from "../src/analysis/benchmark.js";
 import { triageOnlyAnalysis, type Analysis, type TriageVerdict } from "../src/model/job.js";
 import { deservesDossier, type DossierPolicy } from "../src/analysis/detail.js";
@@ -115,7 +115,7 @@ describe("analyzedSample", () => {
   function seedAnalyzed(db: ReturnType<typeof memoryRepo>["db"], repo: ReturnType<typeof memoryRepo>["repo"], a: Analysis, roi: number) {
     const id = seedJob(db, { company: "Acme", title: "Staff Engineer", applicationRoi: roi });
     db.prepare("UPDATE jobs SET filter_passed = 1 WHERE id = ?").run(id);
-    repo.saveAnalysis(id, a, "claude-opus-5");
+    saveAnalysisFresh(repo, db, id, a, "claude-opus-5");
     return id;
   }
 

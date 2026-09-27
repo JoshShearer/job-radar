@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { memoryRepo, seedJob } from "./helpers/db.js";
+import { memoryRepo, saveAnalysisFresh, seedJob, TEST_EVIDENCE_HASH } from "./helpers/db.js";
 import { resolveAnalyzeOptions } from "../src/analysis/budget.js";
 import type { AnalysisDiversity } from "../src/db/repo.js";
 import type { CareerProfile } from "../src/config/schema.js";
@@ -39,10 +39,10 @@ describe("eligibleForAnalysis sizes the slate", () => {
   it("counts every eligible posting, not the top of the ranking", () => {
     const { repo, db } = memoryRepo();
     for (let i = 0; i < 25; i++) eligible(db, `Co${i}`, 50 + i);
-    expect(repo.eligibleForAnalysis(DIVERSITY)).toBe(25);
+    expect(repo.eligibleForAnalysis(DIVERSITY, TEST_EVIDENCE_HASH)).toBe(25);
     // The ranked selection is still capped by its limit - that is the whole
     // difference between a top-K pass and a slate pass.
-    expect(repo.needingAnalysis(10, DIVERSITY)).toHaveLength(10);
+    expect(repo.needingAnalysis(10, DIVERSITY, TEST_EVIDENCE_HASH)).toHaveLength(10);
   });
 
   it("excludes what needingAnalysis excludes, so the two agree", () => {
@@ -51,19 +51,19 @@ describe("eligibleForAnalysis sizes the slate", () => {
     const filtered = seedJob(db, { company: "Beta", title: "Engineer", applicationRoi: 95, fitScore: 95 });
     db.prepare("UPDATE jobs SET filter_passed = 0 WHERE id = ?").run(filtered);
     const analyzed = eligible(db, "Gamma", 80);
-    repo.saveAnalysis(analyzed, { recommendation: "skip" } as never, "m");
+    saveAnalysisFresh(repo, db, analyzed, { recommendation: "skip" } as never, "m");
     const closed = eligible(db, "Delta", 70);
     db.prepare("UPDATE jobs SET status = 'CLOSED' WHERE id = ?").run(closed);
 
-    expect(repo.eligibleForAnalysis(DIVERSITY)).toBe(1);
-    expect(repo.needingAnalysis(50, DIVERSITY)).toHaveLength(1);
+    expect(repo.eligibleForAnalysis(DIVERSITY, TEST_EVIDENCE_HASH)).toBe(1);
+    expect(repo.needingAnalysis(50, DIVERSITY, TEST_EVIDENCE_HASH)).toHaveLength(1);
   });
 
   it("respects a fit floor the same way the selection does", () => {
     const { repo, db } = memoryRepo();
     eligible(db, "Acme", 90);
     eligible(db, "Beta", 20);
-    expect(repo.eligibleForAnalysis(DIVERSITY, 50)).toBe(1);
+    expect(repo.eligibleForAnalysis(DIVERSITY, TEST_EVIDENCE_HASH, 50)).toBe(1);
   });
 
   it("counts past the per-company cap, because the cap shapes a pass and not the slate", () => {
@@ -72,8 +72,8 @@ describe("eligibleForAnalysis sizes the slate", () => {
     // be silently reduced by it.
     const { repo, db } = memoryRepo();
     for (let i = 0; i < 6; i++) eligible(db, "Acme", 50 + i);
-    expect(repo.eligibleForAnalysis(DIVERSITY)).toBe(6);
-    expect(repo.needingAnalysis(6, DIVERSITY).length).toBeLessThanOrEqual(6);
+    expect(repo.eligibleForAnalysis(DIVERSITY, TEST_EVIDENCE_HASH)).toBe(6);
+    expect(repo.needingAnalysis(6, DIVERSITY, TEST_EVIDENCE_HASH).length).toBeLessThanOrEqual(6);
   });
 });
 
