@@ -418,33 +418,43 @@ export class JobRepo {
    * row - eligible/pending is the SAFE failure mode for that, but a live call
    * site forgetting the parameter is a bug worth a compile error, not a
    * silently-degraded snapshot.
+   *
+   * The UPDATE and the `analyzed` event are one transaction (JOB-47 PR3):
+   * before this they were two separate autocommitted statements, so a
+   * failure recording the event could leave a job with a live analysis and
+   * no history entry for it. This is unrelated to JOB-52's `model_receipts` -
+   * that records one receipt per model ATTEMPT and is already correctly
+   * atomic on its own; this transaction only covers the result being
+   * attached to the job row.
    */
   saveAnalysis(jobId: string, analysis: Analysis, model: string, identity: AnalysisIdentity): void {
-    this.db
-      .prepare(
-        `UPDATE jobs SET
-           analysis_json = @analysis_json,
-           analysis_model = @analysis_model,
-           analyzed_at = @analyzed_at,
-           analysis_title_hash = @title_hash,
-           analysis_location_hash = @location_hash,
-           analysis_employment_hash = @employment_hash,
-           analysis_compensation_hash = @compensation_hash,
-           analysis_evidence_hash = @evidence_hash
-         WHERE id = @id`,
-      )
-      .run({
-        id: jobId,
-        analysis_json: JSON.stringify(analysis),
-        analysis_model: model,
-        analyzed_at: nowIso(),
-        title_hash: identity.titleHash,
-        location_hash: identity.locationHash,
-        employment_hash: identity.employmentHash,
-        compensation_hash: identity.compensationHash,
-        evidence_hash: identity.evidenceHash,
-      });
-    this.addEvent(jobId, "analyzed", { model, recommendation: analysis.recommendation });
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE jobs SET
+             analysis_json = @analysis_json,
+             analysis_model = @analysis_model,
+             analyzed_at = @analyzed_at,
+             analysis_title_hash = @title_hash,
+             analysis_location_hash = @location_hash,
+             analysis_employment_hash = @employment_hash,
+             analysis_compensation_hash = @compensation_hash,
+             analysis_evidence_hash = @evidence_hash
+           WHERE id = @id`,
+        )
+        .run({
+          id: jobId,
+          analysis_json: JSON.stringify(analysis),
+          analysis_model: model,
+          analyzed_at: nowIso(),
+          title_hash: identity.titleHash,
+          location_hash: identity.locationHash,
+          employment_hash: identity.employmentHash,
+          compensation_hash: identity.compensationHash,
+          evidence_hash: identity.evidenceHash,
+        });
+      this.addEvent(jobId, "analyzed", { model, recommendation: analysis.recommendation });
+    })();
   }
 
   /**
