@@ -104,11 +104,14 @@ program
  */
 const SKIP_RUN_LOG = process.env.JOB_RADAR_NO_RUN_LOG === "1";
 
-function withRepo<T>(command: string, fn: (repo: JobRepo, db: ReturnType<typeof openDb>) => T | Promise<T>): Promise<T> {
+function withRepo<T>(
+  command: string,
+  fn: (repo: JobRepo, db: ReturnType<typeof openDb>, runId: number | null) => T | Promise<T>,
+): Promise<T> {
   const db = openDb();
   const repo = new JobRepo(db);
   const runId = SKIP_RUN_LOG ? null : repo.startRun(command);
-  return Promise.resolve(fn(repo, db))
+  return Promise.resolve(fn(repo, db, runId))
     .then((result) => {
       if (runId !== null) repo.finishRun(runId, result ?? {}, true);
       return result;
@@ -193,7 +196,7 @@ program
   .option("--dry-run", "show what would be analyzed without calling the API", false)
   .action(async (opts: { limit: string; minFit?: string; model?: string; effort?: string; maxSpend?: string; includeEvergreen: boolean; twoStage: boolean; slate: boolean; dryRun: boolean }) => {
     const profile = loadProfile();
-    await withRepo("analyze", async (repo) => {
+    await withRepo("analyze", async (repo, _db, runId) => {
       const summary = await runAnalysis(
         repo,
         profile,
@@ -201,6 +204,7 @@ program
           model: process.env.JOB_RADAR_MODEL,
           effort: process.env.JOB_RADAR_EFFORT,
         }),
+        runId,
       );
       console.log("");
       console.log(
@@ -277,7 +281,7 @@ program
       },
     ) => {
     const profile = loadProfile();
-    await withRepo("apply", async (repo) => {
+    await withRepo("apply", async (repo, _db, runId) => {
       const job = repo.get(jobId);
       if (!job) {
         console.error(`No job matches "${jobId}". Use \`job-radar top\` to list ids.`);
@@ -291,7 +295,9 @@ program
       }
 
       const applyModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL;
-      if (await refuseIfUnendorsed(repo, profile, job, opts.override, "apply", applyModel, opts.effort ?? "high")) {
+      if (
+        await refuseIfUnendorsed(repo, profile, job, opts.override, "apply", applyModel, opts.effort ?? "high", runId)
+      ) {
         process.exitCode = 1;
         return { ok: false, refused: "unendorsed", jobId: job.id, verdict: job.analysis?.recommendation ?? null };
       }
@@ -322,14 +328,21 @@ program
         pack = saved;
       } else {
         if (!reuse.reuse && saved) log.info(reuse.why);
-        const fresh = await prepareApplication(job, profile, {
-          // Effort stays high: this output is read closely by a human and acted
-          // on. The saving comes from the model tier and from not generating
-          // later-stage sections, not from thinking less about the ones kept.
-          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL,
-          effort: opts.effort ?? "high",
-          full: opts.full,
-        });
+        const fresh = await prepareApplication(
+          job,
+          profile,
+          {
+            // Effort stays high: this output is read closely by a human and
+            // acted on. The saving comes from the model tier and from not
+            // generating later-stage sections, not from thinking less about
+            // the ones kept.
+            model: opts.model ?? process.env.JOB_RADAR_MODEL ?? PACK_MODEL,
+            effort: opts.effort ?? "high",
+            full: opts.full,
+          },
+          repo,
+          runId,
+        );
         pack = fresh.pack;
         usage = fresh.usage;
         usageMissing = fresh.usageMissing;
@@ -481,10 +494,22 @@ resumeCmd
     }
 
     log.info(`Structuring ${file} (${source.length} chars)`);
-    const { resume, uncertain, usage } = await importResume(source, {
-      model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
-      effort: opts.effort ?? "high",
-    });
+    // NOT `withRepo`: deliberately preserves that `resume import` creates no
+    // `runs` row (it opens a database only to write a receipt). Opened and
+    // closed here rather than left to the process exit, since nothing else in
+    // this command touches the database.
+    const db = openDb();
+    const repo = new JobRepo(db);
+    const { resume, uncertain, usage } = await importResume(
+      source,
+      {
+        model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+        effort: opts.effort ?? "high",
+      },
+      repo,
+      null,
+    );
+    closeDb();
     saveResume(resume, target);
 
     log.info(`Wrote ${target}`);
@@ -577,7 +602,7 @@ resumeCmd
     }
 
     const profile = loadProfile();
-    await withRepo("resume-tailor", async (repo) => {
+    await withRepo("resume-tailor", async (repo, _db, runId) => {
       const job = repo.get(jobId);
       if (!job) {
         console.error(`No job matches "${jobId}".`);
@@ -592,7 +617,16 @@ resumeCmd
 
       const tailorGateModel = opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL;
       if (
-        await refuseIfUnendorsed(repo, profile, job, opts.override, "resume tailor", tailorGateModel, opts.effort ?? "high")
+        await refuseIfUnendorsed(
+          repo,
+          profile,
+          job,
+          opts.override,
+          "resume tailor",
+          tailorGateModel,
+          opts.effort ?? "high",
+          runId,
+        )
       ) {
         process.exitCode = 1;
         return { ok: false, refused: "unendorsed", jobId: job.id, verdict: job.analysis?.recommendation ?? null };
@@ -637,10 +671,17 @@ resumeCmd
         ({ composed, violations, reverted } = composeResume(resume, plan));
       } else {
         if (!reuse.reuse && savedPlan?.success) log.info(reuse.why);
-        const fresh = await tailorResume(resume, job, match, {
-          model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
-          effort: opts.effort ?? "high",
-        });
+        const fresh = await tailorResume(
+          resume,
+          job,
+          match,
+          {
+            model: opts.model ?? process.env.JOB_RADAR_MODEL ?? DEFAULT_MODEL,
+            effort: opts.effort ?? "high",
+          },
+          repo,
+          runId,
+        );
         ({ plan, violations, reverted, usage } = fresh);
         usageMissing = fresh.usageMissing;
         // tailorResume already ran enforcement once for this report; compose
@@ -847,6 +888,7 @@ async function refuseIfUnendorsed(
   command: string,
   model: string,
   effort: string,
+  runId: number | null,
 ): Promise<boolean> {
   // `profile` in scope here is what makes the staleness check possible - see
   // the JSDoc on `endorsementOf`. This is the one gate that spends money, so
@@ -871,7 +913,7 @@ async function refuseIfUnendorsed(
     if (job.analysis && isTriageOnly(job.analysis)) {
       log.info("Triage only so far. Fetching the dossier before preparing...");
       try {
-        const got = await fetchDossier(repo, profile, job, { model, effort });
+        const got = await fetchDossier(repo, profile, job, { model, effort }, runId);
         if (got) {
           job.analysis = got.analysis;
           log.info(
@@ -1158,7 +1200,7 @@ program
     const profile = loadProfile();
     const sourcesConfig = loadSources();
 
-    await withRepo("daily", async (repo, db) => {
+    await withRepo("daily", async (repo, db, runId) => {
       let ingestSummary = null;
       if (opts.ingest) {
         ingestSummary = await runIngest(repo, profile, sourcesConfig);
@@ -1198,6 +1240,7 @@ program
             model: process.env.JOB_RADAR_MODEL,
             effort: process.env.JOB_RADAR_EFFORT,
           }, 8),
+          runId,
         );
         log.info(
           `Analysis: ${analysis.analyzed} new, ${analysis.fromCache} cached, ~$${analysis.estimatedCostUsd.toFixed(3)}`,
@@ -1389,7 +1432,7 @@ program
       return;
     }
     const mode = opts.mode as BenchmarkMode;
-    await withRepo("benchmark-triage", async (repo) => {
+    await withRepo("benchmark-triage", async (repo, _db, runId) => {
       const policy = {
         recommendations: profile.analysis_detail.dossier_for,
         minFit: profile.analysis_detail.dossier_min_fit,
@@ -1414,12 +1457,17 @@ program
         return { estimated: sample.length, mode };
       }
 
-      const result = await benchmarkTriage(repo, profile, {
-        limit,
-        model,
-        effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
-        mode,
-      });
+      const result = await benchmarkTriage(
+        repo,
+        profile,
+        {
+          limit,
+          model,
+          effort: opts.effort ?? process.env.JOB_RADAR_EFFORT ?? DEFAULT_EFFORT,
+          mode,
+        },
+        runId,
+      );
 
       const pct = (result.agreementRate * 100).toFixed(1);
       console.log("");
