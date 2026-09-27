@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { CareerProfile } from "../config/schema.js";
 import type { Analysis, EnrichedJob } from "../model/job.js";
 import { isTriageOnly } from "../model/job.js";
-import { readUsage, type TokenUsage } from "../lib/cost.js";
+import type { TokenUsage } from "../lib/cost.js";
 import { ApplicationPackSchema, applicationJsonSchema, type ApplicationPack } from "./application.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { truncateWords } from "../lib/html.js";
@@ -12,6 +12,8 @@ import { formatSalary } from "../lib/salary.js";
 import { PROJECT_ROOT } from "../config/load.js";
 import { markdownToHtml } from "../report/html.js";
 import { log } from "../lib/log.js";
+import type { JobRepo } from "../db/repo.js";
+import { callModelWithReceipt } from "../db/receipts.js";
 
 export const APPLICATIONS_DIR = resolve(PROJECT_ROOT, "applications");
 
@@ -56,6 +58,8 @@ export async function prepareApplication(
   job: EnrichedJob,
   profile: CareerProfile,
   opts: { model: string; effort: string; full?: boolean },
+  repo: JobRepo,
+  runId: number | null,
 ): Promise<{ pack: ApplicationPack; usage: TokenUsage; usageMissing: boolean }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
@@ -111,31 +115,41 @@ ${
 
 Return only the structured object.`;
 
-  const response = await client.messages.create({
-    model: opts.model,
-    max_tokens: 16000,
-    system: [{ type: "text", text: buildSystemPrompt(profile), cache_control: { type: "ephemeral" } }],
-    output_config: {
-      effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
-      format: { type: "json_schema", schema: applicationJsonSchema(opts.full === true, Object.keys(profile.lanes)) },
+  const { result, usage, usageMissing } = await callModelWithReceipt(
+    repo,
+    { runId, jobId: job.id, purpose: "apply-pack", model: opts.model, tier: null },
+    () =>
+      client.messages.create({
+        model: opts.model,
+        max_tokens: 16000,
+        system: [{ type: "text", text: buildSystemPrompt(profile), cache_control: { type: "ephemeral" } }],
+        output_config: {
+          effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
+          format: {
+            type: "json_schema",
+            schema: applicationJsonSchema(opts.full === true, Object.keys(profile.lanes)),
+          },
+        },
+        messages: [{ role: "user", content: userPrompt }],
+      }),
+    (response) => {
+      const message = response as Anthropic.Message;
+      if (message.stop_reason === "refusal") throw new Error("Model declined to prepare this application.");
+
+      const text = message.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+      if (!text) throw new Error("No text block in response.");
+
+      const parsed = ApplicationPackSchema.safeParse(JSON.parse(text));
+      if (!parsed.success) {
+        throw new Error(
+          `Application pack failed validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+        );
+      }
+      return parsed.data;
     },
-    messages: [{ role: "user", content: userPrompt }],
-  });
+  );
 
-  if (response.stop_reason === "refusal") throw new Error("Model declined to prepare this application.");
-
-  const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
-  if (!text) throw new Error("No text block in response.");
-
-  const parsed = ApplicationPackSchema.safeParse(JSON.parse(text));
-  if (!parsed.success) {
-    throw new Error(
-      `Application pack failed validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-    );
-  }
-
-  const reading = readUsage(response, `apply ${job.id} (pack)`);
-  return { pack: parsed.data, usage: reading.usage, usageMissing: reading.missing };
+  return { pack: result, usage, usageMissing };
 }
 
 /** Render the pack as Markdown. */

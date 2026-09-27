@@ -7,7 +7,9 @@ import { allBullets } from "./schema.js";
 import type { MatchReport } from "./requirements.js";
 import type { Violation } from "./provenance.js";
 import { enforceProvenance } from "./render.js";
-import { readUsage, type TokenUsage } from "../lib/cost.js";
+import type { TokenUsage } from "../lib/cost.js";
+import type { JobRepo } from "../db/repo.js";
+import { callModelWithReceipt } from "../db/receipts.js";
 
 /**
  * Tailoring: choose which of the candidate's real bullets to show, in what
@@ -111,6 +113,8 @@ export async function tailorResume(
   job: EnrichedJob,
   match: MatchReport,
   opts: { model: string; effort: string },
+  repo: JobRepo,
+  runId: number | null,
 ): Promise<TailorResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
@@ -171,37 +175,45 @@ ${truncateWords(job.descriptionClean, 6000)}
 
 Return only the structured object.`;
 
-  const response = await client.messages
-    .stream({
-      model: opts.model,
-      max_tokens: 16000,
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      output_config: {
-        effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
-        format: { type: "json_schema", schema: TAILOR_JSON_SCHEMA as unknown as Record<string, unknown> },
-      },
-      messages: [{ role: "user", content: user }],
-    })
-    .finalMessage();
+  const { result, usage, usageMissing } = await callModelWithReceipt(
+    repo,
+    { runId, jobId: job.id, purpose: "tailor", model: opts.model, tier: null },
+    () =>
+      client.messages
+        .stream({
+          model: opts.model,
+          max_tokens: 16000,
+          system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+          output_config: {
+            effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
+            format: { type: "json_schema", schema: TAILOR_JSON_SCHEMA as unknown as Record<string, unknown> },
+          },
+          messages: [{ role: "user", content: user }],
+        })
+        .finalMessage(),
+    (response) => {
+      const message = response as Anthropic.Message;
+      if (message.stop_reason === "refusal") throw new Error("Model declined to tailor this resume.");
+      const text = message.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+      if (!text) throw new Error("No text block in response.");
 
-  if (response.stop_reason === "refusal") throw new Error("Model declined to tailor this resume.");
-  const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
-  if (!text) throw new Error("No text block in response.");
+      const parsed = TailorSchema.safeParse(JSON.parse(text));
+      if (!parsed.success) {
+        throw new Error(
+          `Tailoring plan failed validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+        );
+      }
 
-  const parsed = TailorSchema.safeParse(JSON.parse(text));
-  if (!parsed.success) {
-    throw new Error(
-      `Tailoring plan failed validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-    );
-  }
+      const plan = parsed.data;
+      // The one true provenance check, defined in render.ts alongside the
+      // composition it guards. Called here too so the run's own report
+      // (below, and the caller's cost/violation accounting) reflects what the
+      // model actually got wrong - `composeResume` will re-run it before
+      // rendering.
+      const { violations, reverted } = enforceProvenance(resume, plan);
+      return { plan, violations, reverted };
+    },
+  );
 
-  const plan = parsed.data;
-  // The one true provenance check, defined in render.ts alongside the
-  // composition it guards. Called here too so the run's own report (below,
-  // and the caller's cost/violation accounting) reflects what the model
-  // actually got wrong - `composeResume` will re-run it before rendering.
-  const { violations, reverted } = enforceProvenance(resume, plan);
-
-  const reading = readUsage(response, `resume tailor ${job.id}`);
-  return { plan, violations, reverted, usage: reading.usage, usageMissing: reading.missing };
+  return { plan: result.plan, violations: result.violations, reverted: result.reverted, usage, usageMissing };
 }

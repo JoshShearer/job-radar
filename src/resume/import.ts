@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ResumeSchema, type Resume } from "./schema.js";
-import { readUsage } from "../lib/cost.js";
+import type { JobRepo } from "../db/repo.js";
+import { callModelWithReceipt } from "../db/receipts.js";
 
 /**
  * Turn an existing resume into the structured master file.
@@ -122,6 +123,8 @@ const RESUME_JSON_SCHEMA = {
 export async function importResume(
   sourceText: string,
   opts: { model: string; effort: string },
+  repo: JobRepo,
+  runId: number | null,
 ): Promise<{ resume: Resume; uncertain: string[]; usage: { input: number; output: number } }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
@@ -149,36 +152,46 @@ Set verified: true only for concrete things the candidate did that they could de
 
   // Streamed: a full resume at this token budget can exceed the 10-minute
   // non-streaming request ceiling, and the SDK rejects the call outright.
-  const response = await client.messages
-    .stream({
-      model: opts.model,
-      max_tokens: 32000,
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      output_config: {
-        effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
-        format: { type: "json_schema", schema: RESUME_JSON_SCHEMA as unknown as Record<string, unknown> },
-      },
-      messages: [{ role: "user", content: `Convert this resume into the structured format.\n\n---\n\n${sourceText}` }],
-    })
-    .finalMessage();
+  const { result, usage } = await callModelWithReceipt(
+    repo,
+    { runId, jobId: null, purpose: "import", model: opts.model, tier: null },
+    () =>
+      client.messages
+        .stream({
+          model: opts.model,
+          max_tokens: 32000,
+          system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+          output_config: {
+            effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max",
+            format: { type: "json_schema", schema: RESUME_JSON_SCHEMA as unknown as Record<string, unknown> },
+          },
+          messages: [
+            { role: "user", content: `Convert this resume into the structured format.\n\n---\n\n${sourceText}` },
+          ],
+        })
+        .finalMessage(),
+    (response) => {
+      const message = response as Anthropic.Message;
+      if (message.stop_reason === "refusal") throw new Error("Model declined to parse this resume.");
+      const text = message.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+      if (!text) throw new Error("No text block in response.");
 
-  if (response.stop_reason === "refusal") throw new Error("Model declined to parse this resume.");
-  const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
-  if (!text) throw new Error("No text block in response.");
-
-  const raw = JSON.parse(text) as { uncertain?: string[] };
-  const parsed = ResumeSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error(
-      `Imported resume failed validation: ${parsed.error.issues
-        .map((i) => `${i.path.join(".")}: ${i.message}`)
-        .join("; ")}`,
-    );
-  }
+      const raw = JSON.parse(text) as { uncertain?: string[] };
+      const parsed = ResumeSchema.safeParse(raw);
+      if (!parsed.success) {
+        throw new Error(
+          `Imported resume failed validation: ${parsed.error.issues
+            .map((i) => `${i.path.join(".")}: ${i.message}`)
+            .join("; ")}`,
+        );
+      }
+      return { resume: parsed.data, uncertain: raw.uncertain ?? [] };
+    },
+  );
 
   return {
-    resume: parsed.data,
-    uncertain: raw.uncertain ?? [],
-    usage: readUsage(response, "resume import").usage,
+    resume: result.resume,
+    uncertain: result.uncertain,
+    usage: { input: usage.input, output: usage.output },
   };
 }

@@ -9,9 +9,10 @@ import { computeAnalysisIdentity, type AnalysisIdentity } from "./identity.js";
 import { sha256 } from "../lib/hash.js";
 import { log } from "../lib/log.js";
 
-import { addUsage, emptyUsage, estimateCostUsd, PRICING, readUsage, type TokenUsage } from "../lib/cost.js";
+import { addUsage, emptyUsage, estimateCostUsd, PRICING, type TokenUsage } from "../lib/cost.js";
 import { classifyAnalysisFailure, countsAgainstJob } from "./failures.js";
 import { deservesDossier, type DossierPolicy } from "./detail.js";
+import { callModelWithReceipt } from "../db/receipts.js";
 
 export const DEFAULT_MODEL = "claude-opus-5";
 
@@ -250,6 +251,7 @@ export async function fetchDossier(
   profile: CareerProfile,
   job: EnrichedJob,
   opts: { model: string; effort: string },
+  runId: number | null,
 ): Promise<{ analysis: Analysis; usage: TokenUsage; fromCache: boolean } | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
@@ -274,6 +276,7 @@ export async function fetchDossier(
     { limit: 1, model: opts.model, effort: opts.effort, dryRun: false },
     laneKeys,
     "full",
+    { repo, runId, purpose: "apply-dossier" },
   );
 
   repo.saveAnalysis(job.id, result.analysis, opts.model, identity);
@@ -292,6 +295,7 @@ export async function runAnalysis(
   repo: JobRepo,
   profile: CareerProfile,
   opts: AnalyzeOptions,
+  runId: number | null,
 ): Promise<AnalyzeSummary> {
   const diversity = {
     perCompanyCap: profile.analysis_diversity.per_company_cap,
@@ -449,15 +453,20 @@ export async function runAnalysis(
       // The dossier decision is deterministic (`deservesDossier`) rather than
       // asked of the model: it decides where money goes, so it has to be
       // reproducible and auditable.
+      // One receipt per call, automatically: a triage call and the dossier
+      // call it earns are two separate `analyzeOne` invocations, so a triage
+      // that succeeds followed by a dossier that fails leaves two receipts -
+      // one success, one failure - with no special-casing needed here.
+      const receiptCtx = { repo, runId, purpose: "analyze" };
       let result: OneResult;
       if (twoStage) {
-        const triaged = await analyzeOne(client, systemPrompt, job, opts, laneKeys, "triage");
+        const triaged = await analyzeOne(client, systemPrompt, job, opts, laneKeys, "triage", receiptCtx);
         result = triaged;
         const verdict = triaged.triage;
         if (verdict && deservesDossier(verdict, dossierPolicy)) {
           // The system prefix is prompt-cached, so this second call bills its
           // large invariant half at cache-read rates.
-          const full = await analyzeOne(client, systemPrompt, job, opts, laneKeys, "full");
+          const full = await analyzeOne(client, systemPrompt, job, opts, laneKeys, "full", receiptCtx);
           result = {
             analysis: full.analysis,
             triage: verdict,
@@ -469,7 +478,7 @@ export async function runAnalysis(
           summary.triageOnly++;
         }
       } else {
-        result = await analyzeOne(client, systemPrompt, job, opts, laneKeys);
+        result = await analyzeOne(client, systemPrompt, job, opts, laneKeys, "full", receiptCtx);
       }
       const identity = computeAnalysisIdentity(job, profile);
       repo.saveAnalysis(job.id, result.analysis, opts.model, identity);
@@ -630,86 +639,96 @@ export async function analyzeOne(
    * whether the response is checked.
    */
   tier: "triage" | "full" = "full",
+  /** JOB-52: who to bill this attempt's receipt to, and what to call it. */
+  ctx: { repo: JobRepo; runId: number | null; purpose: string },
 ): Promise<OneResult> {
   const note = buildDeterministicNote(job);
 
-  const response = await client.messages.create({
-    model: opts.model,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    // The system prefix is identical for every job in the run, so caching it
-    // makes the marginal cost of each additional job close to the description
-    // itself. Verify with usage.cache_read_input_tokens > 0 after the first call.
-    system: [
-      {
-        type: "text",
-        text: systemPrompt,
-        cache_control: { type: "ephemeral" },
-      },
-    ],
-    output_config: {
-      // Not every model accepts `effort`. Haiku 4.5 rejects it with a 400
-      // ("This model does not support the effort parameter"), so passing it
-      // unconditionally made `analyze --model claude-haiku-4-5` fail on every
-      // single job rather than fall back - found while benchmarking cheaper
-      // models against Opus verdicts.
-      ...(supportsEffort(opts.model) ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
-      format: {
-        type: "json_schema",
-        schema: (tier === "triage"
-          ? buildTriageJsonSchema(laneKeys)
-          : buildAnalysisJsonSchema(laneKeys)) as unknown as Record<string, unknown>,
-      },
+  const { result, usage, usageMissing } = await callModelWithReceipt(
+    ctx.repo,
+    { runId: ctx.runId, jobId: job.id, purpose: ctx.purpose, model: opts.model, tier },
+    () =>
+      client.messages.create({
+        model: opts.model,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        // The system prefix is identical for every job in the run, so caching
+        // it makes the marginal cost of each additional job close to the
+        // description itself. Verify with usage.cache_read_input_tokens > 0
+        // after the first call.
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        output_config: {
+          // Not every model accepts `effort`. Haiku 4.5 rejects it with a 400
+          // ("This model does not support the effort parameter"), so passing
+          // it unconditionally made `analyze --model claude-haiku-4-5` fail on
+          // every single job rather than fall back - found while benchmarking
+          // cheaper models against Opus verdicts.
+          ...(supportsEffort(opts.model)
+            ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" }
+            : {}),
+          format: {
+            type: "json_schema",
+            schema: (tier === "triage"
+              ? buildTriageJsonSchema(laneKeys)
+              : buildAnalysisJsonSchema(laneKeys)) as unknown as Record<string, unknown>,
+          },
+        },
+        messages: [{ role: "user", content: buildUserPrompt(job, note.full) }],
+      }),
+    (response) => {
+      const message = response as Anthropic.Message;
+
+      if (message.stop_reason === "refusal") {
+        throw new Error("Model declined to analyze this posting.");
+      }
+
+      // Say "truncated" rather than letting it surface as a JSON parse error.
+      //
+      // A response cut off at max_tokens IS invalid JSON, so without this the
+      // two are indistinguishable in the record - and they call for opposite
+      // responses. Truncation is a setting to raise or an output schema to
+      // shrink; malformed JSON from a constrained decode is a model problem.
+      // This was the leading hypothesis for the recorded failures and nothing
+      // could confirm or refute it, because no reason was ever stored.
+      if (message.stop_reason === "max_tokens") {
+        throw new Error(
+          `Response hit max_tokens (${MAX_OUTPUT_TOKENS}) and was truncated mid-object. ` +
+            `Raise the ceiling or shrink the output schema.`,
+        );
+      }
+
+      const text = message.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+      if (!text) throw new Error("No text block in response.");
+
+      let raw: unknown;
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        throw new Error(`Response was not valid JSON: ${text.slice(0, 200)}`);
+      }
+
+      // Structured outputs constrain the shape, but we validate anyway:
+      // nothing unvalidated is allowed into the database.
+      const schema = tier === "triage" ? triageSchemaFor(laneKeys) : analysisSchemaFor(laneKeys);
+      const parsed = schema.safeParse(raw);
+      if (!parsed.success) {
+        throw new Error(
+          `Response failed schema validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+        );
+      }
+
+      return {
+        analysis:
+          tier === "triage" ? triageOnlyAnalysis(parsed.data as TriageVerdict) : (parsed.data as Analysis),
+        triage: tier === "triage" ? (parsed.data as TriageVerdict) : null,
+      };
     },
-    messages: [{ role: "user", content: buildUserPrompt(job, note.full) }],
-  });
+  );
 
-  if (response.stop_reason === "refusal") {
-    throw new Error("Model declined to analyze this posting.");
-  }
-
-  // Say "truncated" rather than letting it surface as a JSON parse error.
-  //
-  // A response cut off at max_tokens IS invalid JSON, so without this the two
-  // are indistinguishable in the record - and they call for opposite responses.
-  // Truncation is a setting to raise or an output schema to shrink; malformed
-  // JSON from a constrained decode is a model problem. This was the leading
-  // hypothesis for the recorded failures and nothing could confirm or refute
-  // it, because no reason was ever stored.
-  if (response.stop_reason === "max_tokens") {
-    throw new Error(
-      `Response hit max_tokens (${MAX_OUTPUT_TOKENS}) and was truncated mid-object. ` +
-        `Raise the ceiling or shrink the output schema.`,
-    );
-  }
-
-  const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
-  if (!text) throw new Error("No text block in response.");
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new Error(`Response was not valid JSON: ${text.slice(0, 200)}`);
-  }
-
-  // Structured outputs constrain the shape, but we validate anyway: nothing
-  // unvalidated is allowed into the database.
-  const schema = tier === "triage" ? triageSchemaFor(laneKeys) : analysisSchemaFor(laneKeys);
-  const parsed = schema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error(
-      `Response failed schema validation: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-    );
-  }
-
-  const reading = readUsage(response, `analyze ${job.id} (${tier})`);
-  return {
-    analysis:
-      tier === "triage"
-        ? triageOnlyAnalysis(parsed.data as TriageVerdict)
-        : (parsed.data as Analysis),
-    triage: tier === "triage" ? (parsed.data as TriageVerdict) : null,
-    usage: reading.usage,
-    usageMissing: reading.missing,
-  };
+  return { analysis: result.analysis, triage: result.triage, usage, usageMissing };
 }

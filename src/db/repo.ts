@@ -8,6 +8,7 @@ import type { EmploymentType, SeniorityLevel } from "../lib/seniority.js";
 import { IN_FLIGHT_STATUSES, type Priority, type Status } from "../model/status.js";
 import { deservesDossier, type DossierPolicy } from "../analysis/detail.js";
 import type { AnalysisIdentity } from "../analysis/identity.js";
+import type { TokenUsage } from "../lib/cost.js";
 
 /**
  * How one analysis pass spreads its budget across companies.
@@ -1430,6 +1431,68 @@ export class JobRepo {
     this.db
       .prepare("UPDATE runs SET finished_at = ?, stats_json = ?, ok = ? WHERE id = ?")
       .run(nowIso(), JSON.stringify(stats), ok ? 1 : 0, id);
+  }
+
+  // ---- Model receipts (JOB-52) ---------------------------------------------
+
+  /**
+   * Record one paid model attempt, at the request seam - before any semantic
+   * validation of the response has had a chance to throw. See
+   * `src/db/receipts.ts` for the caller that makes that guarantee; this method
+   * is the single INSERT it always reaches, in every branch.
+   *
+   * `attempt` is computed here, not tracked by the caller, so nothing can drift
+   * between two call sites counting the same `(run_id, job_id, purpose)`
+   * triple differently. SQLite's null-safe `IS` is required rather than `=`
+   * because `run_id`/`job_id` are legitimately NULL (a `resume import` run
+   * logs no run row; a `tailor`/`import` call is not about one job row before
+   * it exists) and `NULL = NULL` is NULL, not true, in SQL - which would
+   * silently reset every attempt count back to 1.
+   */
+  recordModelReceipt(entry: {
+    runId: number | null;
+    jobId: string | null;
+    purpose: string;
+    model: string;
+    tier: "triage" | "full" | null;
+    usageKnown: boolean;
+    usage: TokenUsage;
+    validationOutcome: string;
+    estimatedPriceUsd: number;
+  }): number {
+    const attemptRow = this.db
+      .prepare(`SELECT COUNT(*) + 1 AS n FROM model_receipts WHERE run_id IS ? AND job_id IS ? AND purpose = ?`)
+      .get(entry.runId, entry.jobId, entry.purpose) as { n: number };
+
+    const info = this.db
+      .prepare(
+        `INSERT INTO model_receipts (
+           run_id, job_id, purpose, model, tier, attempt, usage_known,
+           input_tokens, cache_write_tokens, cache_read_tokens, output_tokens,
+           validation_outcome, estimated_price_usd, created_at
+         ) VALUES (
+           @runId, @jobId, @purpose, @model, @tier, @attempt, @usageKnown,
+           @inputTokens, @cacheWriteTokens, @cacheReadTokens, @outputTokens,
+           @validationOutcome, @estimatedPriceUsd, @createdAt
+         )`,
+      )
+      .run({
+        runId: entry.runId,
+        jobId: entry.jobId,
+        purpose: entry.purpose,
+        model: entry.model,
+        tier: entry.tier,
+        attempt: attemptRow.n,
+        usageKnown: entry.usageKnown ? 1 : 0,
+        inputTokens: entry.usage.input,
+        cacheWriteTokens: entry.usage.cacheWrite ?? 0,
+        cacheReadTokens: entry.usage.cacheRead ?? 0,
+        outputTokens: entry.usage.output,
+        validationOutcome: entry.validationOutcome,
+        estimatedPriceUsd: entry.estimatedPriceUsd,
+        createdAt: nowIso(),
+      });
+    return Number(info.lastInsertRowid);
   }
 
   // ---- Interviews ---------------------------------------------------------

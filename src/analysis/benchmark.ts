@@ -101,6 +101,7 @@ export async function benchmarkTriage(
   repo: JobRepo,
   profile: CareerProfile,
   opts: { limit: number; model: string; effort: string; mode?: BenchmarkMode },
+  runId: number | null,
 ): Promise<TriageBenchmark> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
@@ -137,6 +138,7 @@ export async function benchmarkTriage(
         { limit: 1, model: opts.model, effort: opts.effort, dryRun: false },
         laneKeys,
         "triage",
+        { repo, runId, purpose: "benchmark" },
       );
       input += r.usage.input;
       cacheWrite += r.usage.cacheWrite ?? 0;
