@@ -61,8 +61,11 @@ export function openDb(file = paths.db()): DB {
  *
  * `CREATE TABLE IF NOT EXISTS` in schema.ts creates new databases correctly but
  * does nothing to an existing one, so a column added later would be missing on
- * every database created before it. Each entry here is applied only if absent,
- * which makes startup idempotent and safe to run against an old file.
+ * every database created before it. Each entry here is applied - column add
+ * plus backfill, as one unit - only if its `schema_meta` completion marker is
+ * absent (see `applyColumnMigrations`), which makes startup idempotent and
+ * safe to run against an old file, including one where a previous attempt
+ * died partway through.
  *
  * Additive only. A destructive change needs a real versioned migration.
  */
@@ -176,14 +179,39 @@ const COLUMN_MIGRATIONS: {
  * against a database missing every migrated column. Any query touching one
  * failed with "no such column" in tests while working fine in production -
  * which is backwards, and meant `needingAnalysis` had no test at all.
+ *
+ * Completion is tracked in `schema_meta` under `migration:${table}.${column}`,
+ * NOT by column existence (JOB-54). Column existence used to be the only
+ * signal, which meant a `backfill` that threw after `ALTER TABLE` had already
+ * run left the column in place forever with no way to retry it - rows kept a
+ * bare default (`material_hash = ''`, `board_id = NULL`) silently, since the
+ * next startup saw the column and skipped straight past. Each migration now
+ * runs as one `db.transaction()`: the ALTER (if the column is not already
+ * there - covers a database where an old build got partway through before
+ * this fix existed), the backfill, and the marker insert. SQLite rolls a
+ * newly-added column back out with everything else in that transaction if any
+ * step throws, so a failed attempt leaves no trace and is retried in full on
+ * the next call. Both existing backfills recompute their column from scratch
+ * rather than adjusting it, which is what makes an unconditional re-run safe.
  */
 export function applyColumnMigrations(db: DB): void {
+  const hasMarker = db.prepare("SELECT 1 FROM schema_meta WHERE key = ?");
+  const setMarker = db.prepare("INSERT INTO schema_meta (key, value) VALUES (?, ?)");
+
   for (const m of COLUMN_MIGRATIONS) {
-    const cols = db.prepare(`PRAGMA table_info(${m.table})`).all() as { name: string }[];
-    if (cols.some((c) => c.name === m.column)) continue;
-    db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.definition}`);
-    log.debug(`migration: added ${m.table}.${m.column}`);
-    m.backfill?.(db);
+    const key = `migration:${m.table}.${m.column}`;
+    if (hasMarker.get(key)) continue;
+
+    db.transaction(() => {
+      const cols = db.prepare(`PRAGMA table_info(${m.table})`).all() as { name: string }[];
+      if (!cols.some((c) => c.name === m.column)) {
+        db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.definition}`);
+      }
+      m.backfill?.(db);
+      setMarker.run(key, nowIso());
+    })();
+
+    log.debug(`migration: completed ${m.table}.${m.column}`);
   }
 }
 
