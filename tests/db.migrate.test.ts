@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import Database from "better-sqlite3";
 import { SCHEMA_SQL } from "../src/db/schema.js";
 import { applyColumnMigrations, applyDestructiveMigrations } from "../src/db/index.js";
@@ -161,8 +161,11 @@ describe("board_id backfill", () => {
     db.exec(SCHEMA_SQL);
     applyColumnMigrations(db);
     // Simulate "before this migration ran" by dropping the column back off -
-    // SQLite 3.35+ (the bundled better-sqlite3 is 3.53.4) supports DROP COLUMN.
+    // SQLite 3.35+ (the bundled better-sqlite3 is 3.53.4) supports DROP COLUMN
+    // - and clearing its completion marker (JOB-54: the marker, not column
+    // existence, is what applyColumnMigrations now checks).
     db.exec("ALTER TABLE jobs DROP COLUMN board_id");
+    db.exec("DELETE FROM schema_meta WHERE key = 'migration:jobs.board_id'");
     return db;
   }
 
@@ -227,5 +230,155 @@ describe("board_id backfill", () => {
     );
     const row = fresh.prepare("SELECT board_id FROM jobs WHERE id = ?").get("j2") as { board_id: string };
     expect(row.board_id).toBe("greenhouse:acme");
+  });
+});
+
+/**
+ * JOB-54. Column existence used to be the only completion signal, so a
+ * `backfill` that threw AFTER `ALTER TABLE` already ran left the column in
+ * place forever with no way to retry it: the column existing was read as
+ * "done", and the row kept a bare default (`material_hash = ''`,
+ * `board_id = NULL`) silently. These pin the fix: a `schema_meta` marker,
+ * written only once the column add + backfill both succeed inside the same
+ * `db.transaction()`, is the actual completion signal now.
+ */
+describe("migration completion is marker-gated, not column-existence-gated (JOB-54)", () => {
+  const markerFor = (table: string, column: string) => `migration:${table}.${column}`;
+
+  const hasMarker = (db: Database.Database, table: string, column: string) =>
+    Boolean(db.prepare("SELECT 1 FROM schema_meta WHERE key = ?").get(markerFor(table, column)));
+
+  const insertJobNoExternalId = (db: Database.Database, id: string, source: string) => {
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO jobs (
+         id, dedupe_key, source, source_url, company, company_normalized,
+         title, title_normalized, date_discovered, first_seen, last_seen, description_hash
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, `dedupe-${id}`, source, `https://example.test/${id}`, "Acme", "acme", "Staff Engineer", "staff engineer", now, now, now, "hash");
+  };
+
+  const insertJob = (db: Database.Database, id: string, source: string, externalId: string) => {
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO jobs (
+         id, dedupe_key, external_id, source, source_url, company, company_normalized,
+         title, title_normalized, date_discovered, first_seen, last_seen, description_hash
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, `dedupe-${id}`, externalId, source, `https://example.test/${id}`, "Acme", "acme", "Staff Engineer", "staff engineer", now, now, now, "hash");
+  };
+
+  it("a backfill that throws leaves no new column and no marker, and a retry on the same connection succeeds", () => {
+    // board_id's backfill selects external_id, so dropping that column
+    // upfront forces a REAL SQL error mid-backfill - not a stubbed one -
+    // exactly the "ALTER succeeded, backfill threw" sequence the bug allowed.
+    const db = new Database(":memory:");
+    db.exec(SCHEMA_SQL);
+    db.exec("ALTER TABLE jobs DROP COLUMN external_id");
+    insertJobNoExternalId(db, "j1", "greenhouse");
+
+    expect(() => applyColumnMigrations(db)).toThrow();
+
+    // board_id's ALTER ran inside the same transaction as the failing
+    // backfill, so it must have rolled back with everything else.
+    let cols = db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
+    expect(cols.some((c) => c.name === "board_id")).toBe(false);
+    expect(hasMarker(db, "jobs", "board_id")).toBe(false);
+
+    // Fix the underlying cause and retry on the SAME connection: every
+    // migration before board_id already committed its marker on the first
+    // (failing) call, so this retry only redoes board_id.
+    db.exec("ALTER TABLE jobs ADD COLUMN external_id TEXT NOT NULL DEFAULT 'acme:1'");
+    expect(() => applyColumnMigrations(db)).not.toThrow();
+
+    cols = db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
+    expect(cols.some((c) => c.name === "board_id")).toBe(true);
+    const row = db.prepare("SELECT board_id FROM jobs WHERE id = ?").get("j1") as { board_id: string };
+    expect(row.board_id).toBe("greenhouse:acme");
+    expect(hasMarker(db, "jobs", "board_id")).toBe(true);
+  });
+
+  it("recovers a column that exists with no marker (old buggy code half-ran)", () => {
+    const db = new Database(":memory:");
+    db.exec(SCHEMA_SQL);
+    applyColumnMigrations(db);
+    insertJob(db, "j1", "greenhouse", "acme:1");
+
+    // Simulate exactly what the pre-fix code could leave behind: the ALTER
+    // ran (column exists) but the process died before the backfill or the
+    // (nonexistent, pre-fix) marker, so every existing row has the bare
+    // column default.
+    db.exec("ALTER TABLE jobs DROP COLUMN board_id");
+    db.exec(`DELETE FROM schema_meta WHERE key = '${markerFor("jobs", "board_id")}'`);
+    db.exec("ALTER TABLE jobs ADD COLUMN board_id TEXT");
+
+    let row = db.prepare("SELECT board_id FROM jobs WHERE id = ?").get("j1") as { board_id: string | null };
+    expect(row.board_id).toBeNull();
+    expect(hasMarker(db, "jobs", "board_id")).toBe(false);
+
+    applyColumnMigrations(db);
+
+    row = db.prepare("SELECT board_id FROM jobs WHERE id = ?").get("j1") as { board_id: string | null };
+    expect(row.board_id).toBe("greenhouse:acme");
+    expect(hasMarker(db, "jobs", "board_id")).toBe(true);
+  });
+
+  it("skips a completed migration on the marker alone, never re-checking or re-deriving the data", () => {
+    const db = new Database(":memory:");
+    db.exec(SCHEMA_SQL);
+    applyColumnMigrations(db);
+    insertJob(db, "j1", "greenhouse", "acme:1");
+    expect(hasMarker(db, "jobs", "board_id")).toBe(true);
+
+    // Corrupt the column AFTER the marker already exists. If the decision to
+    // skip were based on column existence or on the data looking right, this
+    // would get "fixed" back to the correct derived value. It must not.
+    db.prepare("UPDATE jobs SET board_id = ? WHERE id = ?").run("CORRUPTED", "j1");
+
+    applyColumnMigrations(db);
+
+    const row = db.prepare("SELECT board_id FROM jobs WHERE id = ?").get("j1") as { board_id: string };
+    expect(row.board_id).toBe("CORRUPTED");
+  });
+
+  it("marks a no-backfill JOB-51 migration complete without inventing a value for existing rows", () => {
+    const db = new Database(":memory:");
+    db.exec(SCHEMA_SQL);
+    applyColumnMigrations(db);
+    // Simulate "before this migration ran": drop the column and its marker,
+    // the same way preMigrationDb() does for board_id above.
+    db.exec("ALTER TABLE jobs DROP COLUMN analysis_title_hash");
+    db.exec(`DELETE FROM schema_meta WHERE key = '${markerFor("jobs", "analysis_title_hash")}'`);
+    insertJob(db, "j1", "greenhouse", "acme:1");
+    expect(hasMarker(db, "jobs", "analysis_title_hash")).toBe(false);
+
+    applyColumnMigrations(db);
+
+    const cols = db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
+    expect(cols.some((c) => c.name === "analysis_title_hash")).toBe(true);
+    const row = db.prepare("SELECT analysis_title_hash FROM jobs WHERE id = ?").get("j1") as {
+      analysis_title_hash: string | null;
+    };
+    expect(row.analysis_title_hash).toBeNull();
+    expect(hasMarker(db, "jobs", "analysis_title_hash")).toBe(true);
+  });
+
+  it("does zero ALTER TABLE / backfill work once every migration is already marked complete", () => {
+    const db = new Database(":memory:");
+    db.exec(SCHEMA_SQL);
+    applyColumnMigrations(db); // establishes every marker
+
+    const execSpy = vi.spyOn(db, "exec");
+    const prepareSpy = vi.spyOn(db, "prepare");
+
+    applyColumnMigrations(db);
+
+    // No ALTER TABLE, and the only statements prepared are the two marker
+    // lookups/inserts against schema_meta itself - never a backfill SELECT or
+    // UPDATE against jobs/analysis_cache. Cheap, indexed SELECTs only, per AC#3.
+    expect(execSpy).not.toHaveBeenCalled();
+    const preparedSql = prepareSpy.mock.calls.map(([sql]) => String(sql));
+    expect(preparedSql.length).toBeGreaterThan(0);
+    expect(preparedSql.every((sql) => sql.includes("schema_meta"))).toBe(true);
   });
 });
