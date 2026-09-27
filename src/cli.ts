@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readApplicationHistory, describeHistory } from "./apply/history.js";
 import { parseNonNegativeFlag, parseNumericFlag } from "./lib/options.js";
-import { listBackups, pruneBackups } from "./lib/backup.js";
+import { createSnapshot, listBackups, pruneBackups } from "./lib/backup.js";
 import { Command } from "commander";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { loadProfile, loadSources, paths, PROJECT_ROOT } from "./config/load.js";
@@ -2329,28 +2329,27 @@ program
   .description("Back up, then physically drop dead columns and reclaim the space (DESTRUCTIVE)")
   .option("-o, --out <dir>", "backup directory", resolve(PROJECT_ROOT, "data", "backups"))
   .option("--skip-backup", "do not back up first - only if you have one already", false)
-  .action((opts: { out: string; skipBackup: boolean }) => {
+  .action(async (opts: { out: string; skipBackup: boolean }) => {
     const src = paths.db();
     const before = statSync(src).size;
 
-    // BACK UP FIRST, AND PROVE IT. A truncated backup - a full disk during the
-    // copy, most likely - is worse than no backup, because it looks like one.
-    // So the size is compared before anything destructive runs.
+    // BACK UP FIRST, AND PROVE IT. A snapshot that fails partway - a full
+    // disk during the copy, most likely - is worse than no backup, because
+    // it looks like one, so createSnapshot verifies before this proceeds to
+    // anything destructive.
     if (!opts.skipBackup) {
       mkdirSync(opts.out, { recursive: true });
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const dest = resolve(opts.out, `job-radar-${stamp}.sqlite`);
       const pre = openDb();
-      pre.pragma("wal_checkpoint(TRUNCATE)");
-      closeDb();
-      copyFileSync(src, dest);
-      const copied = statSync(dest).size;
-      if (copied !== statSync(src).size) {
-        console.error(`Backup is ${copied} bytes but the database is ${statSync(src).size}. Refusing to migrate.`);
+      try {
+        const { bytes } = await createSnapshot(pre, dest);
+        console.log(`Backed up to ${dest} (${(bytes / 1_048_576).toFixed(0)} MB)`);
+      } catch (err) {
+        console.error(`Backup failed: ${(err as Error).message}. Refusing to migrate.`);
         process.exitCode = 1;
         return;
       }
-      console.log(`Backed up to ${dest} (${(copied / 1_048_576).toFixed(0)} MB)`);
     } else {
       console.log("Skipping backup, as asked.");
     }
@@ -2385,17 +2384,22 @@ program
   .description("Copy the SQLite database to a timestamped file, pruning old ones")
   .option("-o, --out <dir>", "output directory", resolve(PROJECT_ROOT, "data", "backups"))
   .option("-k, --keep <n>", "how many backups to retain", "14")
-  .action((opts: { out: string; keep: string }) => {
-    const src = paths.db();
+  .action(async (opts: { out: string; keep: string }) => {
     mkdirSync(opts.out, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const dest = resolve(opts.out, `job-radar-${stamp}.sqlite`);
-    // Checkpoint WAL into the main file first so the copy is complete.
     const db = openDb();
-    db.pragma("wal_checkpoint(TRUNCATE)");
-    closeDb();
-    copyFileSync(src, dest);
-    console.log(`Backed up to ${dest}`);
+    try {
+      const { bytes } = await createSnapshot(db, dest);
+      console.log(`Backed up to ${dest} (${(bytes / 1_048_576).toFixed(0)} MB)`);
+    } catch (err) {
+      // A failed snapshot must never trigger pruning - an unverified backup
+      // directory is not evidence that older, actually-good backups are
+      // safe to delete (AC#3).
+      console.error(`Backup failed: ${(err as Error).message}.`);
+      process.exitCode = 1;
+      return;
+    }
 
     // Prune, and this is not housekeeping - it is the difference between a
     // backup schedule and a disk-filling bug. The database is 238MB, so a
