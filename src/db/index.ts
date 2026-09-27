@@ -4,11 +4,28 @@ import { dirname } from "node:path";
 import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
 import { paths } from "../config/load.js";
 import { log } from "../lib/log.js";
-import { materialHash } from "../lib/hash.js";
+import { materialHash, sha256 } from "../lib/hash.js";
 
 export type DB = Database.Database;
 
 let handle: DB | null = null;
+
+/**
+ * Register the one SQL scalar function `needingAnalysis`/`eligibleForAnalysis`
+ * use to compare a job's CURRENT title/location/employment/compensation
+ * against the hashes an analysis was snapshotted against (JOB-51).
+ *
+ * Registered here AND in `tests/helpers/db.ts`'s `memoryRepo` rather than
+ * defined twice - `sha256` is Node's `createHash("sha256")`, so there is only
+ * one implementation to keep in sync, but the SQL registration itself has to
+ * happen on every database handle, real or in-memory. `deterministic: true`
+ * lets SQLite's query planner treat repeated calls with the same input as the
+ * same value, which matters here because the WHERE clause calls it once per
+ * hashed column per candidate row.
+ */
+export function registerSha256(db: DB): void {
+  db.function("sha256", { deterministic: true }, (text: unknown) => sha256(String(text ?? "")));
+}
 
 /** Open (and migrate) the database. Idempotent within a process. */
 export function openDb(file = paths.db()): DB {
@@ -18,6 +35,7 @@ export function openDb(file = paths.db()): DB {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+  registerSha256(db);
 
   applyColumnMigrations(db);
 
@@ -132,6 +150,23 @@ const COLUMN_MIGRATIONS: {
       log.debug(`migration: backfilled board_id for ${rows.length} rows`);
     },
   },
+  // JOB-51: a snapshot of the inputs an analysis was formed against, so
+  // staleness can be detected on title/location/employment/compensation
+  // changes - not just the description text `material_hash` already covers.
+  // See src/analysis/identity.ts.
+  //
+  // NO BACKFILL, deliberately. Filling these from a row's CURRENT
+  // title/location/employment/compensation would assert "this analysis was
+  // formed against exactly today's values", which is not knowable and is
+  // often false - it would launder every legacy row into looking freshly
+  // verified. A legacy row reads as unverifiable (every snapshot hash NULL)
+  // and is treated exactly like a stale one: eligible again, not silently
+  // endorsed.
+  { table: "jobs", column: "analysis_title_hash", definition: "TEXT" },
+  { table: "jobs", column: "analysis_location_hash", definition: "TEXT" },
+  { table: "jobs", column: "analysis_employment_hash", definition: "TEXT" },
+  { table: "jobs", column: "analysis_compensation_hash", definition: "TEXT" },
+  { table: "jobs", column: "analysis_evidence_hash", definition: "TEXT" },
 ];
 
 /**

@@ -297,7 +297,7 @@ program
       }
       // Recorded, not just printed. An override is a deliberate disagreement
       // with the analyst, and the run log is where that is auditable later.
-      const overrodeVerdict = overrideRecord(job, opts.override);
+      const overrodeVerdict = overrideRecord(job, opts.override, profile);
 
       log.info(`Preparing application material for ${job.company} - ${job.title}`);
 
@@ -598,7 +598,7 @@ resumeCmd
         return { ok: false, refused: "unendorsed", jobId: job.id, verdict: job.analysis?.recommendation ?? null };
       }
       // See `apply`: the deliberate disagreement belongs in the run log.
-      const overrodeVerdict = overrideRecord(job, opts.override);
+      const overrodeVerdict = overrideRecord(job, opts.override, profile);
 
       const bullets = allBullets(resume).map((b) => ({ bullet: b.bullet, sourceLabel: b.sourceLabel }));
       const match = matchResumeToJob(resume, job.descriptionClean, bullets);
@@ -848,7 +848,11 @@ async function refuseIfUnendorsed(
   model: string,
   effort: string,
 ): Promise<boolean> {
-  const e = endorsementOf(job);
+  // `profile` in scope here is what makes the staleness check possible - see
+  // the JSDoc on `endorsementOf`. This is the one gate that spends money, so
+  // it is also the one that must never trust a verdict formed against inputs
+  // the posting no longer has.
+  const e = endorsementOf(job, profile);
 
   if (e.tier === "unanalyzed") {
     log.warn(`This job has not been analyzed. Run \`analyze\` first for a much better package.`);
@@ -885,16 +889,31 @@ async function refuseIfUnendorsed(
     return false;
   }
 
+  // `unendorsed` and `stale` both refuse unless overridden - the human still
+  // outranks the analyst, but for `stale` the disagreement is with the
+  // RECORD, not the analyst's judgement, so the message says which inputs
+  // moved rather than restating the (possibly now-wrong) verdict as if it
+  // were current.
+  const staleNote =
+    e.tier === "stale"
+      ? ` (stale: ${
+          e.staleSchema
+            ? "no longer matches the current analysis schema" +
+              ((e.staleFields?.length ?? 0) > 0 ? `, and ${e.staleFields!.join("/")} also changed` : "")
+            : `${e.staleFields!.join("/")} changed since this analysis was formed`
+        })`
+      : "";
+
   if (override) {
     log.warn(
-      `Overriding the analyst: verdict is ${describeVerdict(e)}, preparing anyway.` +
+      `Overriding the analyst: verdict is ${describeVerdict(e)}${staleNote}, preparing anyway.` +
         (e.reason ? `\n  Its reasoning: ${e.reason}` : ""),
     );
     return false;
   }
 
   console.error(
-    `${job.company} - ${job.title} is not endorsed: the analyst said ${describeVerdict(e)}.\n` +
+    `${job.company} - ${job.title} is not endorsed: the analyst said ${describeVerdict(e)}${staleNote}.\n` +
       (e.reason ? `Its reasoning: ${e.reason}\n` : "It recorded no reasoning.\n") +
       `\nNothing was spent. If you disagree - and you may well be right:\n` +
       `  npm run cli -- ${command} ${job.id} --override`,
@@ -909,10 +928,10 @@ async function refuseIfUnendorsed(
  * not carry a misleading `overrodeVerdict: null` that a later query would have
  * to special-case.
  */
-function overrideRecord(job: EnrichedJob, override: boolean): { overrodeVerdict?: string } {
+function overrideRecord(job: EnrichedJob, override: boolean, profile: CareerProfile): { overrodeVerdict?: string } {
   if (!override) return {};
-  const e = endorsementOf(job);
-  return e.tier === "unendorsed" && e.verdict ? { overrodeVerdict: e.verdict } : {};
+  const e = endorsementOf(job, profile);
+  return (e.tier === "unendorsed" || e.tier === "stale") && e.verdict ? { overrodeVerdict: e.verdict } : {};
 }
 
 /**

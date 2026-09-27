@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { describeVerdict, endorsementOf, isApplyVerdict } from "../src/analysis/endorsement.js";
 import { renderOutcomes, type AutofillResult } from "../src/apply/autofill.js";
+import { computeAnalysisIdentity } from "../src/analysis/identity.js";
 import type { Analysis, EnrichedJob } from "../src/model/job.js";
+import type { CareerProfile } from "../src/config/schema.js";
 
 /**
  * 22 of 43 applications were prepared against a standing `skip` or
@@ -32,6 +34,59 @@ function analysis(over: Partial<Analysis> = {}): Analysis {
 
 function job(over: Partial<EnrichedJob> = {}): EnrichedJob {
   return { id: "j1", title: "Staff Engineer", company: "Acme", fitScore: 62, analysis: null, ...over } as EnrichedJob;
+}
+
+/** A minimal profile good enough for `computeAnalysisIdentity`/`buildSystemPrompt`. */
+function profile(over: Partial<CareerProfile> = {}): CareerProfile {
+  return {
+    identity: { name: "Jane Doe", headline: "Senior Engineer", years_experience: 10 },
+    compensation: {
+      currency: "USD",
+      target_min: 160_000,
+      target_max: 180_000,
+      acceptable_min: 140_000,
+      reject_below_max: 120_000,
+      stretch_min: 180_000,
+      stretch_max: 220_000,
+      contract_min_hourly: 90,
+      contract_max_hourly: 140,
+      prefer_employment_type: "full_time",
+    },
+    location: {
+      home_metro: "Seattle",
+      remote_ok: true,
+      hybrid_metros: [],
+      onsite_ok_metros: [],
+      relocation_ok: false,
+      work_authorization_blockers: [],
+    },
+    lanes: { frontend: { label: "Frontend", weight: 1 } },
+    ...over,
+  } as unknown as CareerProfile;
+}
+
+/**
+ * A job whose `analysisIdentity` snapshot was formed against a fixed set of
+ * DEFAULTS, while the job's own current fields carry whatever `over`
+ * overrides - simulating "the analysis was formed, then the posting (or the
+ * profile) moved". With no override, snapshot and current agree exactly, so
+ * the job reads as freshly analyzed - that is what makes the "nothing moved"
+ * regression test meaningful.
+ */
+const IDENTITY_DEFAULTS: Partial<EnrichedJob> = {
+  title: "Staff Engineer",
+  location: "Remote",
+  remoteStatus: "remote",
+  employmentType: "full_time",
+  salaryMin: null,
+  salaryMax: null,
+  salaryCurrency: "USD",
+  salaryPeriod: null,
+} as Partial<EnrichedJob>;
+
+function freshJob(over: Partial<EnrichedJob> = {}, p: CareerProfile = profile()): EnrichedJob {
+  const snapshot = computeAnalysisIdentity(job(IDENTITY_DEFAULTS), p);
+  return { ...job({ ...IDENTITY_DEFAULTS, ...over }), analysisIdentity: snapshot };
 }
 
 describe("isApplyVerdict", () => {
@@ -96,6 +151,81 @@ describe("endorsementOf", () => {
   it("collapses newlines so the reason stays one line", () => {
     const e = endorsementOf(job({ analysis: analysis({ reasoningSummary: "First line.\n\nSecond line." }) }));
     expect(e.reason).toBe("First line. Second line.");
+  });
+});
+
+/**
+ * JOB-51. A standing analysis can be present and STILL untrustworthy: one of
+ * its snapshotted inputs has moved since it was formed, or the stored JSON no
+ * longer conforms to the live schema for its tier. `stale` is distinct from
+ * `unendorsed` - the disagreement here is with the RECORD, not the analyst's
+ * judgement - and distinct from `unanalyzed`, because there IS a verdict, it
+ * just cannot be trusted as current.
+ *
+ * The staleness check only runs when a `profile` is passed. Without one
+ * (`src/apply/autofill.ts`'s informational call), behaviour is unchanged -
+ * see the JSDoc on `endorsementOf` for why that residual gap is accepted.
+ */
+describe("endorsementOf: the stale tier (JOB-51)", () => {
+  const p = profile();
+
+  it("stays endorsed/unendorsed when a profile is passed and nothing moved", () => {
+    // The regression this guards: adding the staleness check must not make
+    // every ordinary endorsed/unendorsed job look stale.
+    expect(endorsementOf(freshJob({ analysis: analysis({ recommendation: "apply" }) }), p).tier).toBe("endorsed");
+    expect(endorsementOf(freshJob({ analysis: analysis({ recommendation: "skip" }) }), p).tier).toBe("unendorsed");
+  });
+
+  it("goes stale when the title moved", () => {
+    const j = freshJob({ analysis: analysis(), title: "Director of Engineering" });
+    const e = endorsementOf(j, p);
+    expect(e.tier).toBe("stale");
+    expect(e.staleFields).toEqual(["title"]);
+    expect(e.staleSchema).toBe(false);
+    // The verdict and reasoning are PRESERVED, not cleared - decision 3.
+    expect(e.verdict).toBe("skip");
+    expect(e.reason).not.toBeNull();
+  });
+
+  it("goes stale when the location moved", () => {
+    const j = freshJob({ analysis: analysis(), remoteStatus: "onsite" });
+    const e = endorsementOf(j, p);
+    expect(e.tier).toBe("stale");
+    expect(e.staleFields).toEqual(["location"]);
+  });
+
+  it("goes stale when the employment type moved", () => {
+    const j = freshJob({ analysis: analysis(), employmentType: "contract" });
+    const e = endorsementOf(j, p);
+    expect(e.tier).toBe("stale");
+    expect(e.staleFields).toEqual(["employment"]);
+  });
+
+  it("goes stale when the compensation moved", () => {
+    const j = freshJob({ analysis: analysis(), salaryMin: 200_000 });
+    const e = endorsementOf(j, p);
+    expect(e.tier).toBe("stale");
+    expect(e.staleFields).toEqual(["compensation"]);
+  });
+
+  it("goes stale on a schema mismatch even when every identity field still matches", () => {
+    // `lane: "backend"` is legal under no profile this analysis could have
+    // been formed against here - `p.lanes` only defines "frontend" - so
+    // `analysisSchemaFor(["frontend"])` rejects it. Nothing about
+    // title/location/employment/compensation moved.
+    const j = freshJob({ analysis: analysis({ lane: "backend" }) });
+    const e = endorsementOf(j, p);
+    expect(e.tier).toBe("stale");
+    expect(e.staleSchema).toBe(true);
+    expect(e.staleFields).toEqual([]);
+  });
+
+  it("does not run the staleness check at all without a profile", () => {
+    // `src/apply/autofill.ts`'s informational report calls this with no
+    // profile - a KNOWN LIMITATION (see the PR description), not a bug: a
+    // job whose title has moved still reads as its raw verdict there.
+    const j = freshJob({ analysis: analysis(), title: "Director of Engineering" });
+    expect(endorsementOf(j).tier).toBe("unendorsed");
   });
 });
 
