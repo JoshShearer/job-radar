@@ -38,7 +38,7 @@ $!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" -
 
 ### Provenance enforcement weakened
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/resume/tailor.ts src/resume/provenance.ts | grep -E "^[-+].*(enforceProvenance|checkRewrite|checkSelection|buildVocabulary|reverted|verified)" | head -25
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/resume/render.ts src/resume/provenance.ts | grep -E "^[-+].*(enforceProvenance|checkRewrite|checkSelection|buildVocabulary|reverted|verified)" | head -25
 ```
 
 ### Three-state match collapsed
@@ -107,7 +107,7 @@ non-negotiables in `CLAUDE.md`.
 |---|---|---|---|
 | 1 | **Never invent experience** | Any prompt, generated resume text, outreach draft, or analysis output asserting an employer, metric, technology, or credential not in `config/resume.yaml`. Any claim to have inspected a company's website, traffic, or codebase. | BLOCK |
 | 2 | **Resume prose comes from master data** | A model's output string written into a rendered document. Tailoring returns bullet ids and replacement strings; `src/resume/render.ts` assembles from master. | BLOCK |
-| 3 | **Provenance repairs, never trusts** | `enforceProvenance` (`src/resume/tailor.ts:217`) no longer drops unknown or `verified: false` citations, or no longer reverts a rewrite that introduces a technology or a number. Loosening a check so a reverted rewrite passes is itself the violation. | BLOCK |
+| 3 | **Provenance repairs, never trusts** | `enforceProvenance` (`src/resume/render.ts:34`) no longer drops unknown, `verified: false`, or wrong-role citations, or no longer reverts a rewrite (including the headline/summary) that introduces a technology or a number. Loosening a check so a reverted rewrite passes is itself the violation. | BLOCK |
 | 4 | **`resume match` keeps three states** | `partial` collapsed into pass/fail, or a `QUALIFIERS` entry (`src/resume/requirements.ts:131`) satisfied by the skill match rather than evidenced independently. Using a library is not contributing to it. | BLOCK |
 | 5 | **Never auto-send** | Any code path that transmits an application, email, or message without a human action. | BLOCK |
 | 6 | **`autofill` fills and stops** | A submit click, a ticked checkbox, an answer to a demographic or attestation field, or a lowered `chooseOption` threshold that guesses instead of refusing. `chooseOption` reserves 1.0 for exact string equality on purpose. | BLOCK |

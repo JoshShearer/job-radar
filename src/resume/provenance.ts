@@ -22,7 +22,7 @@ import { allBullets } from "./schema.js";
 
 export interface Violation {
   bulletId: string;
-  kind: "unknown_bullet" | "unverified_bullet" | "invented_skill" | "invented_metric";
+  kind: "unknown_bullet" | "unverified_bullet" | "invented_skill" | "invented_metric" | "wrong_role";
   detail: string;
 }
 
@@ -96,19 +96,36 @@ export function checkRewrite(
   return out;
 }
 
-/** Confirm every cited bullet id exists in the master and is verified. */
-export function checkSelection(resume: Resume, bulletIds: string[]): Violation[] {
-  const index = new Map(allBullets(resume).map((b) => [b.bullet.id, b.bullet]));
+/**
+ * Confirm every cited bullet id exists in the master, is verified, and - when
+ * `expectedOwnerId` is given - belongs to the role/project it is cited under.
+ *
+ * That last check is what stops a plan citing role B's bullet under role A: a
+ * bullet that legitimately exists and is verified is still wrong evidence if
+ * it renders under an employer who never made that claim.
+ */
+export function checkSelection(resume: Resume, bulletIds: string[], expectedOwnerId?: string): Violation[] {
+  const index = new Map(allBullets(resume).map((b) => [b.bullet.id, b]));
   const out: Violation[] = [];
   for (const id of bulletIds) {
-    const b = index.get(id);
-    if (!b) {
+    const entry = index.get(id);
+    if (!entry) {
       out.push({ bulletId: id, kind: "unknown_bullet", detail: "no bullet with this id exists in the master resume" });
-    } else if (!b.verified) {
+      continue;
+    }
+    if (!entry.bullet.verified) {
       out.push({
         bulletId: id,
         kind: "unverified_bullet",
         detail: "bullet is marked verified: false and must not be used",
+      });
+      continue;
+    }
+    if (expectedOwnerId && entry.sourceId !== expectedOwnerId) {
+      out.push({
+        bulletId: id,
+        kind: "wrong_role",
+        detail: `bullet belongs to "${entry.sourceLabel}" (${entry.sourceId}), not "${expectedOwnerId}"`,
       });
     }
   }

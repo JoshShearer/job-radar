@@ -4,13 +4,96 @@ import type { Resume } from "./schema.js";
 import { allBullets } from "./schema.js";
 import type { TailorPlan } from "./tailor.js";
 import type { MatchReport } from "./requirements.js";
+import { buildVocabulary, checkRewrite, checkSelection, type Violation } from "./provenance.js";
 
 /**
  * Rendering. The tailored resume is composed HERE, from master data plus the
  * plan's selections - the model's output is a set of ids and replacement
  * strings, never a document. A model cannot emit a line into the final resume
  * without an id that survived provenance checking.
+ *
+ * `composeResume` is the one entry point that turns a plan into a document,
+ * and it enforces provenance on every call - there is no way to compose
+ * without it running first. Composition then resolves each role's bullets
+ * from that role's OWN bullet list, never the flat cross-resume index, as a
+ * structural second gate: even if enforcement were somehow bypassed, a
+ * bullet id that belongs to a different role simply would not resolve.
  */
+
+const HEADLINE_ID = "basics.headline";
+const SUMMARY_ID = "basics.summary";
+
+/**
+ * Validate a plan against the master resume and repair it in place.
+ *
+ * Repair rather than reject: a plan that cites one bad bullet id is still a
+ * good plan minus that bullet. Dropping the bad citation and reverting the bad
+ * rewrite produces a correct resume, where failing the whole run produces
+ * nothing and costs another API call.
+ */
+export function enforceProvenance(resume: Resume, plan: TailorPlan): { violations: Violation[]; reverted: string[] } {
+  const violations: Violation[] = [];
+  const reverted: string[] = [];
+  const vocabulary = buildVocabulary(resume);
+
+  const index = new Map(allBullets(resume).map((b) => [b.bullet.id, b.bullet]));
+  const roleIds = new Set([...resume.experience.map((r) => r.id), ...resume.projects.map((p) => p.id)]);
+  const skillNames = new Set(resume.skills.map((s) => s.name.toLowerCase()));
+
+  plan.roles = plan.roles.filter((r) => {
+    if (roleIds.has(r.roleId)) return true;
+    violations.push({ bulletId: r.roleId, kind: "unknown_bullet", detail: "no role with this id in the master resume" });
+    return false;
+  });
+
+  for (const role of plan.roles) {
+    const bad = checkSelection(resume, role.bulletIds, role.roleId);
+    violations.push(...bad);
+    const drop = new Set(bad.map((v) => v.bulletId));
+    role.bulletIds = role.bulletIds.filter((id) => !drop.has(id));
+
+    role.rewrites = role.rewrites.filter((rw) => {
+      const source = index.get(rw.bulletId);
+      if (!source) {
+        violations.push({ bulletId: rw.bulletId, kind: "unknown_bullet", detail: "rewrite cites an unknown bullet" });
+        return false;
+      }
+      const bad2 = checkRewrite(rw.bulletId, source.text, rw.text, vocabulary);
+      if (bad2.length) {
+        violations.push(...bad2);
+        reverted.push(rw.bulletId);
+        return false; // fall back to the master wording
+      }
+      return true;
+    });
+  }
+
+  plan.projectIds = plan.projectIds.filter((id) => roleIds.has(id));
+
+  // Skill groups may only name declared skills.
+  plan.skillGroups = plan.skillGroups
+    .map((g) => ({ ...g, skills: g.skills.filter((s) => skillNames.has(s.toLowerCase())) }))
+    .filter((g) => g.skills.length > 0);
+
+  // The headline and summary are free text too, and the model wrote them -
+  // they get the same rewrite check as a bullet, checked against the master's
+  // own headline/summary wording, with the same revert-to-truth fallback.
+  const headlineBad = checkRewrite(HEADLINE_ID, resume.basics.headline, plan.headline, vocabulary);
+  if (headlineBad.length) {
+    violations.push(...headlineBad);
+    reverted.push(HEADLINE_ID);
+    plan.headline = resume.basics.headline;
+  }
+
+  const summaryBad = checkRewrite(SUMMARY_ID, resume.basics.summary, plan.summary, vocabulary);
+  if (summaryBad.length) {
+    violations.push(...summaryBad);
+    reverted.push(SUMMARY_ID);
+    plan.summary = resume.basics.summary;
+  }
+
+  return { violations, reverted };
+}
 
 function monthLabel(ym: string | null): string {
   if (!ym) return "Present";
@@ -36,9 +119,26 @@ export interface ComposedResume {
   education: Array<{ school: string; credential: string; year: string }>;
 }
 
-/** Resolve a plan into concrete text, preferring an approved rewrite. */
-export function composeResume(resume: Resume, plan: TailorPlan): ComposedResume {
-  const index = new Map(allBullets(resume).map((b) => [b.bullet.id, b.bullet]));
+export interface ComposeResult {
+  composed: ComposedResume;
+  violations: Violation[];
+  /** Rewrites (including headline/summary) reverted to the master wording. */
+  reverted: string[];
+}
+
+/**
+ * Resolve a plan into concrete text, preferring an approved rewrite.
+ *
+ * Enforcement runs first, unconditionally - there is no `composeResume` call
+ * that skips it. Each role's bullets are then resolved from THAT role's own
+ * bullet list rather than a single global bullet-id index: a bullet id only
+ * ever means the bullet that role actually owns, so a citation that names the
+ * right id under the wrong role structurally fails to resolve, even if it
+ * somehow survived enforcement.
+ */
+export function composeResume(resume: Resume, plan: TailorPlan): ComposeResult {
+  const { violations, reverted } = enforceProvenance(resume, plan);
+
   const roleById = new Map(resume.experience.map((r) => [r.id, r]));
   const projectById = new Map(resume.projects.map((p) => [p.id, p]));
 
@@ -46,9 +146,12 @@ export function composeResume(resume: Resume, plan: TailorPlan): ComposedResume 
   for (const planned of plan.roles) {
     const role = roleById.get(planned.roleId);
     if (!role) continue;
+    // Per-role, not global: this map can only ever produce a bullet that
+    // `role` itself owns.
+    const roleBullets = new Map(role.bullets.map((b) => [b.id, b.text]));
     const rewrites = new Map(planned.rewrites.map((r) => [r.bulletId, r.text]));
     const bullets = planned.bulletIds
-      .map((id) => rewrites.get(id) ?? index.get(id)?.text)
+      .map((id) => rewrites.get(id) ?? roleBullets.get(id))
       .filter((t): t is string => Boolean(t));
     if (!bullets.length) continue;
     roles.push({
@@ -75,7 +178,7 @@ export function composeResume(resume: Resume, plan: TailorPlan): ComposedResume 
     });
   }
 
-  return {
+  const composed: ComposedResume = {
     headline: plan.headline,
     summary: plan.summary,
     skillGroups: plan.skillGroups,
@@ -83,6 +186,8 @@ export function composeResume(resume: Resume, plan: TailorPlan): ComposedResume 
     projects,
     education: resume.education.map((e) => ({ school: e.school, credential: e.credential, year: e.year })),
   };
+
+  return { composed, violations, reverted };
 }
 
 export function renderResumeMarkdown(resume: Resume, c: ComposedResume, contact: string[]): string {

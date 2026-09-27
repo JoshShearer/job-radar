@@ -5,7 +5,8 @@ import { truncateWords } from "../lib/html.js";
 import type { Resume } from "./schema.js";
 import { allBullets } from "./schema.js";
 import type { MatchReport } from "./requirements.js";
-import { buildVocabulary, checkRewrite, checkSelection, type Violation } from "./provenance.js";
+import type { Violation } from "./provenance.js";
+import { enforceProvenance } from "./render.js";
 import { readUsage, type TokenUsage } from "../lib/cost.js";
 
 /**
@@ -195,63 +196,12 @@ Return only the structured object.`;
   }
 
   const plan = parsed.data;
+  // The one true provenance check, defined in render.ts alongside the
+  // composition it guards. Called here too so the run's own report (below,
+  // and the caller's cost/violation accounting) reflects what the model
+  // actually got wrong - `composeResume` will re-run it before rendering.
   const { violations, reverted } = enforceProvenance(resume, plan);
 
   const reading = readUsage(response, `resume tailor ${job.id}`);
   return { plan, violations, reverted, usage: reading.usage, usageMissing: reading.missing };
-}
-
-/**
- * Validate a plan against the master resume and repair it in place.
- *
- * Repair rather than reject: a plan that cites one bad bullet id is still a
- * good plan minus that bullet. Dropping the bad citation and reverting the bad
- * rewrite produces a correct resume, where failing the whole run produces
- * nothing and costs another API call.
- */
-export function enforceProvenance(resume: Resume, plan: TailorPlan): { violations: Violation[]; reverted: string[] } {
-  const violations: Violation[] = [];
-  const reverted: string[] = [];
-  const vocabulary = buildVocabulary(resume);
-
-  const index = new Map(allBullets(resume).map((b) => [b.bullet.id, b.bullet]));
-  const roleIds = new Set([...resume.experience.map((r) => r.id), ...resume.projects.map((p) => p.id)]);
-  const skillNames = new Set(resume.skills.map((s) => s.name.toLowerCase()));
-
-  plan.roles = plan.roles.filter((r) => {
-    if (roleIds.has(r.roleId)) return true;
-    violations.push({ bulletId: r.roleId, kind: "unknown_bullet", detail: "no role with this id in the master resume" });
-    return false;
-  });
-
-  for (const role of plan.roles) {
-    const bad = checkSelection(resume, role.bulletIds);
-    violations.push(...bad);
-    const drop = new Set(bad.map((v) => v.bulletId));
-    role.bulletIds = role.bulletIds.filter((id) => !drop.has(id));
-
-    role.rewrites = role.rewrites.filter((rw) => {
-      const source = index.get(rw.bulletId);
-      if (!source) {
-        violations.push({ bulletId: rw.bulletId, kind: "unknown_bullet", detail: "rewrite cites an unknown bullet" });
-        return false;
-      }
-      const bad2 = checkRewrite(rw.bulletId, source.text, rw.text, vocabulary);
-      if (bad2.length) {
-        violations.push(...bad2);
-        reverted.push(rw.bulletId);
-        return false; // fall back to the master wording
-      }
-      return true;
-    });
-  }
-
-  plan.projectIds = plan.projectIds.filter((id) => roleIds.has(id));
-
-  // Skill groups may only name declared skills.
-  plan.skillGroups = plan.skillGroups
-    .map((g) => ({ ...g, skills: g.skills.filter((s) => skillNames.has(s.toLowerCase())) }))
-    .filter((g) => g.skills.length > 0);
-
-  return { violations, reverted };
 }
