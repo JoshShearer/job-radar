@@ -220,6 +220,41 @@ CREATE TABLE IF NOT EXISTS runs (
   stats_json  TEXT,
   ok          INTEGER NOT NULL DEFAULT 1
 );
+
+-- JOB-52. One row per PAID MODEL ATTEMPT, written at the request seam - the
+-- instant client.messages.create()/.stream().finalMessage() returns - before
+-- any semantic validation (refusal/truncation/JSON-parse/schema checks) can
+-- throw and discard the fact that a billed call happened. See
+-- src/db/receipts.ts.
+--
+-- Purely additive and NOT summed into runs.stats_json anywhere: this is the
+-- receipt of a call, not a substitute for the per-run summary the "spend"
+-- command reads. No backfill, deliberately - legacy runs correctly have zero
+-- receipts here.
+CREATE TABLE IF NOT EXISTS model_receipts (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id             INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+  job_id             TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+  purpose            TEXT NOT NULL,   -- 'analyze' | 'apply-dossier' | 'apply-pack' | 'tailor' | 'import' | 'benchmark'
+  model              TEXT NOT NULL,
+  tier               TEXT,            -- 'triage' | 'full' | NULL
+  attempt            INTEGER NOT NULL DEFAULT 1,
+  usage_known        INTEGER NOT NULL,
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  -- 'success' | 'refusal' | 'truncated' | 'invalid_json' | 'schema' | 'api_error' | 'unknown'
+  -- Reuses classifyAnalysisFailure's vocabulary (src/analysis/failures.ts),
+  -- with its 'api' kind renamed to 'api_error' here for clarity against a
+  -- column that also has to say 'success'.
+  validation_outcome   TEXT NOT NULL,
+  estimated_price_usd  REAL NOT NULL DEFAULT 0,
+  created_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_receipts_run     ON model_receipts(run_id);
+CREATE INDEX IF NOT EXISTS idx_receipts_job     ON model_receipts(job_id);
+CREATE INDEX IF NOT EXISTS idx_receipts_created ON model_receipts(created_at);
 `;
 
 export const SCHEMA_VERSION = "1";
