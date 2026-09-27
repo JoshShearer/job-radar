@@ -63,6 +63,7 @@ import {
   STALE_AFTER_DAYS,
   STATUSES,
   INTERVIEW_STAGES,
+  type Status,
 } from "./model/status.js";
 import { statusAfterAutofill } from "./apply/record.js";
 import { isStale, newestByBoard, closedPostingMarker, formatAge, isEvergreen, postingAgeDays } from "./model/freshness.js";
@@ -1215,12 +1216,19 @@ program
         afterDays: profile.inbox.ghost_after_days,
         from: profile.inbox.ghost_from,
       });
+      let ghostedCount = 0;
       for (const g of ghosts) {
-        repo.setStatus(g.id, "GHOSTED", `no response in ${profile.inbox.ghost_after_days} days`);
+        const applied = repo.setStatusIfCurrent(
+          g.id,
+          g.status as Status,
+          "GHOSTED",
+          `no response in ${profile.inbox.ghost_after_days} days`,
+        );
+        if (applied) ghostedCount++;
       }
-      if (ghosts.length) {
+      if (ghostedCount) {
         log.info(
-          `Ghosted ${ghosts.length} application(s) silent for over ${profile.inbox.ghost_after_days} days: ` +
+          `Ghosted ${ghostedCount} application(s) silent for over ${profile.inbox.ghost_after_days} days: ` +
             ghosts.map((g) => g.company).join(", "),
         );
       }
