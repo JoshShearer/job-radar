@@ -102,6 +102,36 @@ const COLUMN_MIGRATIONS: {
       log.debug(`migration: backfilled material_hash for ${rows.length} rows`);
     },
   },
+  // Employer-board identity (JOB-50). Every adapter already encodes it inside
+  // external_id ("${token}:${id}" for the three ATS sources), so the backfill
+  // reconstructs a fact that was always there rather than guessing one:
+  // board_id = source + ":" + the token half of external_id when one exists,
+  // else bare source (remoteok, a single feed with no per-employer token).
+  // Freshness and parking read this column so a dead board can never park a
+  // healthy sibling board just because they share a provider - see
+  // src/model/freshness.ts.
+  {
+    table: "jobs",
+    column: "board_id",
+    definition: "TEXT",
+    backfill: (db) => {
+      const rows = db.prepare("SELECT id, source, external_id FROM jobs").all() as {
+        id: string;
+        source: string;
+        external_id: string;
+      }[];
+      const update = db.prepare("UPDATE jobs SET board_id = ? WHERE id = ?");
+      const all = db.transaction((batch: typeof rows) => {
+        for (const r of batch) {
+          const token = r.external_id?.includes(":") ? r.external_id.split(":")[0] : null;
+          const boardId = token ? `${r.source}:${token}` : r.source;
+          update.run(boardId, r.id);
+        }
+      });
+      all(rows);
+      log.debug(`migration: backfilled board_id for ${rows.length} rows`);
+    },
+  },
 ];
 
 /**

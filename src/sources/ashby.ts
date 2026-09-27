@@ -66,6 +66,7 @@ export class AshbySource implements JobSource {
         log.debug(`ashby:${board.token} -> ${jobs.length} jobs`);
         ctx.stats.bump("ashby.boards_ok");
         ctx.stats.bump("ashby.jobs_fetched", jobs.length);
+        ctx.stats.sweep(`${this.name}:${board.token}`, this.name, true, jobs.length);
 
         for (const j of jobs) {
           if (!j.id || !j.title) continue;
@@ -73,6 +74,7 @@ export class AshbySource implements JobSource {
 
           out.push({
             source: this.name,
+            board: `${this.name}:${board.token}`,
             ats: "ashby",
             externalId: `${board.token}:${j.id}`,
             sourceUrl: j.jobUrl ?? `https://jobs.ashbyhq.com/${board.token}/${j.id}`,
@@ -96,6 +98,7 @@ export class AshbySource implements JobSource {
         log.warn(`ashby:${board.token} failed: ${detail}`);
         ctx.stats.fail(`ashby:${board.token}`, detail);
         ctx.stats.bump("ashby.boards_failed");
+        ctx.stats.sweep(`${this.name}:${board.token}`, this.name, false, 0);
       }
     }
 

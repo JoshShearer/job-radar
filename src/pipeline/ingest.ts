@@ -6,7 +6,7 @@ import { RunStats, log } from "../lib/log.js";
 import { normalizeJob } from "./normalize.js";
 import { dedupeBatch } from "./dedupe.js";
 import { JobRepo } from "../db/repo.js";
-import { planParking, newestBySource } from "../model/freshness.js";
+import { planParking, newestByBoard } from "../model/freshness.js";
 import { isAutoParkable } from "../model/status.js";
 
 export interface IngestSummary {
@@ -21,10 +21,21 @@ export interface IngestSummary {
   salaryChanges: number;
   /** Postings moved to CLOSED because their board stopped listing them. */
   parked: number;
-  /** Sources where parking was refused as implausible. Never silent. */
-  parkRefusals: Array<{ source: string; wouldPark: number; total: number }>;
+  /** Boards where parking was refused as implausible. Never silent. */
+  parkRefusals: Array<{ board: string; wouldPark: number; total: number }>;
   sourceFailures: number;
   stats: RunStats;
+  /**
+   * Run-level verdict computed from `stats.sweeps`:
+   *  - "ok"       every attempted board succeeded
+   *  - "degraded" some boards failed, some succeeded
+   *  - "failed"   no board succeeded (including "nothing was attempted")
+   *
+   * `runIngest` never throws for this - it always returns normally, per the
+   * failure-isolation invariant above. Callers (the `ingest` and `daily` CLI
+   * actions) decide whether "failed" should fail the command.
+   */
+  outcome: "ok" | "degraded" | "failed";
 }
 
 /**
@@ -121,16 +132,27 @@ export async function runIngest(
     }
   }
 
+  // RECORD BOARD SWEEPS: one row per board this run attempted, before parking
+  // reads them. Housekeeping, so a failure here must not fail the run.
+  for (const s of stats.sweeps) {
+    try {
+      repo.recordBoardSweep(s.boardId, s.provider, s.ok, s.jobCount);
+    } catch (err) {
+      log.warn(`recording sweep for ${s.boardId} failed: ${(err as Error).message}`);
+    }
+  }
+
   // PARK: postings the boards have stopped listing.
   //
-  // After persist, so this run's sightings are already recorded and a posting
-  // seen moments ago cannot look absent. Failures here must not fail the run -
-  // parking is housekeeping, and the jobs it would have moved are still
-  // correct, just noisier.
+  // After persist and after recordBoardSweep, so this run's own sightings and
+  // its own board outcomes are already recorded and a posting seen moments
+  // ago cannot look absent. Failures here must not fail the run - parking is
+  // housekeeping, and the jobs it would have moved are still correct, just
+  // noisier.
   let parked = 0;
-  const parkRefusals: Array<{ source: string; wouldPark: number; total: number }> = [];
+  const parkRefusals: Array<{ board: string; wouldPark: number; total: number }> = [];
   try {
-    const plan = planParking(repo.parkCandidates(), newestBySource(repo.allSightings()), {
+    const plan = planParking(repo.parkCandidates(), newestByBoard(repo.boardSweepSightings()), {
       afterDays: profile.parking.after_days,
       maxFractionPerSource: profile.parking.max_fraction_per_source,
       isParkable: isAutoParkable,
@@ -140,8 +162,8 @@ export async function runIngest(
     if (parked) log.info(`Parked ${parked} posting(s) their board no longer lists (status CLOSED).`);
     for (const r of parkRefusals) {
       log.warn(
-        `Refused to park ${r.source}: ${r.wouldPark} of ${r.total} of its jobs would have gone at once. ` +
-          `That reads as a truncated response from the board rather than a hiring freeze - check the source.`,
+        `Refused to park ${r.board}: ${r.wouldPark} of ${r.total} of its jobs would have gone at once. ` +
+          `That reads as a truncated response from the board rather than a hiring freeze - check the board.`,
       );
     }
   } catch (err) {
@@ -170,7 +192,23 @@ export async function runIngest(
     parkRefusals,
     sourceFailures: stats.failureCount,
     stats,
+    outcome: computeOutcome(stats.sweeps),
   };
+}
+
+/**
+ * "ok" when every attempted board succeeded, "failed" when none did
+ * (including zero boards attempted - nothing was refreshed either way),
+ * "degraded" in between. `runIngest` never throws for this; it is on the
+ * caller (the `ingest` and `daily` CLI actions) to decide whether "failed"
+ * should fail the command.
+ */
+export function computeOutcome(sweeps: ReadonlyArray<{ ok: boolean }>): "ok" | "degraded" | "failed" {
+  if (sweeps.length === 0) return "failed";
+  const succeeded = sweeps.filter((s) => s.ok).length;
+  if (succeeded === sweeps.length) return "ok";
+  if (succeeded === 0) return "failed";
+  return "degraded";
 }
 
 /**

@@ -193,6 +193,25 @@ CREATE TABLE IF NOT EXISTS email_events (
 CREATE INDEX IF NOT EXISTS idx_email_events_job ON email_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_email_events_res ON email_events(resolution);
 
+-- One row per employer board (greenhouse:acme, lever:acme, ..., or bare
+-- provider name for a single-feed source), updated once per ingest run.
+--
+-- Freshness/parking key on this table rather than on jobs.last_seen alone
+-- because a board that succeeds but returns zero jobs (a legitimate empty
+-- catalogue) must be told apart from a board that failed outright - and
+-- last_seen on the jobs table cannot make that distinction, since neither
+-- case touches any job row. succeeded_at only ever advances on a successful
+-- attempt, so a board that is currently failing keeps its own old high-water
+-- mark and nothing on it looks freshly closed.
+CREATE TABLE IF NOT EXISTS board_sweeps (
+  board_id     TEXT PRIMARY KEY,
+  provider     TEXT NOT NULL,
+  status       TEXT NOT NULL,  -- 'ok' | 'failed'
+  job_count    INTEGER NOT NULL DEFAULT 0,
+  attempted_at TEXT NOT NULL,
+  succeeded_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS runs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   command     TEXT NOT NULL,

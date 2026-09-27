@@ -19,26 +19,37 @@
 
 export interface Sighting {
   id: string;
-  source: string;
+  /** Employer-board identity (`greenhouse:acme`), not provider (`greenhouse`). */
+  board: string;
   lastSeen: string | null;
 }
 
 /**
- * High-water mark per source.
+ * High-water mark per BOARD - not per provider.
  *
- * Per-source is the whole point. A board that failed during a run leaves every
- * one of its jobs on an older timestamp, so its own high-water mark is old too
- * and nothing from it looks closed. Comparing against a global maximum instead
- * would mark an entire catalogue closed the first time one provider had a bad
- * night - the same failure the ingest path already refuses to allow, where one
- * failing source must never abort or invalidate a run.
+ * Per-board is the whole point, and the granularity matters as much as the
+ * per-source idea it replaces. Two employer boards on the same ATS provider
+ * (two Greenhouse companies, say) are independent in every way that matters
+ * here: one can go dark while the other keeps refreshing normally. Grouping
+ * by provider instead of by board let a healthy board's fresh sweep advance
+ * the SAME high-water mark a dead sibling board was judged against, so the
+ * dead board's stale jobs looked freshly closed purely because something else
+ * on the same ATS happened to be healthy that day. That is the JOB-50 bug.
+ *
+ * A board that failed during a run leaves its own high-water mark old, so
+ * nothing from it looks closed - the same failure-isolation guarantee the
+ * ingest path already holds to, just scoped correctly now.
  */
-export function newestBySource(jobs: ReadonlyArray<Sighting>): Map<string, string> {
+export function newestByBoard(jobs: ReadonlyArray<Sighting>): Map<string, string> {
   const newest = new Map<string, string>();
   for (const j of jobs) {
+    // Unknown provenance is handled conservatively: an empty/falsy board can
+    // never contribute a high-water mark, so it can never make anything else
+    // look stale by comparison either.
+    if (!j.board) continue;
     if (!j.lastSeen) continue;
-    const current = newest.get(j.source);
-    if (!current || j.lastSeen > current) newest.set(j.source, j.lastSeen);
+    const current = newest.get(j.board);
+    if (!current || j.lastSeen > current) newest.set(j.board, j.lastSeen);
   }
   return newest;
 }
@@ -68,9 +79,11 @@ export const SWEEP_WINDOW_MS = 6 * 60 * 60 * 1000;
  *
  * Compared with a tolerance, not exactly - see SWEEP_WINDOW_MS.
  */
-export function isStale(job: Sighting, newestBySourceMap: ReadonlyMap<string, string>): boolean {
+export function isStale(job: Sighting, newestByBoardMap: ReadonlyMap<string, string>): boolean {
+  // Unknown provenance handled conservatively: no board, no inference.
+  if (!job.board) return false;
   if (!job.lastSeen) return false;
-  const newest = newestBySourceMap.get(job.source);
+  const newest = newestByBoardMap.get(job.board);
   if (!newest) return false;
 
   const seen = Date.parse(job.lastSeen);
@@ -174,7 +187,8 @@ export function formatAge(days: number | null): string {
 
 export interface ParkCandidate {
   id: string;
-  source: string;
+  /** Employer-board identity (`greenhouse:acme`), not provider (`greenhouse`). */
+  board: string;
   lastSeen: string | null;
   status: string;
 }
@@ -183,10 +197,10 @@ export interface ParkPlan {
   /** Job ids to move to CLOSED. */
   park: string[];
   /**
-   * Sources where parking was refused because too much of the catalogue would
+   * Boards where parking was refused because too much of the catalogue would
    * have gone at once. Reported, never silently dropped.
    */
-  refusedSources: Array<{ source: string; wouldPark: number; total: number }>;
+  refusedSources: Array<{ board: string; wouldPark: number; total: number }>;
 }
 
 /**
@@ -203,14 +217,17 @@ export interface ParkPlan {
  *     board kept being swept. At six hours a single bad response parks
  *     everything it omitted; at three days it takes a sustained failure.
  *
- *  2. `maxFractionPerSource`. If more than this share of a source's parkable
- *     jobs would go at once, the source is the problem, not the jobs. Parking
- *     is refused for that source entirely and reported. This is the same
+ *  2. `maxFractionPerSource`. If more than this share of a BOARD's parkable
+ *     jobs would go at once, the board is the problem, not the jobs. Parking
+ *     is refused for that board entirely and reported. This is the same
  *     principle the ingest path already holds to - one failing source must
- *     never invalidate a run.
+ *     never invalidate a run, scoped down to the board that actually failed
+ *     rather than diluted across every board sharing its provider.
  *
- * Comparison is per-source against that source's own high-water mark, so a
- * board that failed completely has no advanced mark and parks nothing.
+ * Comparison is per-board against that board's own high-water mark, so a
+ * board that failed completely has no advanced mark and parks nothing - and,
+ * unlike the provider-keyed version this replaced, a board's OWN failure can
+ * no longer be masked by a healthy sibling board on the same provider.
  *
  * Only `AUTO_PARKABLE_STATUSES` are touched. An inference must not overwrite
  * something a person recorded, and a posting disappearing from a board is
@@ -218,34 +235,37 @@ export interface ParkPlan {
  */
 export function planParking(
   jobs: ReadonlyArray<ParkCandidate>,
-  newestBySourceMap: ReadonlyMap<string, string>,
+  newestByBoardMap: ReadonlyMap<string, string>,
   opts: { afterDays: number; maxFractionPerSource: number; isParkable: (status: string) => boolean },
 ): ParkPlan {
   const thresholdMs = opts.afterDays * 86_400_000;
 
-  const perSource = new Map<string, { candidates: string[]; total: number }>();
+  const perBoard = new Map<string, { candidates: string[]; total: number }>();
   for (const job of jobs) {
     if (!opts.isParkable(job.status)) continue;
-    const entry = perSource.get(job.source) ?? { candidates: [], total: 0 };
+    // Unknown provenance handled conservatively: a job with no recorded board
+    // is never a park candidate, regardless of what else is in the map.
+    if (!job.board) continue;
+    const entry = perBoard.get(job.board) ?? { candidates: [], total: 0 };
     entry.total += 1;
 
     if (job.lastSeen) {
-      const newest = newestBySourceMap.get(job.source);
+      const newest = newestByBoardMap.get(job.board);
       const seen = Date.parse(job.lastSeen);
       const latest = newest ? Date.parse(newest) : NaN;
       if (!Number.isNaN(seen) && !Number.isNaN(latest) && latest - seen > thresholdMs) {
         entry.candidates.push(job.id);
       }
     }
-    perSource.set(job.source, entry);
+    perBoard.set(job.board, entry);
   }
 
   const park: string[] = [];
   const refusedSources: ParkPlan["refusedSources"] = [];
-  for (const [source, { candidates, total }] of perSource) {
+  for (const [board, { candidates, total }] of perBoard) {
     if (candidates.length === 0) continue;
     if (total > 0 && candidates.length / total > opts.maxFractionPerSource) {
-      refusedSources.push({ source, wouldPark: candidates.length, total });
+      refusedSources.push({ board, wouldPark: candidates.length, total });
       continue;
     }
     park.push(...candidates);
