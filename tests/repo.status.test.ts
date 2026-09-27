@@ -26,6 +26,86 @@ describe("setStatus event log", () => {
     expect(repo.setStatus("nope", "APPLIED")).toBe(false);
     expect((db.prepare("SELECT COUNT(*) c FROM job_events").get() as { c: number }).c).toBe(0);
   });
+
+  /**
+   * JOB-47 AC#4: fault injection at the write, against a real isolated
+   * SQLite connection - not a mocked repo. The trigger is the only
+   * fault-injection mechanism; `setStatus` itself is untouched.
+   */
+  it("rolls back the status UPDATE if the event INSERT fails", () => {
+    const { repo, db } = memoryRepo();
+    const id = seedJob(db, { status: "NEW" });
+
+    // Force the addEvent INSERT inside setStatus's transaction to fail,
+    // without touching application code. The sentinel lives in the note
+    // text, which setStatus embeds into the event's JSON `detail`.
+    db.exec(`
+      CREATE TRIGGER fault_inject_status_event
+      BEFORE INSERT ON job_events
+      WHEN NEW.detail LIKE '%FAULT_INJECT%'
+      BEGIN SELECT RAISE(ABORT, 'injected failure'); END;
+    `);
+
+    expect(() => repo.setStatus(id, "APPLIED", "FAULT_INJECT")).toThrow();
+
+    // The UPDATE must not have survived the INSERT's failure.
+    const row = db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as { status: string };
+    expect(row.status).toBe("NEW");
+    const count = (db.prepare("SELECT COUNT(*) c FROM job_events WHERE job_id = ?").get(id) as { c: number })
+      .c;
+    expect(count).toBe(0);
+
+    // A subsequent successful call (no sentinel in the note) must replay
+    // cleanly - the failed transaction left nothing behind to trip over.
+    expect(repo.setStatus(id, "APPLIED", "actually submitted")).toBe(true);
+    const after = db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as { status: string };
+    expect(after.status).toBe("APPLIED");
+    const eventsAfter = db
+      .prepare("SELECT event_type FROM job_events WHERE job_id = ?")
+      .all(id) as { event_type: string }[];
+    expect(eventsAfter).toHaveLength(1);
+  });
+});
+
+describe("setStatusIfCurrent", () => {
+  it("applies and logs the event when the snapshot still matches", () => {
+    const { repo, db } = memoryRepo();
+    const id = seedJob(db, { status: "NEW" });
+
+    const applied = repo.setStatusIfCurrent(id, "NEW", "APPLY", "pack prepared");
+    expect(applied).toBe(true);
+
+    const row = db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as { status: string };
+    expect(row.status).toBe("APPLY");
+    const events = db
+      .prepare("SELECT event_type, detail FROM job_events WHERE job_id = ?")
+      .all(id) as { event_type: string; detail: string }[];
+    expect(events).toHaveLength(1);
+    expect(events[0]!.event_type).toBe("status_changed");
+    expect(JSON.parse(events[0]!.detail)).toMatchObject({ from: "NEW", to: "APPLY", note: "pack prepared" });
+  });
+
+  it("refuses a write when the status moved on, and writes nothing", () => {
+    const { repo, db } = memoryRepo();
+    const id = seedJob(db, { status: "NEW" });
+    repo.setStatus(id, "APPLY"); // status is now APPLY, not the caller's stale snapshot
+
+    const applied = repo.setStatusIfCurrent(id, "NEW", "APPLIED", "stale write");
+    expect(applied).toBe(false);
+
+    const row = db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as { status: string };
+    expect(row.status).toBe("APPLY"); // unchanged by the refused write
+    const count = (db.prepare("SELECT COUNT(*) c FROM job_events WHERE job_id = ?").get(id) as { c: number })
+      .c;
+    expect(count).toBe(1); // only the earlier setStatus(APPLY) event; nothing from the refused CAS
+  });
+
+  it("refuses a write for a job that does not exist", () => {
+    const { repo, db } = memoryRepo();
+    const applied = repo.setStatusIfCurrent("nope", "NEW", "APPLIED");
+    expect(applied).toBe(false);
+    expect((db.prepare("SELECT COUNT(*) c FROM job_events").get() as { c: number }).c).toBe(0);
+  });
 });
 
 describe("statusTransitions", () => {

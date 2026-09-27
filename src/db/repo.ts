@@ -447,16 +447,46 @@ export class JobRepo {
     this.addEvent(jobId, "analyzed", { model, recommendation: analysis.recommendation });
   }
 
-  setStatus(jobId: string, status: Status, note?: string): boolean {
-    const existing = this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId) as
-      | { status: string }
-      | undefined;
-    if (!existing) return false;
+  /**
+   * Shared UPDATE+addEvent pair for a status write. Not transactional on its
+   * own - callers (`setStatus`, `setStatusIfCurrent`) wrap it in
+   * `this.db.transaction(...)` so the row update and its audit event commit
+   * or roll back together.
+   */
+  private writeStatus(jobId: string, from: string, to: Status, note: string | undefined): void {
     this.db
       .prepare("UPDATE jobs SET status = ?, status_changed_at = ?, notes = COALESCE(?, notes) WHERE id = ?")
-      .run(status, nowIso(), note ?? null, jobId);
-    this.addEvent(jobId, "status_changed", { from: existing.status, to: status, note: note ?? null });
-    return true;
+      .run(to, nowIso(), note ?? null, jobId);
+    this.addEvent(jobId, "status_changed", { from, to, note: note ?? null });
+  }
+
+  setStatus(jobId: string, status: Status, note?: string): boolean {
+    return this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId) as
+        | { status: string }
+        | undefined;
+      if (!existing) return false;
+      this.writeStatus(jobId, existing.status, status, note);
+      return true;
+    })();
+  }
+
+  /**
+   * Compare-and-swap variant for automatic callers that read a status
+   * snapshot earlier and write later. Applies only if the job's CURRENT
+   * status still equals `expectedStatus`; otherwise something moved the job
+   * on in the interim and the write is refused rather than overwriting a
+   * newer state a human or another process may have set.
+   */
+  setStatusIfCurrent(jobId: string, expectedStatus: Status, newStatus: Status, note?: string): boolean {
+    return this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId) as
+        | { status: string }
+        | undefined;
+      if (!existing || existing.status !== expectedStatus) return false;
+      this.writeStatus(jobId, existing.status, newStatus, note);
+      return true;
+    })();
   }
 
   // ---- Reads --------------------------------------------------------------

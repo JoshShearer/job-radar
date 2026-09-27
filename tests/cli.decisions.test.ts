@@ -62,20 +62,31 @@ describe("no status decision lives inline in a command body", () => {
     { call: "repo.setStatus(job.id, nextStatus,", decidedBy: "advanceStatus" },
     // autofill: only ever writes APPLIED on an explicit human yes.
     { call: "repo.setStatus(job.id, recorded)", decidedBy: "statusAfterAutofill" },
-    // daily: the GHOSTED sweep. The literal is the outcome; `ghostable`
-    // decides WHICH jobs, which is the part with judgement in it.
-    { call: 'repo.setStatus(g.id, "GHOSTED"', decidedBy: "ghostable" },
     // the `status` command itself: the human names the status. Not a decision.
     { call: "repo.setStatus(job.id, upper, opts.note)", decidedBy: "the user" },
   ];
+
+  /**
+   * JOB-47 PR1: the GHOSTED sweep is an automatic caller that snapshots a
+   * status earlier and writes later, so it moved to the compare-and-swap
+   * primitive rather than the unconditional `setStatus`. It stays in this
+   * ratchet under its own list rather than dropping out of it - the "which
+   * jobs" decision is still `ghostable`'s, only the write primitive changed.
+   */
+  const KNOWN_STATUS_IF_CURRENT_WRITES = [{ call: "repo.setStatusIfCurrent(", decidedBy: "ghostable" }];
 
   it("has exactly the status writes it is known to have", () => {
     const found = (CLI.match(/repo\.setStatus\(/g) ?? []).length;
     expect(found).toBe(KNOWN_STATUS_WRITES.length);
   });
 
+  it("has exactly the compare-and-swap status writes it is known to have", () => {
+    const found = (CLI.match(/repo\.setStatusIfCurrent\(/g) ?? []).length;
+    expect(found).toBe(KNOWN_STATUS_IF_CURRENT_WRITES.length);
+  });
+
   it("each one is present and traceable to a named decision", () => {
-    for (const w of KNOWN_STATUS_WRITES) {
+    for (const w of [...KNOWN_STATUS_WRITES, ...KNOWN_STATUS_IF_CURRENT_WRITES]) {
       expect(CLI).toContain(w.call);
       expect(w.decidedBy.length).toBeGreaterThan(0);
     }
