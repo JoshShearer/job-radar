@@ -62,6 +62,7 @@ export class LeverSource implements JobSource {
         log.debug(`lever:${board.token} -> ${jobs.length} jobs`);
         ctx.stats.bump("lever.boards_ok");
         ctx.stats.bump("lever.jobs_fetched", jobs.length);
+        ctx.stats.sweep(`${this.name}:${board.token}`, this.name, true, jobs.length);
 
         for (const j of jobs) {
           if (!j.id || !j.text) continue;
@@ -71,6 +72,7 @@ export class LeverSource implements JobSource {
 
           out.push({
             source: this.name,
+            board: `${this.name}:${board.token}`,
             ats: "lever",
             externalId: `${board.token}:${j.id}`,
             sourceUrl: j.hostedUrl ?? `https://jobs.lever.co/${board.token}/${j.id}`,
@@ -99,6 +101,7 @@ export class LeverSource implements JobSource {
         log.warn(`lever:${board.token} failed: ${detail}`);
         ctx.stats.fail(`lever:${board.token}`, detail);
         ctx.stats.bump("lever.boards_failed");
+        ctx.stats.sweep(`${this.name}:${board.token}`, this.name, false, 0);
       }
     }
 

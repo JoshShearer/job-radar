@@ -56,6 +56,7 @@ export function normalizeJob(raw: SourceJob, profile: CareerProfile): Normalized
     id,
     externalId: raw.externalId,
     source: raw.source,
+    board: raw.board,
     ats: raw.ats,
     sourceUrl: raw.sourceUrl,
     applicationUrl: raw.applicationUrl,

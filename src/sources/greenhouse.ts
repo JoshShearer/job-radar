@@ -49,11 +49,13 @@ export class GreenhouseSource implements JobSource {
         log.debug(`greenhouse:${board.token} -> ${jobs.length} jobs`);
         ctx.stats.bump("greenhouse.boards_ok");
         ctx.stats.bump("greenhouse.jobs_fetched", jobs.length);
+        ctx.stats.sweep(`${this.name}:${board.token}`, this.name, true, jobs.length);
 
         for (const j of jobs) {
           if (!j.id || !j.title) continue;
           out.push({
             source: this.name,
+            board: `${this.name}:${board.token}`,
             ats: "greenhouse",
             externalId: `${board.token}:${j.id}`,
             sourceUrl: j.absolute_url,
@@ -74,6 +76,7 @@ export class GreenhouseSource implements JobSource {
         log.warn(`greenhouse:${board.token} failed: ${detail}`);
         ctx.stats.fail(`greenhouse:${board.token}`, detail);
         ctx.stats.bump("greenhouse.boards_failed");
+        ctx.stats.sweep(`${this.name}:${board.token}`, this.name, false, 0);
       }
     }
 

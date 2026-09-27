@@ -60,6 +60,7 @@ export class RemoteOkSource implements JobSource {
 
         out.push({
           source: this.name,
+          board: this.name,
           ats: null,
           externalId: String(e.id),
           sourceUrl: e.url ?? `https://remoteok.com/remote-jobs/${e.slug ?? e.id}`,
@@ -81,11 +82,13 @@ export class RemoteOkSource implements JobSource {
       log.debug(`remoteok -> ${out.length} jobs (${skippedLegal} non-job entries skipped)`);
       ctx.stats.bump("remoteok.jobs_fetched", out.length);
       ctx.stats.bump("remoteok.boards_ok");
+      ctx.stats.sweep(this.name, this.name, true, out.length);
     } catch (err) {
       const detail = (err as Error).message;
       log.warn(`remoteok failed: ${detail}`);
       ctx.stats.fail("remoteok", detail);
       ctx.stats.bump("remoteok.boards_failed");
+      ctx.stats.sweep(this.name, this.name, false, 0);
     }
 
     return out;

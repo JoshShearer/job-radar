@@ -15,6 +15,13 @@ export interface NormalizedJob {
   externalId: string;
   /** Adapter name: greenhouse | lever | ashby | remoteok | ... */
   source: string;
+  /**
+   * Employer-board identity: `${source}:${token}` for the ATS adapters, bare
+   * `source` for a single-feed adapter. Freshness and parking are keyed on
+   * this, not on `source`, so one dead board can never park or close another
+   * healthy board's jobs just because they share a provider.
+   */
+  board: string;
   /** ATS platform backing the posting, when known. */
   ats: string | null;
   sourceUrl: string;
