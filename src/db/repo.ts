@@ -49,6 +49,7 @@ interface JobRow {
   dedupe_key: string;
   external_id: string;
   source: string;
+  board_id: string | null;
   ats: string | null;
   source_url: string;
   canonical_url: string | null;
@@ -134,14 +135,14 @@ export class JobRepo {
       this.db
         .prepare(
           `INSERT INTO jobs (
-            id, dedupe_key, external_id, source, ats, source_url, canonical_url, application_url,
+            id, dedupe_key, external_id, source, board_id, ats, source_url, canonical_url, application_url,
             company, company_normalized, title, title_normalized, location, remote_status,
             employment_type, seniority, department, team, industry, company_stage, company_size_estimate,
             date_posted, date_discovered, first_seen, last_seen,
             salary_min, salary_max, salary_currency, salary_period,
             description_clean, description_hash, material_hash, status
           ) VALUES (
-            @id, @dedupe_key, @external_id, @source, @ats, @source_url, @canonical_url, @application_url,
+            @id, @dedupe_key, @external_id, @source, @board_id, @ats, @source_url, @canonical_url, @application_url,
             @company, @company_normalized, @title, @title_normalized, @location, @remote_status,
             @employment_type, @seniority, @department, @team, @industry, @company_stage, @company_size_estimate,
             @date_posted, @date_discovered, @first_seen, @last_seen,
@@ -154,6 +155,7 @@ export class JobRepo {
           dedupe_key: dedupeKey,
           external_id: job.externalId,
           source: job.source,
+          board_id: job.board,
           ats: job.ats,
           source_url: job.sourceUrl,
           canonical_url: canonical,
@@ -638,10 +640,10 @@ export class JobRepo {
    * Status comes along because the decision depends on it: an inference must
    * never move a posting a person has already acted on.
    */
-  parkCandidates(): Array<{ id: string; source: string; lastSeen: string | null; status: string }> {
+  parkCandidates(): Array<{ id: string; board: string; lastSeen: string | null; status: string }> {
     return this.db
-      .prepare("SELECT id, source, last_seen AS lastSeen, status FROM jobs")
-      .all() as Array<{ id: string; source: string; lastSeen: string | null; status: string }>;
+      .prepare("SELECT id, COALESCE(board_id, '') AS board, last_seen AS lastSeen, status FROM jobs")
+      .all() as Array<{ id: string; board: string; lastSeen: string | null; status: string }>;
   }
 
   /**
@@ -980,10 +982,56 @@ export class JobRepo {
       .all() as never;
   }
 
-  allSightings(): Array<{ id: string; source: string; lastSeen: string | null }> {
+  /**
+   * Record one board's outcome for this run.
+   *
+   * Called once per board, from `stats.sweeps`, before the parking pass -
+   * so `boardSweepSightings()` reflects this run's own attempts when parking
+   * decides what to close. `succeeded_at` only ever advances on a successful
+   * attempt: a board that is currently failing keeps its own old high-water
+   * mark, so none of its jobs look freshly closed just because a sibling
+   * board on the same provider is healthy. This is the mechanism that keys
+   * freshness/parking on employer-board identity rather than provider.
+   */
+  recordBoardSweep(boardId: string, provider: string, ok: boolean, jobCount: number): void {
+    const now = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO board_sweeps (board_id, provider, status, job_count, attempted_at, succeeded_at)
+         VALUES (@boardId, @provider, @status, @jobCount, @attemptedAt, @succeededAt)
+         ON CONFLICT(board_id) DO UPDATE SET
+           provider = excluded.provider,
+           status = excluded.status,
+           job_count = excluded.job_count,
+           attempted_at = excluded.attempted_at,
+           succeeded_at = CASE WHEN excluded.status = 'ok' THEN excluded.attempted_at ELSE board_sweeps.succeeded_at END`,
+      )
+      .run({
+        boardId,
+        provider,
+        status: ok ? "ok" : "failed",
+        jobCount,
+        attemptedAt: now,
+        succeededAt: ok ? now : null,
+      });
+  }
+
+  /**
+   * Every board's own high-water mark, for closed-posting detection.
+   *
+   * Replaces the old whole-jobs-table scan (`allSightings`), which grouped by
+   * `source` - the provider - so a healthy board's fresh sweep advanced the
+   * same high-water mark a dead sibling board on the same provider was judged
+   * against. Reading `board_sweeps.succeeded_at` directly is also more
+   * correct than inferring freshness from `jobs.last_seen`: a board that
+   * succeeds but now legitimately lists zero jobs touches no job row, and a
+   * board that failed outright touches no job row either - `jobs.last_seen`
+   * cannot tell those apart, but `board_sweeps.status` can.
+   */
+  boardSweepSightings(): Array<{ id: string; board: string; lastSeen: string | null }> {
     return this.db
-      .prepare("SELECT id, source, last_seen AS lastSeen FROM jobs")
-      .all() as Array<{ id: string; source: string; lastSeen: string | null }>;
+      .prepare("SELECT board_id AS id, board_id AS board, succeeded_at AS lastSeen FROM board_sweeps")
+      .all() as Array<{ id: string; board: string; lastSeen: string | null }>;
   }
 
   /** Top actionable jobs for the daily report. */
@@ -1362,6 +1410,10 @@ function toNormalized(r: JobRow): NormalizedJob {
     id: r.id,
     externalId: r.external_id,
     source: r.source,
+    // Falsy, not a fallback to `source`, when a row genuinely has no board_id
+    // recorded. Falling back to `source` would recreate exactly the bug this
+    // column exists to fix - see the empty-board guard in freshness.ts.
+    board: r.board_id ?? "",
     ats: r.ats,
     sourceUrl: r.source_url,
     applicationUrl: r.application_url,

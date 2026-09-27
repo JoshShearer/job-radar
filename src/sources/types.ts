@@ -10,6 +10,17 @@ import type { RunStats } from "../lib/log.js";
  */
 export interface SourceJob {
   source: string;
+  /**
+   * Employer-board identity: `${provider}:${token}` for the ATS adapters
+   * (greenhouse/lever/ashby), bare provider name for a single-feed source
+   * like remoteok that has no per-employer board to distinguish.
+   *
+   * This exists because `source` alone is too coarse for freshness/parking: a
+   * dead Greenhouse board must never park or close jobs on a healthy
+   * Greenhouse board just because they share a provider. See
+   * src/model/freshness.ts.
+   */
+  board: string;
   ats: string | null;
   externalId: string;
   sourceUrl: string;

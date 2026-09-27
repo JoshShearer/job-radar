@@ -35,10 +35,26 @@ export const log = {
   error: (m: string, e?: unknown) => emit("error", m, e),
 };
 
+/**
+ * One adapter's attempt at one employer board, this run.
+ *
+ * Board-level status is deliberately binary: `ok` covers a successful fetch
+ * that returned zero jobs (a board can legitimately empty out), `false` is
+ * reserved for a thrown/caught error. Each of the four adapters is one
+ * unpaginated HTTP call per board, so there is no partial state to represent.
+ */
+export interface BoardSweepResult {
+  boardId: string;
+  provider: string;
+  ok: boolean;
+  jobCount: number;
+}
+
 /** Counters for an ingestion run, printed as a summary at the end. */
 export class RunStats {
   private counts = new Map<string, number>();
   private failures: { source: string; detail: string }[] = [];
+  private sweepResults: BoardSweepResult[] = [];
 
   bump(key: string, by = 1): void {
     this.counts.set(key, (this.counts.get(key) ?? 0) + by);
@@ -54,6 +70,20 @@ export class RunStats {
 
   get failureCount(): number {
     return this.failures.length;
+  }
+
+  /**
+   * Record one board's outcome for this run. Adapters call this once per
+   * board, on both the success and failure branch of their own per-board
+   * try/catch - it never replaces `bump`/`fail`, which stay for counters and
+   * the human-readable failure log.
+   */
+  sweep(boardId: string, provider: string, ok: boolean, jobCount: number): void {
+    this.sweepResults.push({ boardId, provider, ok, jobCount });
+  }
+
+  get sweeps(): ReadonlyArray<BoardSweepResult> {
+    return this.sweepResults;
   }
 
   summary(): string {

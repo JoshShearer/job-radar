@@ -46,6 +46,7 @@ describe("GreenhouseSource", () => {
     expect(jobs).toHaveLength(1);
     const j = jobs[0]!;
     expect(j.source).toBe("greenhouse");
+    expect(j.board).toBe("greenhouse:vercel");
     expect(j.ats).toBe("greenhouse");
     expect(j.externalId).toBe("vercel:6136160004");
     expect(j.company).toBe("Vercel");
@@ -56,12 +57,26 @@ describe("GreenhouseSource", () => {
     expect(j.datePosted).toMatch(/^2026-08-06/);
   });
 
+  it("records a successful sweep for the board, at board granularity", async () => {
+    const c = ctx(payload);
+    await new GreenhouseSource([{ token: "vercel", company: "Vercel" }]).fetch(c);
+    expect(c.stats.sweeps).toEqual([
+      { boardId: "greenhouse:vercel", provider: "greenhouse", ok: true, jobCount: 1 },
+    ]);
+  });
+
   it("keeps going when a board 404s", async () => {
     const c = ctx(null, true);
     const jobs = await new GreenhouseSource([{ token: "gone", company: "Gone" }]).fetch(c);
     expect(jobs).toEqual([]);
     expect(c.stats.failureCount).toBe(1);
     expect(c.stats.get("greenhouse.boards_failed")).toBe(1);
+  });
+
+  it("records a failed sweep for a board that errors, and never throws", async () => {
+    const c = ctx(null, true);
+    await new GreenhouseSource([{ token: "gone", company: "Gone" }]).fetch(c);
+    expect(c.stats.sweeps).toEqual([{ boardId: "greenhouse:gone", provider: "greenhouse", ok: false, jobCount: 0 }]);
   });
 
   it("records failure for one board but still returns others", async () => {
@@ -79,6 +94,25 @@ describe("GreenhouseSource", () => {
     ]).fetch(c);
     expect(jobs).toHaveLength(1);
     expect(c.stats.failureCount).toBe(1);
+  });
+
+  it("reports a mixed run as one ok sweep and one failed sweep, independently", async () => {
+    const getJson = vi
+      .fn()
+      .mockResolvedValueOnce(payload)
+      .mockRejectedValueOnce(new Error("HTTP 500"));
+    const c: SourceContext = {
+      fetcher: { getJson, getText: vi.fn() } as unknown as PoliteFetcher,
+      stats: new RunStats(),
+    };
+    await new GreenhouseSource([
+      { token: "vercel", company: "Vercel" },
+      { token: "broken", company: "Broken" },
+    ]).fetch(c);
+    expect(c.stats.sweeps).toEqual([
+      { boardId: "greenhouse:vercel", provider: "greenhouse", ok: true, jobCount: 1 },
+      { boardId: "greenhouse:broken", provider: "greenhouse", ok: false, jobCount: 0 },
+    ]);
   });
 });
 
@@ -103,9 +137,23 @@ describe("LeverSource", () => {
     const jobs = await new LeverSource([{ token: "ro", company: "Ro" }]).fetch(c);
     const j = jobs[0]!;
     expect(j.externalId).toBe("ro:abc-123");
+    expect(j.board).toBe("lever:ro");
     expect(j.title).toBe("Senior Full Stack Engineer");
     expect(j.workplaceType).toBe("remote");
     expect(j.employmentTypeRaw).toBe("Full-time");
+  });
+
+  it("records a successful sweep for the board", async () => {
+    const c = ctx(payload);
+    await new LeverSource([{ token: "ro", company: "Ro" }]).fetch(c);
+    expect(c.stats.sweeps).toEqual([{ boardId: "lever:ro", provider: "lever", ok: true, jobCount: 1 }]);
+  });
+
+  it("records a failed sweep for a board that errors, and never throws", async () => {
+    const c = ctx(null, true);
+    const jobs = await new LeverSource([{ token: "gone", company: "Gone" }]).fetch(c);
+    expect(jobs).toEqual([]);
+    expect(c.stats.sweeps).toEqual([{ boardId: "lever:gone", provider: "lever", ok: false, jobCount: 0 }]);
   });
 
   it("reassembles the description from lists, not just the intro", async () => {
@@ -167,6 +215,27 @@ describe("AshbySource", () => {
     expect(jobs[0]!.salary).toEqual({ min: 211400, max: 290600, currency: "USD", period: "year" });
   });
 
+  it("carries the board identity", async () => {
+    const c = ctx(payload);
+    const jobs = await new AshbySource([{ token: "ramp", company: "Ramp" }]).fetch(c);
+    expect(jobs[0]!.board).toBe("ashby:ramp");
+  });
+
+  it("records a successful sweep for the board", async () => {
+    const c = ctx(payload);
+    await new AshbySource([{ token: "ramp", company: "Ramp" }]).fetch(c);
+    // Two entries in the payload, one filtered by isListed:false - the sweep
+    // count reflects what the board returned, not what survived filtering.
+    expect(c.stats.sweeps).toEqual([{ boardId: "ashby:ramp", provider: "ashby", ok: true, jobCount: 2 }]);
+  });
+
+  it("records a failed sweep for a board that errors, and never throws", async () => {
+    const c = ctx(null, true);
+    const jobs = await new AshbySource([{ token: "gone", company: "Gone" }]).fetch(c);
+    expect(jobs).toEqual([]);
+    expect(c.stats.sweeps).toEqual([{ boardId: "ashby:gone", provider: "ashby", ok: false, jobCount: 0 }]);
+  });
+
   it("merges secondary locations so remote eligibility is not lost", async () => {
     const c = ctx(payload);
     const jobs = await new AshbySource([{ token: "ramp", company: "Ramp" }]).fetch(c);
@@ -223,6 +292,25 @@ describe("RemoteOkSource", () => {
     const jobs = await new RemoteOkSource().fetch(c);
     expect(jobs.every((j) => j.company !== undefined)).toBe(true);
     expect(jobs).toHaveLength(2);
+  });
+
+  it("uses the bare provider name as its board - a single feed, no per-employer token", async () => {
+    const c = ctx(payload);
+    const jobs = await new RemoteOkSource().fetch(c);
+    expect(jobs[0]!.board).toBe("remoteok");
+  });
+
+  it("records a successful sweep under the bare provider name", async () => {
+    const c = ctx(payload);
+    await new RemoteOkSource().fetch(c);
+    expect(c.stats.sweeps).toEqual([{ boardId: "remoteok", provider: "remoteok", ok: true, jobCount: 2 }]);
+  });
+
+  it("records a failed sweep when the feed errors, and never throws", async () => {
+    const c = ctx(null, true);
+    const jobs = await new RemoteOkSource().fetch(c);
+    expect(jobs).toEqual([]);
+    expect(c.stats.sweeps).toEqual([{ boardId: "remoteok", provider: "remoteok", ok: false, jobCount: 0 }]);
   });
 
   it("strips the anti-scraping instrumentation from descriptions", async () => {

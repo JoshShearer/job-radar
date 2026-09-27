@@ -13,88 +13,123 @@ function newest(map: Record<string, number>): Map<string, string> {
 /**
  * JOB-36. 339 filter-passing jobs were still NEW although their board had
  * stopped listing them. They held ranking slots and could eat analysis budget.
+ *
+ * JOB-50 rescoped grouping from provider (`greenhouse`) to employer-board
+ * (`greenhouse:acme`), including `maxFractionPerSource`, which is now scoped
+ * per board rather than diluted across every board sharing a provider.
  */
 describe("planParking", () => {
   it("parks a posting its board has stopped listing", () => {
     const jobs: ParkCandidate[] = [
-      { id: "gone", source: "greenhouse", lastSeen: iso(10), status: "NEW" },
-      { id: "here", source: "greenhouse", lastSeen: iso(0), status: "NEW" },
+      { id: "gone", board: "greenhouse:acme", lastSeen: iso(10), status: "NEW" },
+      { id: "here", board: "greenhouse:acme", lastSeen: iso(0), status: "NEW" },
     ];
-    expect(planParking(jobs, newest({ greenhouse: 0 }), OPTS).park).toEqual(["gone"]);
+    expect(planParking(jobs, newest({ "greenhouse:acme": 0 }), OPTS).park).toEqual(["gone"]);
   });
 
   it("never parks a posting a person has acted on", () => {
     // A posting vanishing from the board is often exactly what happens right
     // after you apply to it. An inference must not overwrite a human record.
     const jobs: ParkCandidate[] = [
-      { id: "applied", source: "greenhouse", lastSeen: iso(30), status: "APPLIED" },
-      { id: "screen", source: "greenhouse", lastSeen: iso(30), status: "SCREEN" },
-      { id: "offer", source: "greenhouse", lastSeen: iso(30), status: "OFFER" },
-      { id: "skipped", source: "greenhouse", lastSeen: iso(30), status: "SKIPPED" },
+      { id: "applied", board: "greenhouse:acme", lastSeen: iso(30), status: "APPLIED" },
+      { id: "screen", board: "greenhouse:acme", lastSeen: iso(30), status: "SCREEN" },
+      { id: "offer", board: "greenhouse:acme", lastSeen: iso(30), status: "OFFER" },
+      { id: "skipped", board: "greenhouse:acme", lastSeen: iso(30), status: "SKIPPED" },
     ];
-    expect(planParking(jobs, newest({ greenhouse: 0 }), OPTS).park).toEqual([]);
+    expect(planParking(jobs, newest({ "greenhouse:acme": 0 }), OPTS).park).toEqual([]);
   });
 
   it("waits longer than the [CLOSED?] tag does, so one bad sweep parks nothing", () => {
     // isStale uses a six-hour window, which is right for colouring a listing.
     // A state change has to be slower than that.
-    const jobs: ParkCandidate[] = [{ id: "a", source: "greenhouse", lastSeen: iso(1), status: "NEW" }];
-    expect(planParking(jobs, newest({ greenhouse: 0 }), OPTS).park).toEqual([]);
+    const jobs: ParkCandidate[] = [{ id: "a", board: "greenhouse:acme", lastSeen: iso(1), status: "NEW" }];
+    expect(planParking(jobs, newest({ "greenhouse:acme": 0 }), OPTS).park).toEqual([]);
   });
 
-  it("refuses to park a source that would lose most of its catalogue", () => {
+  it("refuses to park a board that would lose most of its catalogue", () => {
     // A board returning a truncated list looks exactly like a board where
     // hundreds of jobs closed at once. This is the difference.
     const jobs: ParkCandidate[] = [
       ...Array.from({ length: 9 }, (_, i) => ({
-        id: `old${i}`, source: "flaky", lastSeen: iso(10), status: "NEW",
+        id: `old${i}`, board: "greenhouse:flaky", lastSeen: iso(10), status: "NEW",
       })),
-      { id: "fresh", source: "flaky", lastSeen: iso(0), status: "NEW" },
+      { id: "fresh", board: "greenhouse:flaky", lastSeen: iso(0), status: "NEW" },
     ];
-    const plan = planParking(jobs, newest({ flaky: 0 }), OPTS);
+    const plan = planParking(jobs, newest({ "greenhouse:flaky": 0 }), OPTS);
     expect(plan.park).toEqual([]);
-    expect(plan.refusedSources).toEqual([{ source: "flaky", wouldPark: 9, total: 10 }]);
+    expect(plan.refusedSources).toEqual([{ board: "greenhouse:flaky", wouldPark: 9, total: 10 }]);
   });
 
-  it("refusing one source does not stop another", () => {
+  it("refusing one board does not stop another", () => {
     const jobs: ParkCandidate[] = [
       ...Array.from({ length: 9 }, (_, i) => ({
-        id: `f${i}`, source: "flaky", lastSeen: iso(10), status: "NEW",
+        id: `f${i}`, board: "greenhouse:flaky", lastSeen: iso(10), status: "NEW",
       })),
-      { id: "ffresh", source: "flaky", lastSeen: iso(0), status: "NEW" },
-      { id: "g1", source: "good", lastSeen: iso(10), status: "NEW" },
+      { id: "ffresh", board: "greenhouse:flaky", lastSeen: iso(0), status: "NEW" },
+      { id: "g1", board: "greenhouse:good", lastSeen: iso(10), status: "NEW" },
       ...Array.from({ length: 9 }, (_, i) => ({
-        id: `gfresh${i}`, source: "good", lastSeen: iso(0), status: "NEW",
+        id: `gfresh${i}`, board: "greenhouse:good", lastSeen: iso(0), status: "NEW",
       })),
     ];
-    const plan = planParking(jobs, newest({ flaky: 0, good: 0 }), OPTS);
+    const plan = planParking(jobs, newest({ "greenhouse:flaky": 0, "greenhouse:good": 0 }), OPTS);
     expect(plan.park).toEqual(["g1"]);
-    expect(plan.refusedSources.map((r) => r.source)).toEqual(["flaky"]);
+    expect(plan.refusedSources.map((r) => r.board)).toEqual(["greenhouse:flaky"]);
   });
 
-  it("parks nothing from a source that failed completely", () => {
+  it("parks nothing from a board that failed completely", () => {
     // A board that returned nothing has no advanced high-water mark, so its
-    // jobs cannot look stale. The per-source comparison is what guarantees it.
+    // jobs cannot look stale. The per-board comparison is what guarantees it.
     const jobs: ParkCandidate[] = [
-      { id: "a", source: "dead", lastSeen: iso(30), status: "NEW" },
-      { id: "b", source: "dead", lastSeen: iso(30), status: "NEW" },
+      { id: "a", board: "greenhouse:dead", lastSeen: iso(30), status: "NEW" },
+      { id: "b", board: "greenhouse:dead", lastSeen: iso(30), status: "NEW" },
     ];
-    expect(planParking(jobs, newest({ dead: 30 }), OPTS).park).toEqual([]);
+    expect(planParking(jobs, newest({ "greenhouse:dead": 30 }), OPTS).park).toEqual([]);
   });
 
   it("ignores a posting that has never been seen", () => {
-    const jobs: ParkCandidate[] = [{ id: "a", source: "greenhouse", lastSeen: null, status: "NEW" }];
-    expect(planParking(jobs, newest({ greenhouse: 0 }), OPTS).park).toEqual([]);
+    const jobs: ParkCandidate[] = [{ id: "a", board: "greenhouse:acme", lastSeen: null, status: "NEW" }];
+    expect(planParking(jobs, newest({ "greenhouse:acme": 0 }), OPTS).park).toEqual([]);
   });
 
   it("parks a REVIEWED posting, which is still only a machine-set state", () => {
     const jobs: ParkCandidate[] = [
-      { id: "r", source: "greenhouse", lastSeen: iso(10), status: "REVIEWED" },
+      { id: "r", board: "greenhouse:acme", lastSeen: iso(10), status: "REVIEWED" },
       ...Array.from({ length: 5 }, (_, i) => ({
-        id: `n${i}`, source: "greenhouse", lastSeen: iso(0), status: "NEW",
+        id: `n${i}`, board: "greenhouse:acme", lastSeen: iso(0), status: "NEW",
       })),
     ];
-    expect(planParking(jobs, newest({ greenhouse: 0 }), OPTS).park).toEqual(["r"]);
+    expect(planParking(jobs, newest({ "greenhouse:acme": 0 }), OPTS).park).toEqual(["r"]);
+  });
+
+  it("ignores a job with no recorded board, regardless of the map", () => {
+    // Unknown provenance handled conservatively: never a park candidate.
+    const jobs: ParkCandidate[] = [{ id: "a", board: "", lastSeen: iso(30), status: "NEW" }];
+    expect(planParking(jobs, newest({ "greenhouse:acme": 0 }), OPTS).park).toEqual([]);
+  });
+
+  /**
+   * The literal JOB-50 bug reproduction. Two employer boards on the same ATS
+   * provider: one keeps sweeping successfully, the other has been dead for
+   * weeks. Grouping by provider (the old behaviour) would pool both boards'
+   * jobs under one "greenhouse" high-water mark, so the healthy board's fresh
+   * sweep would make the dead board's stale jobs look freshly closed and park
+   * them. Grouping by board must keep them completely isolated.
+   */
+  it("never parks a dead board's jobs just because a healthy sibling board shares its provider", () => {
+    const jobs: ParkCandidate[] = [
+      // healthy board: swept today, nothing stale.
+      { id: "healthy-job", board: "greenhouse:healthyco", lastSeen: iso(0), status: "NEW" },
+      // dead board: has not swept in 30 days, but its own last sighting is
+      // exactly as old as its own board's high-water mark - not stale.
+      { id: "dead-job", board: "greenhouse:deadco", lastSeen: iso(30), status: "NEW" },
+    ];
+    const plan = planParking(
+      jobs,
+      newest({ "greenhouse:healthyco": 0, "greenhouse:deadco": 30 }),
+      OPTS,
+    );
+    expect(plan.park).toEqual([]);
+    expect(plan.refusedSources).toEqual([]);
   });
 });
 

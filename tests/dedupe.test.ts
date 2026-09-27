@@ -15,6 +15,7 @@ function job(over: Partial<NormalizedJob> = {}): NormalizedJob {
     id: over.id ?? Math.random().toString(36).slice(2, 14),
     externalId: over.externalId ?? "ext-1",
     source: over.source ?? "greenhouse",
+    board: over.board ?? "greenhouse:acme",
     ats: over.ats ?? "greenhouse",
     sourceUrl: over.sourceUrl ?? "https://example.com/job/1",
     applicationUrl: null,

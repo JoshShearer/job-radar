@@ -18,6 +18,7 @@ beforeAll(() => {
 function source(over: Partial<SourceJob> = {}): SourceJob {
   return {
     source: "greenhouse",
+    board: "greenhouse:acme",
     ats: "greenhouse",
     externalId: "test:1",
     sourceUrl: "https://example.com/job/1",

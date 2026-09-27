@@ -65,7 +65,7 @@ import {
   INTERVIEW_STAGES,
 } from "./model/status.js";
 import { statusAfterAutofill } from "./apply/record.js";
-import { isStale, newestBySource, closedPostingMarker, formatAge, isEvergreen, postingAgeDays } from "./model/freshness.js";
+import { isStale, newestByBoard, closedPostingMarker, formatAge, isEvergreen, postingAgeDays } from "./model/freshness.js";
 import type { EnrichedJob } from "./model/job.js";
 import { resolveJob } from "./db/resolve.js";
 import { confirmYesNo } from "./lib/prompt.js";
@@ -141,6 +141,13 @@ program
       );
       if (summary.sourceFailures > 0) {
         console.log(`${summary.sourceFailures} source(s) failed - see above. The run continued regardless.`);
+      }
+      console.log(`Outcome: ${summary.outcome}`);
+      // "failed" means no board succeeded this run - nothing was actually
+      // refreshed, so runs.ok must stop recording success. "degraded" (some
+      // boards failed) still ran and still refreshed something real.
+      if (summary.outcome === "failed") {
+        throw new Error("Ingest failed: every attempted board failed (or none were attempted). Nothing was refreshed.");
       }
       return summary;
     });
@@ -804,12 +811,12 @@ resumeCmd
  */
 function refuseIfClosed(repo: JobRepo, job: EnrichedJob, override: boolean, command: string): boolean {
   if (override) return false;
-  const newest = newestBySource(repo.allSightings());
-  if (!isStale({ id: job.id, source: job.source, lastSeen: job.lastSeen }, newest)) return false;
+  const newest = newestByBoard(repo.boardSweepSightings());
+  if (!isStale({ id: job.id, board: job.board, lastSeen: job.lastSeen }, newest)) return false;
 
   console.error(
     `${job.company} - ${job.title} looks closed.\n` +
-      `Its board was swept more recently (${newest.get(job.source)?.slice(0, 16)}) than this posting was last seen ` +
+      `Its board was swept more recently (${newest.get(job.board)?.slice(0, 16)}) than this posting was last seen ` +
       `on it (${job.lastSeen?.slice(0, 16)}), which usually means it was taken down.\n\n` +
       `Nothing was spent. Re-check with \`npm run cli -- ingest\`, or if you know it is still live:\n` +
       `  npm run cli -- ${command} ${job.id} --stale-ok`,
@@ -1203,6 +1210,15 @@ program
       log.info(`  briefing  : ${htmlFile}`);
       log.info(`  dashboard : ${dashFile}`);
       log.info(`  open it   : npm run cli -- open`);
+      // The report above is still written from whatever data is on disk, but
+      // if ingest refreshed nothing this run, runs.ok must say so rather than
+      // recording a pass that did no work.
+      if (ingestSummary?.outcome === "failed") {
+        throw new Error(
+          "Daily ingest failed: every attempted board failed (or none were attempted). " +
+            "The report above reflects data from a prior run, not this one.",
+        );
+      }
       return { jobCount, file, htmlFile, dashFile };
     });
   });
@@ -1525,8 +1541,8 @@ program
       // A posting the board has stopped listing costs two model calls to
       // prepare and then opens a browser on a generic job list. Flag it here,
       // before anything is spent on it.
-      const newest = newestBySource(repo.allSightings());
-      const stale = new Set(jobs.filter((j) => isStale({ id: j.id, source: j.source, lastSeen: j.lastSeen }, newest)).map((j) => j.id));
+      const newest = newestByBoard(repo.boardSweepSightings());
+      const stale = new Set(jobs.filter((j) => isStale({ id: j.id, board: j.board, lastSeen: j.lastSeen }, newest)).map((j) => j.id));
 
       // Work already done, read from disk rather than from `status`. `autofill`
       // will not write APPLIED without an explicit human yes, so a job whose
