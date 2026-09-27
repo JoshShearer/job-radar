@@ -169,6 +169,74 @@ describe("JobRepo.parkJobs", () => {
     const { repo } = memoryRepo();
     expect(repo.parkJobs([])).toBe(0);
   });
+
+  /**
+   * JOB-47 PR4, AC#3's park half. `parkJobs` was already transactional
+   * per-batch (JOB-36); it just never called `addEvent`, so a job moved to
+   * CLOSED left no history entry saying when or why.
+   */
+  it("records a parked event for each job actually parked", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "a", status: "NEW" });
+    seedJob(db, { id: "b", status: "REVIEWED" });
+    repo.parkJobs(["a", "b"]);
+
+    const eventsFor = (id: string) =>
+      db.prepare("SELECT event_type, detail FROM job_events WHERE job_id = ?").all(id) as {
+        event_type: string;
+        detail: string;
+      }[];
+
+    const aEvents = eventsFor("a");
+    expect(aEvents).toHaveLength(1);
+    expect(aEvents[0]!.event_type).toBe("parked");
+    expect(JSON.parse(aEvents[0]!.detail)).toMatchObject({ from: "NEW", to: "CLOSED" });
+
+    const bEvents = eventsFor("b");
+    expect(bEvents).toHaveLength(1);
+    expect(JSON.parse(bEvents[0]!.detail)).toMatchObject({ from: "REVIEWED", to: "CLOSED" });
+  });
+
+  it("does not record a parked event for a job the guard refused", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "jAPPLIED", status: "APPLIED" });
+    repo.parkJobs(["jAPPLIED"]);
+    const events = db.prepare("SELECT COUNT(*) c FROM job_events WHERE job_id = ?").get("jAPPLIED") as {
+      c: number;
+    };
+    expect(events.c).toBe(0);
+  });
+
+  /**
+   * Fault injection against a real isolated SQLite connection: force the
+   * `parked` event INSERT to fail for one job in a two-job batch, and prove
+   * that job's own status write rolls back too - not just its event.
+   */
+  it("rolls back a job's own status write if its parked event fails", () => {
+    const { repo, db } = memoryRepo();
+    seedJob(db, { id: "a", status: "NEW" });
+    seedJob(db, { id: "poison", status: "NEW" });
+
+    db.exec(`
+      CREATE TRIGGER fault_inject_parked_event
+      BEFORE INSERT ON job_events
+      WHEN NEW.event_type = 'parked' AND NEW.job_id = 'poison'
+      BEGIN SELECT RAISE(ABORT, 'injected failure'); END;
+    `);
+
+    expect(() => repo.parkJobs(["a", "poison"])).toThrow();
+
+    // better-sqlite3's transaction wraps the WHOLE batch call, so a failure
+    // on either job's event rolls back the ENTIRE batch, including the
+    // status write for the job that had no fault at all - the same
+    // guarantee `parkJobs` already gave the batch as a whole before this PR.
+    const status = (id: string) =>
+      (db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as { status: string }).status;
+    expect(status("a")).toBe("NEW");
+    expect(status("poison")).toBe("NEW");
+    const events = db.prepare("SELECT COUNT(*) c FROM job_events").get() as { c: number };
+    expect(events.c).toBe(0);
+  });
 });
 
 describe("parked postings leave the pools", () => {

@@ -182,62 +182,70 @@ export class JobRepo {
     const existing = bySource ?? byDedupe;
 
     if (!existing) {
-      this.db
-        .prepare(
-          `INSERT INTO jobs (
-            id, dedupe_key, external_id, source, board_id, ats, source_url, canonical_url, application_url,
-            company, company_normalized, title, title_normalized, location, remote_status,
-            employment_type, seniority, department, team, industry, company_stage, company_size_estimate,
-            date_posted, date_discovered, first_seen, last_seen,
-            salary_min, salary_max, salary_currency, salary_period,
-            description_clean, description_hash, material_hash, status
-          ) VALUES (
-            @id, @dedupe_key, @external_id, @source, @board_id, @ats, @source_url, @canonical_url, @application_url,
-            @company, @company_normalized, @title, @title_normalized, @location, @remote_status,
-            @employment_type, @seniority, @department, @team, @industry, @company_stage, @company_size_estimate,
-            @date_posted, @date_discovered, @first_seen, @last_seen,
-            @salary_min, @salary_max, @salary_currency, @salary_period,
-            @description_clean, @description_hash, @material_hash, 'NEW'
-          )`,
-        )
-        .run({
-          id: job.id,
-          dedupe_key: dedupeKey,
-          external_id: job.externalId,
-          source: job.source,
-          board_id: job.board,
-          ats: job.ats,
-          source_url: job.sourceUrl,
-          canonical_url: canonical,
-          application_url: job.applicationUrl,
-          company: job.company,
-          company_normalized: normalizeForIdentity(job.company),
-          title: job.title,
-          title_normalized: normalizeForIdentity(job.title),
-          location: job.location,
-          remote_status: job.remoteStatus,
-          employment_type: job.employmentType,
-          seniority: job.seniority,
-          department: job.department,
-          team: job.team,
-          industry: job.industry,
-          company_stage: job.companyStage,
-          company_size_estimate: job.companySizeEstimate,
-          date_posted: job.datePosted,
-          date_discovered: job.dateDiscovered,
-          first_seen: now,
-          last_seen: now,
-          salary_min: job.salaryMin,
-          salary_max: job.salaryMax,
-          salary_currency: job.salaryCurrency,
-          salary_period: job.salaryPeriod,
-          description_clean: job.descriptionClean,
-          description_hash: job.descriptionHash,
-          material_hash: job.materialHash,
-        });
+      // JOB-47 PR4: the INSERT, the `job_sources` upsert, and the
+      // `discovered` event are one transaction. Before this they were three
+      // separate autocommitted statements, so a failure on either of the
+      // last two left an orphan `jobs` row - discovered, but with no source
+      // pointer and/or no history entry saying so - for every one of the
+      // roughly 16,000 jobs `upsert` sees per ingest run.
+      this.db.transaction(() => {
+        this.db
+          .prepare(
+            `INSERT INTO jobs (
+              id, dedupe_key, external_id, source, board_id, ats, source_url, canonical_url, application_url,
+              company, company_normalized, title, title_normalized, location, remote_status,
+              employment_type, seniority, department, team, industry, company_stage, company_size_estimate,
+              date_posted, date_discovered, first_seen, last_seen,
+              salary_min, salary_max, salary_currency, salary_period,
+              description_clean, description_hash, material_hash, status
+            ) VALUES (
+              @id, @dedupe_key, @external_id, @source, @board_id, @ats, @source_url, @canonical_url, @application_url,
+              @company, @company_normalized, @title, @title_normalized, @location, @remote_status,
+              @employment_type, @seniority, @department, @team, @industry, @company_stage, @company_size_estimate,
+              @date_posted, @date_discovered, @first_seen, @last_seen,
+              @salary_min, @salary_max, @salary_currency, @salary_period,
+              @description_clean, @description_hash, @material_hash, 'NEW'
+            )`,
+          )
+          .run({
+            id: job.id,
+            dedupe_key: dedupeKey,
+            external_id: job.externalId,
+            source: job.source,
+            board_id: job.board,
+            ats: job.ats,
+            source_url: job.sourceUrl,
+            canonical_url: canonical,
+            application_url: job.applicationUrl,
+            company: job.company,
+            company_normalized: normalizeForIdentity(job.company),
+            title: job.title,
+            title_normalized: normalizeForIdentity(job.title),
+            location: job.location,
+            remote_status: job.remoteStatus,
+            employment_type: job.employmentType,
+            seniority: job.seniority,
+            department: job.department,
+            team: job.team,
+            industry: job.industry,
+            company_stage: job.companyStage,
+            company_size_estimate: job.companySizeEstimate,
+            date_posted: job.datePosted,
+            date_discovered: job.dateDiscovered,
+            first_seen: now,
+            last_seen: now,
+            salary_min: job.salaryMin,
+            salary_max: job.salaryMax,
+            salary_currency: job.salaryCurrency,
+            salary_period: job.salaryPeriod,
+            description_clean: job.descriptionClean,
+            description_hash: job.descriptionHash,
+            material_hash: job.materialHash,
+          });
 
-      this.recordSource(job.id, job.source, job.externalId, job.sourceUrl, now);
-      this.addEvent(job.id, "discovered", { source: job.source, title: job.title, company: job.company });
+        this.recordSource(job.id, job.source, job.externalId, job.sourceUrl, now);
+        this.addEvent(job.id, "discovered", { source: job.source, title: job.title, company: job.company });
+      })();
 
       return { jobId: job.id, isNew: true, isDuplicate: false, descriptionChanged: false, salaryChanged: false };
     }
@@ -254,86 +262,125 @@ export class JobRepo {
       existing.salary_min !== job.salaryMin ||
       existing.salary_max !== job.salaryMax ||
       existing.salary_period !== job.salaryPeriod;
+    // Read before the UPDATE runs, so this reflects the transition the SQL
+    // below is ABOUT to make (CASE WHEN status = 'CLOSED' THEN 'NEW' ...),
+    // not a re-read after it that would always say "no, it's NEW now".
+    const reopened = existing.status === "CLOSED";
 
-    this.db
-      .prepare(
-        `UPDATE jobs SET
-          last_seen = @last_seen,
-          title = @title,
-          title_normalized = @title_normalized,
-          location = @location,
-          remote_status = @remote_status,
-          employment_type = @employment_type,
-          seniority = @seniority,
-          application_url = COALESCE(@application_url, application_url),
-          date_posted = COALESCE(@date_posted, date_posted),
-          salary_min = @salary_min,
-          salary_max = @salary_max,
-          salary_currency = @salary_currency,
-          salary_period = @salary_period,
-          description_clean = @description_clean,
-          description_hash = @description_hash,
-          material_hash = @material_hash,
-          -- Seeing the posting again undoes a park, and only a park. CLOSED is
-          -- the one status a sweep sets on its own, so it is the one status a
-          -- sweep may clear. Anything a person recorded is left alone.
-          status = CASE WHEN status = 'CLOSED' THEN 'NEW' ELSE status END,
-          status_changed_at = CASE WHEN status = 'CLOSED' THEN @last_seen ELSE status_changed_at END
-        WHERE id = @id`,
-      )
-      .run({
-        id: existing.id,
-        last_seen: now,
-        title: job.title,
-        title_normalized: normalizeForIdentity(job.title),
-        location: job.location,
-        remote_status: job.remoteStatus,
-        employment_type: job.employmentType,
-        seniority: job.seniority,
-        application_url: job.applicationUrl,
-        date_posted: job.datePosted,
-        salary_min: job.salaryMin,
-        salary_max: job.salaryMax,
-        salary_currency: job.salaryCurrency,
-        salary_period: job.salaryPeriod,
-        description_clean: job.descriptionClean,
-        description_hash: job.descriptionHash,
-        material_hash: job.materialHash,
-      });
-
-    this.recordSource(existing.id, job.source, job.externalId, job.sourceUrl, now);
-
-    if (descriptionChanged) {
-      this.addEvent(existing.id, "description_changed", {
-        from_hash: existing.description_hash,
-        to_hash: job.descriptionHash,
-        // Recorded so the two can be told apart later without re-deriving it.
-        material: materiallyChanged,
-      });
-    }
-
-    if (materiallyChanged) {
-      // Content moved, so any cached analysis no longer describes this job.
-      //
-      // The failure record is cleared with it, and that is the point rather
-      // than tidiness: a posting whose description changed is a different
-      // input. Whatever made the model choke on the old text may be gone, so
-      // a job parked after two failures earns a fresh pair of attempts.
+    // JOB-47 PR4: the main UPDATE, the `job_sources` upsert, the conditional
+    // `description_changed`/`salary_changed`/`reopened` events, and the
+    // conditional stale-analysis clear are one transaction. Before this they
+    // were up to five separate autocommitted statements, so a failure on any
+    // one of the last four could leave the row's new state recorded with no
+    // (or a wrong) history of why - e.g. a job whose analysis was cleared for
+    // one description but whose `description_changed` event still names a
+    // different one, because the process died between the two statements.
+    this.db.transaction(() => {
       this.db
         .prepare(
-          `UPDATE jobs SET analysis_json = NULL, analyzed_at = NULL, scored_at = NULL,
-             analysis_failures = 0, analysis_failure_reason = NULL,
-             analysis_failure_kind = NULL, analysis_failed_at = NULL
-           WHERE id = ?`,
+          `UPDATE jobs SET
+            last_seen = @last_seen,
+            title = @title,
+            title_normalized = @title_normalized,
+            location = @location,
+            remote_status = @remote_status,
+            employment_type = @employment_type,
+            seniority = @seniority,
+            application_url = COALESCE(@application_url, application_url),
+            date_posted = COALESCE(@date_posted, date_posted),
+            salary_min = @salary_min,
+            salary_max = @salary_max,
+            salary_currency = @salary_currency,
+            salary_period = @salary_period,
+            description_clean = @description_clean,
+            description_hash = @description_hash,
+            material_hash = @material_hash,
+            -- Seeing the posting again undoes a park, and only a park. CLOSED is
+            -- the one status a sweep sets on its own, so it is the one status a
+            -- sweep may clear. Anything a person recorded is left alone.
+            status = CASE WHEN status = 'CLOSED' THEN 'NEW' ELSE status END,
+            status_changed_at = CASE WHEN status = 'CLOSED' THEN @last_seen ELSE status_changed_at END
+          WHERE id = @id`,
         )
-        .run(existing.id);
-    }
-    if (salaryChanged) {
-      this.addEvent(existing.id, "salary_changed", {
-        from: { min: existing.salary_min, max: existing.salary_max, period: existing.salary_period },
-        to: { min: job.salaryMin, max: job.salaryMax, period: job.salaryPeriod },
-      });
-    }
+        .run({
+          id: existing.id,
+          last_seen: now,
+          title: job.title,
+          title_normalized: normalizeForIdentity(job.title),
+          location: job.location,
+          remote_status: job.remoteStatus,
+          employment_type: job.employmentType,
+          seniority: job.seniority,
+          application_url: job.applicationUrl,
+          date_posted: job.datePosted,
+          salary_min: job.salaryMin,
+          salary_max: job.salaryMax,
+          salary_currency: job.salaryCurrency,
+          salary_period: job.salaryPeriod,
+          description_clean: job.descriptionClean,
+          description_hash: job.descriptionHash,
+          material_hash: job.materialHash,
+        });
+
+      this.recordSource(existing.id, job.source, job.externalId, job.sourceUrl, now);
+
+      if (descriptionChanged) {
+        this.addEvent(existing.id, "description_changed", {
+          from_hash: existing.description_hash,
+          to_hash: job.descriptionHash,
+          // Recorded so the two can be told apart later without re-deriving it.
+          material: materiallyChanged,
+        });
+      }
+
+      if (materiallyChanged) {
+        // Content moved, so any cached analysis no longer describes this job.
+        //
+        // The failure record is cleared with it, and that is the point rather
+        // than tidiness: a posting whose description changed is a different
+        // input. Whatever made the model choke on the old text may be gone, so
+        // a job parked after two failures earns a fresh pair of attempts.
+        //
+        // JOB-51 added five analysis-identity snapshot columns
+        // (analysis_title_hash etc., compared against the job's CURRENT
+        // values by STALE_OR_UNANALYZED_SQL above) after this clear was
+        // written, and they were never added here: a materially-changed
+        // description cleared `analysis_json` but left stale identity hashes
+        // behind, which happened to read as "unanalyzed" anyway (NULL
+        // analysis_json already satisfies STALE_OR_UNANALYZED_SQL) but left
+        // a live analysis's own snapshot inconsistent with a description
+        // that had since moved out from under it, for the case where a
+        // second `upsert` reintroduces the old text before analysis reruns.
+        // Cleared together now, atomically, with everything else in this
+        // transaction.
+        this.db
+          .prepare(
+            `UPDATE jobs SET analysis_json = NULL, analyzed_at = NULL, scored_at = NULL,
+               analysis_failures = 0, analysis_failure_reason = NULL,
+               analysis_failure_kind = NULL, analysis_failed_at = NULL,
+               analysis_title_hash = NULL, analysis_location_hash = NULL,
+               analysis_employment_hash = NULL, analysis_compensation_hash = NULL,
+               analysis_evidence_hash = NULL
+             WHERE id = ?`,
+          )
+          .run(existing.id);
+      }
+      if (salaryChanged) {
+        this.addEvent(existing.id, "salary_changed", {
+          from: { min: existing.salary_min, max: existing.salary_max, period: existing.salary_period },
+          to: { min: job.salaryMin, max: job.salaryMax, period: job.salaryPeriod },
+        });
+      }
+
+      if (reopened) {
+        // AC#3's reopen half. The status write above already undoes the
+        // park unconditionally (CASE WHEN status = 'CLOSED' ...); this is
+        // only the missing history entry for it - a job going CLOSED -> NEW
+        // because a board listed it again is exactly the kind of transition
+        // `job_events` exists to make visible, and previously left none.
+        this.addEvent(existing.id, "reopened", { from: "CLOSED", to: "NEW", source: job.source });
+      }
+    })();
 
     return {
       jobId: existing.id,
@@ -832,9 +879,15 @@ export class JobRepo {
    * Guarded in SQL as well as in `planParking`, because this writes status and
    * the guarantee that it never touches a human-set state should not depend on
    * the caller having filtered correctly.
+   *
+   * AC#3's park half (JOB-47 PR4): each job actually parked also gets a
+   * `parked` event, inside the same per-batch transaction this already ran
+   * in (JOB-36) - a job moved to CLOSED previously left no history entry
+   * saying when or why, the same gap `upsert`'s CLOSED->NEW reopen had.
    */
   parkJobs(ids: ReadonlyArray<string>): number {
     if (ids.length === 0) return 0;
+    const selectStatus = this.db.prepare("SELECT status FROM jobs WHERE id = ?");
     const stmt = this.db.prepare(
       `UPDATE jobs SET status = 'CLOSED', status_changed_at = ?
         WHERE id = ? AND status IN ('NEW','REVIEWED')`,
@@ -842,7 +895,16 @@ export class JobRepo {
     const now = new Date().toISOString();
     const run = this.db.transaction((batch: ReadonlyArray<string>) => {
       let n = 0;
-      for (const id of batch) n += stmt.run(now, id).changes;
+      for (const id of batch) {
+        // Read before the UPDATE so the event names the status actually
+        // being left, not "CLOSED" read back from the row it just became.
+        const before = selectStatus.get(id) as { status: string } | undefined;
+        const changed = stmt.run(now, id).changes;
+        if (changed) {
+          n += changed;
+          this.addEvent(id, "parked", { from: before?.status ?? null, to: "CLOSED" });
+        }
+      }
       return n;
     });
     return run(ids);

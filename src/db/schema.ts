@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS job_sources (
 CREATE TABLE IF NOT EXISTS job_events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id     TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL,  -- discovered | description_changed | salary_changed | status_changed | reposted | analyzed
+  event_type TEXT NOT NULL,  -- discovered | description_changed | salary_changed | status_changed | reposted | analyzed | parked | reopened
   detail     TEXT,           -- JSON payload
   created_at TEXT NOT NULL
 );
