@@ -52,3 +52,8 @@ config/resume.yaml.*.bak
 
 # /run-tickets orchestration state (scratch, not project content)
 .planning/
+
+# /run-tickets state: one stamped file per run, machine-local, never committed.
+# A GLOB, not a literal name: the stamp varies, and an unignored state file is one
+# `git add -A` away from being committed.
+.claude/pipeline-state*.json
