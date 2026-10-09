@@ -10,15 +10,20 @@
  * Linear is reachable only through the `linear-jr` MCP server, which a script cannot call. Every
  * tracker read and write therefore stays with the orchestrator; this script records what the
  * orchestrator reports (`trackerWritesAdd`) and says which pipeline decisions still need posting
- * (`toPost`). Git, gh and the state file are all here.
+ * (`toPost`). It reads no tracker or MCP configuration from the lane. Git, gh and the state file
+ * are all here.
  *
  * This script is the ONLY writer of ticket entries in the run's state file. Agents return one JSON
  * object; the orchestrator pipes it into `record --phase <phase>`, which:
+ *   - validates the shape (types, enums, the phase's results) before applying anything;
  *   - keeps only the fields that phase may set (FIELDS_BY_PHASE) and reports what it dropped;
  *   - refuses a verdict that names any commit but the current `commitSha`;
- *   - refuses a critic or Verify return that left the lane changed (they may write nothing);
+ *   - refuses a critic or Verify return that changed the lane, the primary, or the remote branch;
  *   - moves `phase`/`status` by the routing table (NEXT), so a resume continues where the run was.
- * A verdict describes one commit: whenever `commitSha` changes, both verdicts are cleared.
+ * A verdict describes one commit: whenever `commitSha` changes, every verdict is cleared.
+ *
+ * The lane-safety checks (`safetyProblems`) run inside record, ship, merge and finish as well as in
+ * `guard`, so an orchestrator that forgets `guard` still cannot carry on in an unsafe lane.
  *
  * The orchestrator runs a FROZEN copy of this file, taken from origin/<base> at Step 0c before any
  * ticket branch is checked out: a ticket that edits this file must not change the gate that
@@ -27,24 +32,26 @@
  * Run from the lane (every command refuses any other working directory):
  *   node <ops>/ticket-ops.mjs --state <file> <cmd> [<KEY>] [...]
  *
- *   guard [--init --primary <dir>]  lane safety: generate (--init) or re-check the lane .env, the
- *                                   launching environment, and the owner's systemd units
+ *   gate-files                      print the gate-defining paths (no state needed)
+ *   guard [--init]                  lane safety: generate (--init) or re-check the lane .env, the
+ *                                   launching environment, servers left running, the owner's units
  *   add <KEY>                       register a pending ticket (idempotent)
  *   show <KEY> [field,...]          print the ticket entry (or a subset) - what agents read
+ *   snapshot <KEY>                  before a critic or Verify: what "wrote nothing" is checked against
  *   record <KEY> --phase <p>        merge a JSON return (stdin) - see above
  *   pr-append <KEY> <textFile>      append text to the PR body and read it back
  *   start <KEY> --run-branch <b>    branch off the run branch; stdin is the issue as the
  *                                   orchestrator read it from Linear: {title, type, description, url}
- *   ship <KEY>                      gates unless HEAD == gatedSha, leased push, read back, PR create
- *                                   or Round-line append
+ *   ship <KEY>                      gates unless HEAD == gatedSha, secret scan, key probe, leased
+ *                                   push, read back, PR adopt/create or Round-line append
  *   risk <KEY>                      critic depth for origin/<base>...commitSha (L1 | L2 | L2+Double)
  *   merge <KEY>                     preflight; prints the `gh pr merge` the ORCHESTRATOR must run
  *   merged <KEY>                    read the merge back; prints the remote-branch delete to run
  *   finish <KEY> --run-branch <b>   resync the lane, delete the local branch by head equality
  *
- * Output: one JSON line. Exit codes: 0 ok, 1 usage or malformed input (for `record`: re-run the
- * agent once), 2 infrastructure or safety error (stop the run), 3 blocked (status and
- * blockedReason are set), 4 fail (route to Fix; verifyFindings is set).
+ * Output: one JSON line. Exit codes: 0 ok, 1 usage or malformed input (nothing written; for
+ * `record`: re-run the agent once), 2 infrastructure or safety error (stop the run), 3 blocked
+ * (status and blockedReason are set), 4 fail (route to Fix; verifyFindings is set).
  */
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -53,13 +60,25 @@ import os from "node:os";
 import path from "node:path";
 
 const EXIT = { ok: 0, usage: 1, error: 2, blocked: 3, fail: 4 };
-const VERDICT_FIELDS = ["criticVerdict", "criticSha", "verifyVerdict", "verifiedSha", "verifiedBaseSha"];
+/** Everything that describes one commit. A new commitSha clears all of it. */
+const VERDICT_FIELDS = [
+  "criticVerdict",
+  "criticSha",
+  "verifyVerdict",
+  "verifiedSha",
+  "verifiedBaseSha",
+  "gateJustifications",
+  "risk",
+  "snapshot",
+];
+const STATUSES = ["pending", "in_progress", "blocked", "done"];
+const PHASES = ["start", "build", "ship", "critic", "verify", "fix", "merge", "finish"];
 
 /**
- * The lane's .env is GENERATED from this allowlist, never linked. The primary's .env holds a live
- * ANTHROPIC_API_KEY (the only thing in this repo that spends money), and the JOB_RADAR_* path
- * overrides can point the lane at the owner's real database, resume or personal answers. Anything
- * not listed here is dropped, whatever it is called.
+ * The lane's .env is GENERATED from this allowlist, never linked. The primary's .env (and the
+ * timer's ~/.config/job-radar/env) hold a live ANTHROPIC_API_KEY - the only thing in this repo that
+ * spends money - and the JOB_RADAR_* path overrides can point the lane at the owner's real
+ * database, resume or personal answers. Anything not listed here is dropped, whatever it is called.
  */
 const LANE_ENV_ALLOW = ["JOB_RADAR_MODEL", "JOB_RADAR_EFFORT", "JOB_RADAR_CONTACT", "JOB_RADAR_DEBUG"];
 /** Exported in the launching shell, these beat the lane .env (loadEnvFile never overrides). */
@@ -83,6 +102,8 @@ const FORBIDDEN_ENV = [
  * or fixture file inside the lane, per command). One appearing is a copy of the owner's data.
  */
 const PERSONAL_PATHS = ["config/personal.yaml", "config/resume.yaml", ".browser-profile"];
+/** A key-shaped Anthropic value (the `.env.example` placeholder `sk-ant-...` is not one). */
+const KEY_VALUE_RE = /sk-ant-[A-Za-z0-9_-]{16,}/;
 
 /** What each phase's return may set. Anything else is dropped and reported. */
 const COMMON = ["handoff", "blockedReason", "clarificationAdd"];
@@ -90,7 +111,7 @@ const FIELDS_BY_PHASE = {
   triage: ["type", "status", "noTracker", ...COMMON],
   build: ["planNote", "reproduction", "reproConfirmed", "implementationSummary", "gatedSha", "prTitle", "prBody", ...COMMON],
   fix: ["gatedSha", "verifyFindings", "implementationSummary", "roundNote", "branch", "prNumber", ...COMMON],
-  critic: ["criticVerdict", "criticSha", "verifyFindings", "criticNotes", "blockedReason"],
+  critic: ["criticVerdict", "criticSha", "verifyFindings", "criticNotes", "gateJustifications", "blockedReason"],
   verify: ["verifyVerdict", "verifiedSha", "verifyNotes", "verifyFindings", ...COMMON],
   orchestrator: ["fixRound", "status", "blockedReason", "noTracker", "phase", "handoff", "trackerWritesAdd", "postedAdd"],
 };
@@ -104,12 +125,32 @@ const NEXT = {
 /** Paths whose change needs the owner before merge (CLAUDE.md: a live autofill run ships them). */
 const OWNER_GATED = /^src\/apply\//;
 /**
- * Files that DEFINE the gates. Freezing this script does not freeze what `npm test` and
- * `npm run typecheck` do: a ticket could weaken the test config or the typecheck script and then
- * pass through its own weakened gate. Such a diff gets the deepest critic, is told so, and never
- * takes the "gates already ran on this sha" shortcut.
+ * Files that DEFINE the gates, or what the critic grades against. Freezing this script does not
+ * freeze what `npm test` and `npm run typecheck` do: a ticket could weaken the test config, the
+ * typecheck script, the toolchain versions, the env loader that decides which credentials load, or
+ * the critic's checklist, and then pass through its own weakened gate. Such a diff gets the deepest
+ * critic, every critic must justify it, and Ship never takes the "gates already ran" shortcut.
+ * tests/run-tickets.ops.test.ts derives the gates' config closure and checks this list covers it.
  */
-const GATE_FILES = /^(package\.json|tsconfig\.json|vitest\.config\.ts|pnpm-workspace\.yaml|pnpm-lock\.yaml|package-lock\.json|\.npmrc)$/;
+const GATE_FILES = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "package-lock.json",
+  "pnpm-workspace.yaml",
+  ".npmrc",
+  "tsconfig.json",
+  "vitest.config.ts",
+  "src/config/env.ts",
+  "src/config/load.ts",
+  "CLAUDE.md",
+  ".claude/commands/critique.md",
+  ".claude/commands/check-constraints.md",
+];
+const isGateFile = (f) =>
+  GATE_FILES.includes(f) ||
+  /(^|\/)tsconfig[^/]*\.json$/.test(f) ||
+  /(^|\/)vitest[^/]*\.config\.[cm]?[jt]s$/.test(f) ||
+  /(^|\/)\.npmrc$/.test(f);
 /** Linear team JOB. Keys reach branch names and shell commands, so nothing else is accepted. */
 const KEY_RE = /^JOB-[1-9][0-9]*$/;
 /** Results each phase may return. Anything else is malformed: re-run the agent, write nothing. */
@@ -117,19 +158,25 @@ const RESULTS = {
   triage: [undefined, "done", "blocked"],
   build: ["done", "handoff", "blocked"],
   fix: ["done", "handoff", "blocked"],
-  critic: ["pass", "concerns", "block"],
+  critic: ["pass", "concerns", "block", "blocked"],
   verify: ["pass", "fail", "handoff", "blocked"],
   orchestrator: [undefined],
 };
 /** Field types, checked before anything is applied. */
 const STRING_FIELDS = new Set([
-  "type", "status", "blockedReason", "handoff", "planNote", "reproduction", "implementationSummary", "gatedSha",
-  "prTitle", "prBody", "verifyFindings", "roundNote", "branch", "criticVerdict", "criticSha", "criticNotes",
-  "verifyVerdict", "verifiedSha", "verifyNotes", "phase",
+  "type", "blockedReason", "handoff", "planNote", "reproduction", "implementationSummary", "gatedSha",
+  "prTitle", "prBody", "verifyFindings", "roundNote", "branch", "criticSha", "criticNotes",
+  "verifiedSha", "verifyNotes",
 ]);
+const ENUM_FIELDS = {
+  status: STATUSES,
+  phase: PHASES,
+  criticVerdict: ["pass", "concerns", "block"],
+  verifyVerdict: ["pass", "fail"],
+};
 const BOOLEAN_FIELDS = new Set(["reproConfirmed", "noTracker"]);
 const NUMBER_FIELDS = new Set(["fixRound", "prNumber"]);
-const ARRAY_FIELDS = new Set(["clarificationAdd", "trackerWritesAdd", "postedAdd"]);
+const ARRAY_FIELDS = new Set(["clarificationAdd", "trackerWritesAdd", "postedAdd", "gateJustifications"]);
 
 class Stop extends Error {
   constructor(kind, message) {
@@ -158,7 +205,6 @@ const flag = (name) => {
 const STATE = opt("state");
 const PHASE = opt("phase");
 const RUN_BRANCH = opt("run-branch");
-const PRIMARY_OPT = opt("primary");
 const INIT = flag("init");
 const [cmd, KEY, ...REST] = argv;
 
@@ -169,14 +215,15 @@ function sh(bin, args, { input } = {}) {
   return execFileSync(bin, args, { encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 /** Run without throwing. `out` is stdout+stderr capped for reporting; `stdout` is kept apart. */
-function run(bin, args) {
-  const r = spawnSync(bin, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+function run(bin, args, opts = {}) {
+  const r = spawnSync(bin, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...opts });
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
   return { code: r.status ?? 1, stdout: r.stdout ?? "", out: out.length > 4000 ? `...${out.slice(-4000)}` : out };
 }
 const git = (...a) => sh("git", a);
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 const pause = (s) => spawnSync("sleep", [String(s)]);
+const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 
 // ---------------------------------------------------------------------------- state file
 
@@ -195,7 +242,7 @@ function ticketOf(state, key) {
   if (!t) throw new Stop("usage", `${key} is not in ${STATE}`);
   return t;
 }
-/** Apply fields to a ticket. A new commitSha invalidates every verdict not set in the same call. */
+/** Apply fields to a ticket. A new commitSha invalidates everything describing the old one. */
 function apply(t, fields, phase, result) {
   const shaChanged = "commitSha" in fields && fields.commitSha !== t.commitSha;
   Object.assign(t, fields);
@@ -223,6 +270,11 @@ function mutate(key, fn) {
     }
   }
 }
+/** A mechanical step runs only on a ticket at its own phase, never on a finished one. */
+function requirePhase(t, phase) {
+  if (t.status === "done") throw new Stop("usage", `${t.id} is done`);
+  if (t.phase !== phase) throw new Stop("usage", `${t.id} is at phase ${t.phase}, not ${phase}`);
+}
 /** Pipeline decisions not yet on the Linear ticket. Never for a ticket the run does not own. */
 const unposted = (t) =>
   t.noTracker ? [] : (t.clarification ?? []).filter((c) => c.decidedBy === "pipeline" && !c.posted);
@@ -231,11 +283,14 @@ const unposted = (t) =>
 function shapeProblems(phase, input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return ["return is not a JSON object"];
   const problems = [];
-  if (!RESULTS[phase].includes(input.result)) problems.push(`result ${JSON.stringify(input.result)} is not a ${phase} result`);
+  if (!RESULTS[phase].includes(input.result))
+    problems.push(`result ${JSON.stringify(input.result)} is not a ${phase} result`);
   if ("note" in input && typeof input.note !== "string") problems.push("note is not a string");
   for (const [k, v] of Object.entries(input)) {
     if (k === "result" || k === "note") continue;
     if (STRING_FIELDS.has(k) && v !== null && typeof v !== "string") problems.push(`${k} is not a string`);
+    if (ENUM_FIELDS[k] && !ENUM_FIELDS[k].includes(v))
+      problems.push(`${k} ${JSON.stringify(v)} is not one of ${ENUM_FIELDS[k]}`);
     if (BOOLEAN_FIELDS.has(k) && typeof v !== "boolean") problems.push(`${k} is not a boolean`);
     if (NUMBER_FIELDS.has(k) && v !== null && !Number.isInteger(v)) problems.push(`${k} is not an integer`);
     if (ARRAY_FIELDS.has(k) && !Array.isArray(v)) problems.push(`${k} is not an array`);
@@ -248,6 +303,8 @@ function shapeProblems(phase, input) {
       problems.push("trackerWritesAdd entries need a string op and a boolean ok");
   for (const q of Array.isArray(input.postedAdd) ? input.postedAdd : [])
     if (typeof q !== "string") problems.push("postedAdd entries are question strings");
+  for (const j of Array.isArray(input.gateJustifications) ? input.gateJustifications : [])
+    if (typeof j !== "string" || !j.trim()) problems.push("gateJustifications entries are non-empty strings");
   return problems;
 }
 
@@ -257,8 +314,13 @@ const baseOf = (state) => {
   if (!state.baseBranch) throw new Stop("error", "state file has no baseBranch");
   return state.baseBranch;
 };
-const changedFiles = (base, to = "HEAD") =>
-  git("diff", "--name-only", `origin/${base}...${to}`).split("\n").filter(Boolean);
+/**
+ * Every path the diff touches. `--no-renames`: with rename detection a moved file lists only its
+ * NEW path, so moving a gate config out of its watched name would read as "no gate change". Both
+ * sides of a rename, and deletions, are listed.
+ */
+const diffFiles = (base, to = "HEAD") =>
+  git("diff", "--no-renames", "--name-only", `origin/${base}...${to}`).split("\n").filter(Boolean);
 const remoteHead = (branch) => {
   const line = git("ls-remote", "origin", `refs/heads/${branch}`);
   return line ? line.split(/\s+/)[0] : null;
@@ -270,12 +332,48 @@ function appendToPrBody(pr, text) {
   sh("gh", ["pr", "edit", String(pr), "--body-file", "-"], { input: `${body}\n\n${text}\n` });
   return prView(pr, "body").body.includes(text);
 }
-/** The lane must be on the ticket branch, at the pushed commit, with nothing changed. */
-function laneUnchanged(t) {
+/**
+ * The owner's gitignored material in the primary - invisible to `git status` - by path, size and
+ * mtime: the paid key, the personal answers and resume, the logged-in browser profile, the real
+ * database, and the timer's env directory.
+ */
+const PRIMARY_PRIVATE = [".env", "config/personal.yaml", "config/resume.yaml", ".browser-profile", "data/job-radar.sqlite"];
+function privateFingerprint(state) {
+  const paths = PRIMARY_PRIVATE.map((p) => path.join(state.primary, p));
+  const envDir = path.join(configHome(), "job-radar");
+  paths.push(envDir);
+  if (fs.existsSync(envDir)) for (const n of fs.readdirSync(envDir).sort()) paths.push(path.join(envDir, n));
+  return sha256(
+    paths
+      .map((f) => {
+        try {
+          const st = fs.lstatSync(f);
+          return `${f}\0${st.size}\0${st.mtimeMs}`;
+        } catch {
+          return `${f}\0absent`;
+        }
+      })
+      .join("\n"),
+  );
+}
+/** What an agent could have changed outside the lane: the primary (tracked and ignored) and origin. */
+const primaryStatus = (state) =>
+  sha256(run("git", ["-C", state.primary, "status", "--porcelain=v1"]).stdout + privateFingerprint(state));
+/**
+ * A critic or Verify may write nothing: the lane is on the ticket branch at the pushed commit and
+ * clean, the remote branch is still that commit, and the primary's status is what it was when the
+ * agent was spawned. `git status` in the lane alone cannot see a push or a write in the primary.
+ */
+function agentWroteSomething(t, state) {
   const problems = [];
-  if (git("status", "--short")) problems.push("uncommitted or untracked files");
-  if (git("branch", "--show-current") !== t.branch) problems.push(`not on ${t.branch}`);
-  if (git("rev-parse", "HEAD") !== t.commitSha) problems.push(`HEAD is not ${t.commitSha}`);
+  if (git("status", "--short")) problems.push("uncommitted or untracked files in the lane");
+  if (git("branch", "--show-current") !== t.branch) problems.push(`lane not on ${t.branch}`);
+  if (git("rev-parse", "HEAD") !== t.commitSha) problems.push(`lane HEAD is not ${t.commitSha}`);
+  if (remoteHead(t.branch) !== t.commitSha) problems.push(`origin/${t.branch} is not ${t.commitSha}`);
+  if (remoteHead(baseOf(state)) !== t.snapshot?.baseRemote)
+    problems.push(`origin/${baseOf(state)} moved (an agent pushed to it, or another run merged)`);
+  if (primaryStatus(state) !== t.snapshot?.primaryStatus)
+    problems.push("the primary checkout changed, ignored files included (an agent wrote there, or the owner is editing)");
   return problems;
 }
 
@@ -290,31 +388,120 @@ function runGates() {
   }
   return { ok: true };
 }
+/**
+ * Whether the CLI, as this commit builds it, can see a paid key from the lane. The env loader is
+ * app code a ticket can change (to read the timer's env file, say); the generated lane .env being
+ * clean proves nothing about that. Runs the commit's own loadEnvFile with forbidden vars removed.
+ */
+function keyProbe() {
+  if (!fs.existsSync("src/config/env.ts")) return { visible: false, ran: false };
+  const env = { ...process.env };
+  for (const k of FORBIDDEN_ENV) delete env[k];
+  const r = run(
+    "node",
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      "const m = await import('./src/config/env.ts'); m.loadEnvFile(); console.log(process.env.ANTHROPIC_API_KEY ? 'PAID KEY VISIBLE' : 'no paid key')",
+    ],
+    { env },
+  );
+  return { visible: r.stdout.includes("PAID KEY VISIBLE"), ran: true, code: r.code, out: r.out };
+}
+
+/**
+ * What every commit on the branch adds. Hard blocks: a key-shaped Anthropic value anywhere, any
+ * `.env*` file but `.env.example`, the primary's absolute path, and code (not docs, not deploy/)
+ * that names the timer's key file. Ordinary code - `process.env.ANTHROPIC_API_KEY`, a short test
+ * placeholder like `sk-ant-test` - passes.
+ */
+function secretLeaks(base, state) {
+  const leaks = new Set();
+  const log = git("log", "--no-renames", "-p", "--format=COMMIT %H", `origin/${base}..HEAD`);
+  let file = null;
+  for (const line of log.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      file = line.slice(4).replace(/^b\//, "");
+      if (file !== "/dev/null" && /(^|\/)\.env(\..*)?$/.test(file) && !file.endsWith(".env.example"))
+        leaks.add(`an env file (${file})`);
+      continue;
+    }
+    if (!line.startsWith("+")) continue;
+    if (KEY_VALUE_RE.test(line)) leaks.add(`an Anthropic key value (${file})`);
+    if (state.primary && line.includes(state.primary)) leaks.add(`the primary path ${state.primary} (${file})`);
+    if (/^(src|tests|scripts)\//.test(file ?? "") && line.includes(".config/job-radar"))
+      leaks.add(`code naming ~/.config/job-radar, the timer's key file (${file})`);
+  }
+  return [...leaks];
+}
 
 // ---------------------------------------------------------------------------- lane safety
 
 const configHome = () => process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
 /**
- * Fingerprint of what `deploy/install-timer.sh` writes: the owner's user units and env file. Run
- * from a lane, that script would repoint the owner's daily timer at a directory Step 8 deletes.
+ * Every entry under `dir` (to depth 3) whose relative path names job-radar: unit files, drop-in
+ * directories (`job-radar-daily.service.d/`) and `timers.target.wants/` links alike.
+ */
+function walkJobRadar(dir, rel = "", depth = 0, out = []) {
+  if (!fs.existsSync(dir) || depth > 3) return out;
+  for (const name of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, name);
+    const r = path.join(rel, name);
+    const st = fs.lstatSync(full);
+    if (r.includes("job-radar")) out.push([full, st]);
+    if (st.isDirectory()) walkJobRadar(full, r, depth + 1, out);
+  }
+  return out;
+}
+/**
+ * Fingerprint of what `deploy/install-timer.sh` writes: the owner's user units, if installed (on
+ * the machine this was written on there were none), and ~/.config/job-radar/. Run from a lane,
+ * that script would repoint the owner's daily timer at a directory Step 8 deletes.
  */
 function unitsFingerprint() {
-  const files = [];
-  const unitDir = path.join(configHome(), "systemd", "user");
-  if (fs.existsSync(unitDir))
-    for (const f of fs.readdirSync(unitDir).sort()) if (f.startsWith("job-radar")) files.push(path.join(unitDir, f));
-  const envDir = path.join(configHome(), "job-radar");
-  if (fs.existsSync(envDir)) for (const f of fs.readdirSync(envDir).sort()) files.push(path.join(envDir, f));
   const h = createHash("sha256");
-  for (const f of files) {
-    h.update(f);
-    try {
-      h.update(fs.readFileSync(f));
-    } catch {
-      h.update("<unreadable>");
+  const entries = walkJobRadar(path.join(configHome(), "systemd", "user"));
+  const envDir = path.join(configHome(), "job-radar");
+  if (fs.existsSync(envDir))
+    for (const n of fs.readdirSync(envDir).sort()) entries.push([path.join(envDir, n), fs.lstatSync(path.join(envDir, n))]);
+  for (const [f, st] of entries) {
+    h.update(`${f}\0`);
+    if (st.isSymbolicLink()) h.update(`-> ${fs.readlinkSync(f)}`);
+    else if (st.isFile()) {
+      try {
+        h.update(fs.readFileSync(f));
+      } catch {
+        h.update("<unreadable>");
+      }
     }
   }
   return h.digest("hex");
+}
+/**
+ * Listening sockets owned by a process running in the lane: a server an agent left behind, or one
+ * on the owner's port 4321 (`serve` silently moves to the next port when its own is taken).
+ */
+function laneListeners(lane) {
+  const r = run("ss", ["-Hltnp"]);
+  if (r.code !== 0) return ["cannot list listening sockets (ss failed)"];
+  const real = fs.realpathSync(lane);
+  const problems = [];
+  for (const line of r.stdout.split("\n")) {
+    const port = line.trim().split(/\s+/)[3]?.split(":").pop();
+    for (const m of line.matchAll(/pid=(\d+)/g)) {
+      let cwd;
+      try {
+        cwd = fs.realpathSync(`/proc/${m[1]}/cwd`);
+      } catch {
+        continue;
+      }
+      if (cwd === real || cwd.startsWith(`${real}/`))
+        problems.push(`pid ${m[1]} is listening on :${port} from the lane${port === "4321" ? " (the owner's port)" : ""}`);
+    }
+  }
+  return problems;
 }
 function parseEnv(text) {
   const out = [];
@@ -327,11 +514,15 @@ function parseEnv(text) {
   }
   return out;
 }
-/** Properties, not a key list: an unknown key, a key-shaped value or a primary path refuses. */
+/** Properties, not a key list: a symlink, an unknown key, a key value or a primary path refuses. */
 function laneEnvProblems(lane, primary) {
   const file = path.join(lane, ".env");
-  if (!fs.existsSync(file)) return [];
-  const st = fs.lstatSync(file);
+  let st;
+  try {
+    st = fs.lstatSync(file);
+  } catch {
+    return [];
+  }
   if (st.isSymbolicLink()) return [".env is a symlink (the primary's must never be linked)"];
   const text = fs.readFileSync(file, "utf8");
   const problems = [];
@@ -340,44 +531,93 @@ function laneEnvProblems(lane, primary) {
   if (primary && text.includes(primary)) problems.push(".env references the primary checkout");
   return problems;
 }
-function safetyProblems(lane, primary) {
+function safetyProblems(state) {
+  const lane = state.worktree;
   const problems = FORBIDDEN_ENV.filter((k) => process.env[k]).map((k) => `${k} is exported in this shell`);
-  problems.push(...laneEnvProblems(lane, primary));
+  problems.push(...laneEnvProblems(lane, state.primary));
   for (const p of PERSONAL_PATHS)
     if (fs.existsSync(path.join(lane, p))) problems.push(`${p} exists in the lane (owner's personal material)`);
+  problems.push(...laneListeners(lane));
+  if (!state.guard?.units) problems.push("guard was never initialised (run guard --init)");
+  else if (state.guard.units !== unitsFingerprint())
+    problems.push("the owner's job-radar systemd units or ~/.config/job-radar changed during the run");
   return problems;
+}
+/** Detection runs inside every state-changing step, not only when the orchestrator remembers. */
+function assertSafe(state) {
+  const problems = safetyProblems(state);
+  if (problems.length) throw new Stop("error", `lane is not safe: ${problems.join("; ")}`);
+}
+
+/** Critic depth for `sha`, from .claude/commands/critique.md Step 3 plus the pipeline's own. */
+function computeRisk(base, sha) {
+  const files = diffFiles(base, sha);
+  const stat = git("diff", "--no-renames", "--numstat", `origin/${base}...${sha}`)
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => l.split("\t").map(Number));
+  const added = stat.reduce((n, [a]) => n + (a || 0), 0);
+  const deleted = stat.reduce((n, [, d]) => n + (d || 0), 0);
+  const has = (re) => files.some((f) => re.test(f));
+  const factors = [];
+  if (has(/^src\/resume\/(provenance|render|tailor)\.ts$/)) factors.push(["resume provenance", 2]);
+  if (has(/^src\/apply\//)) factors.push(["apply refusals", 2]);
+  if (has(/^src\/analysis\//)) factors.push(["cost controls", 2]);
+  if (has(/^(\.claude\/commands\/run-tickets\.md|scripts\/run-tickets\/)/)) factors.push(["pipeline machinery", 2]);
+  const gatesChanged = files.some(isGateFile);
+  if (gatesChanged) factors.push(["gate definitions (this diff changes the gates that grade it)", 4]);
+  if (has(/^src\/(db|analysis)\/schema\.ts$/)) factors.push(["schema change", 1]);
+  if (has(/^src\//) && !has(/^tests\//)) factors.push(["no test changes", 1]);
+  if (has(/^\.claude\//)) factors.push(["workflow files", 1]);
+  if (has(/^(src\/config\/schema\.ts|config\/.*\.yaml)$/)) factors.push(["config schema", 1]);
+  if (deleted > added) factors.push(["deletes more than it adds", 1]);
+  if (files.length > 10) factors.push(["files changed > 10", 1]);
+  const score = factors.reduce((n, [, w]) => n + w, 0);
+  // A `.claude/` change is reviewed at L2 at least: a workflow bug hits every later session.
+  const floor = has(/^\.claude\//) ? 2 : 0;
+  const depth = score >= 4 ? "L2+Double" : Math.max(score, floor) >= 2 ? "L2" : "L1";
+  return {
+    sha,
+    score,
+    depth,
+    critics: depth === "L2+Double" ? 2 : 1,
+    gatesChanged,
+    factors: factors.map((f) => f[0]),
+    files: files.length,
+  };
 }
 
 // ---------------------------------------------------------------------------- commands
 
 const commands = {
+  "gate-files"() {
+    return { ok: true, files: GATE_FILES };
+  },
+
   /**
-   * --init (Step 0c, and every --resume): write the lane .env from the allowlist and record the
-   * units fingerprint. Without --init (after every agent phase): re-check everything.
+   * --init (Step 0c, and every --resume): write the lane .env from the allowlist and, the first
+   * time only, record the units fingerprint - it is never silently retaken, so a change made while
+   * a run was paused still fails. Without --init (after every agent phase): re-check everything.
    */
   guard() {
     const state = loadState();
     const lane = state.worktree;
-    const primary = PRIMARY_OPT ?? state.primary;
     if (INIT) {
-      if (!primary) throw new Stop("usage", "guard --init needs --primary <dir> or state.primary");
-      const src = path.join(primary, ".env");
+      const src = path.join(state.primary, ".env");
       const kept = fs.existsSync(src)
         ? parseEnv(fs.readFileSync(src, "utf8")).filter(([k]) => LANE_ENV_ALLOW.includes(k))
         : [];
       const dest = path.join(lane, ".env");
       fs.rmSync(dest, { force: true }); // a symlink left by an older version of this pipeline
       fs.writeFileSync(dest, kept.map(([k, v]) => `${k}=${v}\n`).join(""), { mode: 0o600 });
-      state.guard = { units: unitsFingerprint(), at: now() };
+      // A refused file must not stay on disk for the next process to load.
+      if (laneEnvProblems(lane, state.primary).length) fs.rmSync(dest, { force: true });
+      state.guard ??= { units: unitsFingerprint(), at: now() };
     }
-    const problems = safetyProblems(lane, primary);
-    if (state.guard?.units && state.guard.units !== unitsFingerprint())
-      problems.push("the owner's job-radar systemd units or ~/.config/job-radar changed during the run");
-    if (!state.guard) problems.push("guard was never initialised (run guard --init)");
     state.heartbeat = now();
     saveState(state);
-    if (problems.length) throw new Stop("error", `lane is not safe: ${problems.join("; ")}`);
-    return { ok: true, laneEnvKeys: INIT ? LANE_ENV_ALLOW : undefined };
+    assertSafe(state);
+    return { ok: true };
   },
 
   /** Register a ticket as pending. Idempotent: an existing entry is left untouched. */
@@ -402,6 +642,23 @@ const commands = {
     const t = ticketOf(loadState(), KEY);
     const fields = REST[0]?.split(",");
     return fields ? Object.fromEntries(fields.map((f) => [f, t[f] ?? null])) : t;
+  },
+
+  /** Before spawning a critic or Verify: the baseline its "wrote nothing" check compares with. */
+  snapshot() {
+    return mutate(KEY, (t, state) => {
+      if (t.status === "done" || !["critic", "verify"].includes(t.phase))
+        throw new Stop("usage", `${KEY} is at ${t.phase}, not critic or verify`);
+      assertSafe(state);
+      t.snapshot = {
+        sha: t.commitSha,
+        phase: t.phase,
+        primaryStatus: primaryStatus(state),
+        baseRemote: remoteHead(baseOf(state)),
+        at: now(),
+      };
+      return { ok: true };
+    });
   },
 
   /** The single write path for returns. stdin: one JSON object. */
@@ -434,13 +691,27 @@ const commands = {
         throw new Stop("usage", `${KEY} is at phase ${t.phase}, not ${expected}`);
       if (PHASE === "orchestrator" && fields.status === "done" && !(t.mergeCommit && t.gitFinished))
         throw new Stop("usage", "status done needs a recorded merge and a finished lane");
+      if ((PHASE === "critic" || PHASE === "verify") && (t.snapshot?.sha !== t.commitSha || t.snapshot?.phase !== PHASE))
+        throw new Stop("usage", `run snapshot ${KEY} before spawning the ${PHASE}`);
+      // The critic must have been given the risk of THIS commit, and every critic must justify a
+      // gate change: one boolean cannot say which of two reviewers looked.
+      if (PHASE === "critic" && "criticVerdict" in fields) {
+        if (t.risk?.sha !== t.commitSha) throw new Stop("usage", `run risk ${KEY} for ${t.commitSha} first`);
+        if (t.risk.gatesChanged && (fields.gateJustifications ?? []).length < t.risk.critics)
+          throw new Stop("usage", `gates changed: ${t.risk.critics} critic justification(s) required`);
+      }
+      assertSafe(state);
       // Not-owned only ever goes false -> true: the run must not start writing to a ticket it
       // has already decided is someone else's.
       if ("noTracker" in fields) fields.noTracker = Boolean(t.noTracker || fields.noTracker);
-      // Critic and Verify may write nothing. Checked here, mechanically, rather than trusted.
+      // Critic and Verify may write nothing. Checked here, mechanically, rather than trusted. An
+      // agent's own block reason (e.g. "main is red", which stops the run) is kept, not replaced.
       if (PHASE === "critic" || PHASE === "verify") {
-        const problems = laneUnchanged(t);
-        if (problems.length) throw new Stop("blocked", `${PHASE} left the lane changed: ${problems.join("; ")}`);
+        const problems = agentWroteSomething(t, state);
+        if (problems.length) {
+          const own = result === "blocked" ? `${fields.blockedReason ?? note ?? "blocked"}; also ` : "";
+          throw new Stop("blocked", `${own}${PHASE} left changes: ${problems.join("; ")}`);
+        }
       }
       // A verdict that names any commit but the current one describes nothing the run will merge.
       for (const [verdict, sha] of [
@@ -455,8 +726,9 @@ const commands = {
       // the current value is a no-op, not a switch.
       if (fields.branch === t.branch) delete fields.branch;
       if ("prNumber" in fields && fields.prNumber === t.prNumber) delete fields.prNumber;
-      const followup = "branch" in fields && fields.branch === `${t.branch}-followup`;
-      if ("branch" in fields && !followup) throw new Stop("usage", `branch may only become ${t.branch}-followup`);
+      const followup = "branch" in fields && fields.branch === `${t.branch}-followup` && fields.prNumber === null;
+      if ("branch" in fields && !followup)
+        throw new Stop("usage", `branch may only become ${t.branch}-followup, with prNumber: null`);
       if ("prNumber" in fields && !followup)
         throw new Stop("usage", "prNumber may only be cleared with the -followup switch");
       if (followup) Object.assign(fields, { prNumber: null, prUrl: null });
@@ -473,11 +745,10 @@ const commands = {
           throw new Stop("usage", `result ${result} without a matching ${verdict}`);
         fields.phase = NEXT[PHASE][result];
         if (!("handoff" in fields)) fields.handoff = null;
-      } else if (result && PHASE !== "orchestrator" && PHASE !== "triage") {
-        throw new Stop("usage", `result ${result} is not a result of ${PHASE}`);
       }
       // Pin the base as well as the head: what Verify graded is this head on this base.
-      if (PHASE === "verify" && fields.verifyVerdict) fields.verifiedBaseSha = git("rev-parse", `origin/${baseOf(state)}`);
+      if (PHASE === "verify" && fields.verifyVerdict)
+        fields.verifiedBaseSha = git("rev-parse", `origin/${baseOf(state)}`);
       apply(t, fields, PHASE, [result, note].filter(Boolean).join(": ") || undefined);
 
       t.trackerWrites ??= [];
@@ -516,7 +787,14 @@ const commands = {
     }
     if (!issue?.title) throw new Stop("usage", "issue JSON has no title");
     return mutate(KEY, (t, state) => {
+      requirePhase(t, t.branch ? "build" : "start");
       const base = baseOf(state);
+      assertSafe(state);
+      // The ticket text is what Critic, Verify and Fix grade against. Without it, Verify would
+      // grade the Build agent's own plan.
+      const description = t.descriptionSnapshot ?? issue.description;
+      if (typeof description !== "string" || !description.trim())
+        throw new Stop("blocked", "the Linear issue has no description: nothing to grade against");
       if (git("status", "--short")) throw new Stop("error", "lane is not clean before Start");
       git("fetch", "origin");
       // Another run may have merged into the base since Step 0d; the lane is clean, so resync.
@@ -536,6 +814,8 @@ const commands = {
       const localExists = run("git", ["rev-parse", "--verify", "--quiet", branch]).code === 0;
       if (t.branch && localExists) {
         git("checkout", branch); // resume: the branch is ours
+      } else if (t.branch && remoteHead(branch)) {
+        git("checkout", "--no-track", "-b", branch, `origin/${branch}`); // resume in a recreated lane
       } else {
         if (localExists || remoteHead(branch)) throw new Stop("blocked", `branch collision: ${branch} exists`);
         git("checkout", "--no-track", "-b", branch, RUN_BRANCH);
@@ -546,7 +826,7 @@ const commands = {
           title: issue.title,
           url: issue.url ?? null,
           type,
-          descriptionSnapshot: t.descriptionSnapshot ?? issue.description ?? "",
+          descriptionSnapshot: description,
           branch,
           status: "in_progress",
           phase: "build",
@@ -560,22 +840,35 @@ const commands = {
 
   ship() {
     return mutate(KEY, (t, state) => {
+      requirePhase(t, "ship");
       const base = baseOf(state);
+      assertSafe(state);
       const fail = (reason, output = "") => {
         apply(t, { verifyFindings: `Ship failed: ${reason}\n${output}`.trim(), phase: "fix" }, "ship", `fail: ${reason}`);
         return { ok: false, route: "fix", reason };
       };
       if (git("branch", "--show-current") !== t.branch) throw new Stop("error", `lane is not on ${t.branch}`);
+      // A keyed gates run records a result against a commit: the tree must BE that commit.
       if (git("status", "--short")) return fail("uncommitted changes in the lane");
       if (/^wip:/m.test(git("log", "--format=%s", `origin/${base}..HEAD`)))
         return fail("a wip: commit is still on the branch - squash it before shipping");
 
+      // Never push a credential, or code pointing at the owner's private material. Scanned per
+      // COMMIT, not on the net diff: a key added and removed again is still in what gets pushed.
+      const leaks = secretLeaks(base, state);
+      if (leaks.length) throw new Stop("blocked", `the branch adds ${leaks.join(", ")}; not pushed - owner's call`);
+
       const head = git("rev-parse", "HEAD");
-      const gatesChanged = changedFiles(base).some((f) => GATE_FILES.test(f));
+      const gatesChanged = diffFiles(base).some(isGateFile);
       if (head !== t.gatedSha || gatesChanged) {
         const gates = runGates();
         if (!gates.ok) return fail(`gate ${gates.gate}`, gates.output);
       }
+      // On every pushed head: the env loader is app code a ticket can change.
+      const probe = keyProbe();
+      if (probe.visible)
+        throw new Stop("blocked", "the paid key is visible to the CLI from the lane at this commit; not pushed");
+      if (probe.ran && probe.code !== 0) return fail("the key probe could not load src/config/env.ts", probe.out);
 
       if (t.prNumber) {
         const pr = prView(t.prNumber, "state,baseRefName");
@@ -640,56 +933,29 @@ const commands = {
     });
   },
 
-  /** Critic depth, from .claude/commands/critique.md Step 3, plus the pipeline's own machinery. */
+  /** Records the depth for the current commitSha; a critic record is refused without it. */
   risk() {
-    const state = loadState();
-    const t = ticketOf(state, KEY);
-    const base = baseOf(state);
-    // Unfiltered: a deletion (of a refusal, a guard, this script) is the change most worth reviewing.
-    const files = git("diff", "--name-only", `origin/${base}...${t.commitSha}`).split("\n").filter(Boolean);
-    const stat = git("diff", "--numstat", `origin/${base}...${t.commitSha}`)
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => l.split("\t").map(Number));
-    const added = stat.reduce((n, [a]) => n + (a || 0), 0);
-    const deleted = stat.reduce((n, [, d]) => n + (d || 0), 0);
-    const has = (re) => files.some((f) => re.test(f));
-    const factors = [];
-    if (has(/^src\/resume\/(provenance|render|tailor)\.ts$/)) factors.push(["resume provenance", 2]);
-    if (has(/^src\/apply\//)) factors.push(["apply refusals", 2]);
-    if (has(/^src\/analysis\//)) factors.push(["cost controls", 2]);
-    if (has(/^(\.claude\/commands\/run-tickets\.md|scripts\/run-tickets\/)/)) factors.push(["pipeline machinery", 2]);
-    const gatesChanged = has(GATE_FILES);
-    if (gatesChanged) factors.push(["gate definitions (this diff changes the gates that grade it)", 4]);
-    if (has(/^src\/(db|analysis)\/schema\.ts$/)) factors.push(["schema change", 1]);
-    if (has(/^src\//) && !has(/^tests\//)) factors.push(["no test changes", 1]);
-    if (has(/^package\.json$/)) factors.push(["dependencies", 1]);
-    if (has(/^\.claude\//)) factors.push(["workflow files", 1]);
-    if (has(/^(src\/config\/schema\.ts|config\/.*\.yaml)$/)) factors.push(["config schema", 1]);
-    if (deleted > added) factors.push(["deletes more than it adds", 1]);
-    if (files.length > 10) factors.push(["files changed > 10", 1]);
-    const score = factors.reduce((n, [, w]) => n + w, 0);
-    // A `.claude/` change is reviewed at L2 at least: a workflow bug hits every later session.
-    const floor = has(/^\.claude\//) ? 2 : 0;
-    return {
-      score,
-      depth: score >= 4 ? "L2+Double" : Math.max(score, floor) >= 2 ? "L2" : "L1",
-      factors: factors.map((f) => f[0]),
-      files: files.length,
-      gatesChanged,
-      // Also a determinism-boundary check the critic must make by reading: a model call in
-      // src/pipeline, src/lib or src/db. A path rule cannot see it.
-    };
+    return mutate(KEY, (t, state) => {
+      requirePhase(t, "critic");
+      t.risk = computeRisk(baseOf(state), t.commitSha);
+      return { ok: true, ...t.risk };
+    });
   },
 
   /**
    * Preflight only. The merge itself is run by the ORCHESTRATOR as a plain `gh pr merge` Bash
    * call, so the harness permission check sees it: inside `node ...` it would be invisible. Same
    * for the remote-branch delete (`merged` prints it).
+   *
+   * Order matters: PR state and head first (a merge, ours or by hand, always moves the base, so a
+   * base check first would send an already-merged PR to Fix), then the static refusals, then the
+   * base check.
    */
   merge() {
     return mutate(KEY, (t, state) => {
+      requirePhase(t, "merge");
       const base = baseOf(state);
+      assertSafe(state);
       // An explicit false: a state file from before the field existed cannot prove the run was
       // allowed to merge. Refusal blocks the ticket (PR left open), never the whole run.
       if (state.manualMerge !== false)
@@ -703,31 +969,42 @@ const commands = {
         t.verifiedSha !== sha
       )
         throw new Stop("error", "merge called without both verdicts on the current commitSha");
-      // The base must not have moved since Verify: a squash onto a newer base is a tree nobody
-      // graded. Parallel runs make this real. Rebase and re-verify.
-      git("fetch", "origin");
-      const baseNow = git("rev-parse", `origin/${base}`);
-      if (baseNow !== t.verifiedBaseSha || run("git", ["merge-base", "--is-ancestor", baseNow, sha]).code !== 0) {
-        apply(
-          t,
-          { verifyFindings: `origin/${base} moved to ${baseNow} since Verify graded ${sha} on ${t.verifiedBaseSha}; rebase and re-verify.`, phase: "fix" },
-          "merge",
-          "base moved",
-        );
-        return { ok: false, route: "fix", reason: "base moved" };
-      }
-      const gated = changedFiles(base, sha).filter((f) => OWNER_GATED.test(f));
-      if (gated.length)
-        throw new Stop(
-          "blocked",
-          `owner gate: ${gated.join(", ")} changed; CLAUDE.md requires a live autofill run before an src/apply/ change ships. PR left open for the owner.`,
-        );
+      // Re-derived rather than trusted: a skipped `risk` after a Fix would otherwise waive the
+      // gate justification.
+      const risk = computeRisk(base, sha);
+      if (risk.gatesChanged && (t.risk?.sha !== sha || (t.gateJustifications ?? []).length < risk.critics))
+        throw new Stop("error", "gate files changed and the critics' justifications are not on record for this commit");
+
       const pr = prView(t.prNumber, "state,baseRefName,headRefOid");
       // Whether merged by us or by hand, what merged must be the commit that was graded.
       if (pr.headRefOid !== sha) throw new Stop("blocked", `PR head ${pr.headRefOid} is not the graded ${sha}`);
       if (pr.state === "CLOSED") throw new Stop("blocked", `PR #${t.prNumber} was closed unmerged`);
       if (pr.state === "MERGED") return { ok: true, run: [] };
       if (pr.baseRefName !== base) throw new Stop("blocked", `PR base is ${pr.baseRefName}`);
+
+      const gated = diffFiles(base, sha).filter((f) => OWNER_GATED.test(f));
+      if (gated.length)
+        throw new Stop(
+          "blocked",
+          `owner gate: ${gated.join(", ")} changed; CLAUDE.md requires a live autofill run before an src/apply/ change ships. PR left open for the owner.`,
+        );
+
+      // The base must not have moved since Verify: a squash onto a newer base is a tree nobody
+      // graded. Decided by comparing shas, never from anything an agent wrote.
+      git("fetch", "origin");
+      const baseNow = git("rev-parse", `origin/${base}`);
+      if (baseNow !== t.verifiedBaseSha || run("git", ["merge-base", "--is-ancestor", baseNow, sha]).code !== 0) {
+        apply(
+          t,
+          {
+            verifyFindings: `origin/${base} moved to ${baseNow} since Verify graded ${sha} on ${t.verifiedBaseSha}; rebase and re-verify.`,
+            phase: "fix",
+          },
+          "merge",
+          "base moved",
+        );
+        return { ok: false, route: "fix", reason: "base moved" };
+      }
       t.mergeAttempts = (t.mergeAttempts ?? 0) + 1;
       if (t.mergeAttempts > 2) throw new Stop("blocked", "gh pr merge did not land in two attempts");
       return { ok: true, run: [`gh pr merge ${t.prNumber} --squash --match-head-commit ${sha}`] };
@@ -737,6 +1014,7 @@ const commands = {
   /** After the orchestrator ran `gh pr merge`: read the PR back, never trust the exit code. */
   merged() {
     return mutate(KEY, (t, state) => {
+      requirePhase(t, "merge");
       const base = baseOf(state);
       const sha = t.commitSha;
       const s = prView(t.prNumber, "state,mergeable,headRefOid,mergeCommit");
@@ -746,7 +1024,7 @@ const commands = {
           apply(t, { verifyFindings: `Merge conflict with origin/${base}; rebase.`, phase: "fix" }, "merge", "conflict");
           return { ok: false, route: "fix", reason: "conflict" };
         }
-        pause(10); // `mergeable` is computed lazily; UNKNOWN usually settles within seconds
+        pause(Number(process.env.RUN_TICKETS_MERGE_PAUSE ?? 10)); // `mergeable` settles lazily
         return { ok: true, retry: true }; // orchestrator: `merge` again (it caps the attempts)
       }
       if (s.headRefOid !== sha) throw new Stop("error", "PR reads back MERGED at a head that was not graded");
@@ -769,8 +1047,10 @@ const commands = {
   finish() {
     if (!RUN_BRANCH) throw new Stop("usage", "--run-branch is required");
     return mutate(KEY, (t, state) => {
+      requirePhase(t, "finish");
       const base = baseOf(state);
       if (!t.mergeCommit) throw new Stop("error", "finish called before merged recorded a merge");
+      assertSafe(state);
       if (git("status", "--short")) {
         git("add", "-A");
         git("commit", "-m", "wip: left after merge", "--no-verify");
@@ -789,7 +1069,7 @@ const commands = {
         git("branch", "-D", t.branch);
       }
       // status stays in_progress: the orchestrator sets done after the Linear write (or its failure).
-      apply(t, { gitFinished: true, phase: "finish" }, "finish", "lane resynced");
+      apply(t, { gitFinished: true }, "finish", "lane resynced");
       // Never transition a ticket the run does not own.
       return { ok: true, trackerDone: !t.noTracker };
     });
@@ -798,24 +1078,26 @@ const commands = {
 
 // ---------------------------------------------------------------------------- main
 
-const KEYLESS = new Set(["guard"]);
+const KEYLESS = new Set(["guard", "gate-files"]);
 try {
   if (!commands[cmd]) throw new Stop("usage", `commands: ${Object.keys(commands).join(" | ")}`);
-  if (!KEYLESS.has(cmd) && !KEY_RE.test(KEY ?? "")) throw new Stop("usage", `${cmd} needs a ticket key matching ${KEY_RE}`);
+  if (!KEYLESS.has(cmd) && !KEY_RE.test(KEY ?? ""))
+    throw new Stop("usage", `${cmd} needs a ticket key matching ${KEY_RE}`);
   // Every step runs in the lane and nowhere else: a step run from the primary would branch,
-  // reset or commit in the owner's checkout.
-  if (cmd !== "show") {
+  // reset or commit in the owner's checkout. Anchored before any git command runs.
+  if (cmd !== "show" && cmd !== "gate-files") {
     const state = loadState();
     const top = run("git", ["rev-parse", "--show-toplevel"]).stdout.trim();
-    if (!state.worktree || fs.realpathSync(top || ".") !== fs.realpathSync(state.worktree))
+    if (!state.worktree || !top || fs.realpathSync(top) !== fs.realpathSync(state.worktree))
       throw new Stop("error", `run from the lane ${state.worktree}, not ${top || process.cwd()}`);
+    process.chdir(state.worktree);
   }
   const out = commands[cmd]();
   console.log(JSON.stringify(out));
   process.exit(out?.ok === false ? EXIT.fail : EXIT.ok);
 } catch (e) {
   const kind = e instanceof Stop ? e.kind : "error";
-  if (kind === "blocked" && STATE && KEY) {
+  if (kind === "blocked" && STATE && KEY_RE.test(KEY ?? "")) {
     try {
       mutate(KEY, (t) => apply(t, { status: "blocked", blockedReason: e.message }, cmd, `blocked: ${e.message}`));
     } catch {}
