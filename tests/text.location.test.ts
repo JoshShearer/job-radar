@@ -29,6 +29,8 @@ describe("classifyRemote", () => {
   it("prefers the structured workplaceType field over the location string", () => {
     expect(classifyRemote("New York, NY", { workplaceType: "Remote" })).toBe("remote");
     expect(classifyRemote("New York, NY", { workplaceType: "Hybrid" })).toBe("hybrid");
+    // Workable's detail `workplace` spells it with an underscore.
+    expect(classifyRemote("Remote friendly office, Berlin", { workplaceType: "on_site" })).toBe("onsite");
   });
 
   it("uses the isRemote flag when there is no other signal", () => {

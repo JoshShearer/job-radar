@@ -442,6 +442,20 @@ sources:
         company: Mem0
       - token: letta
         company: Letta
+  # Workable and SmartRecruiters list a board without descriptions, so a sweep
+  # makes one list call plus one detail call per posting, all through the
+  # rate-limited transport (docs/adr/0003-two-call-providers-fetch-every-detail.md).
+  # A 40-posting board takes about a minute at delay_ms 1200; prefer small boards.
+  workable:
+    enabled: true
+    boards: []
+  # SmartRecruiters company identifiers are case-sensitive and not guessable
+  # from the name (e.g. WesternDigital, LinkedIn3). An unknown identifier answers
+  # 200 with no postings, so `jr sources` cannot tell a typo from an empty board:
+  # check the identifier against the company's jobs.smartrecruiters.com URL.
+  smartrecruiters:
+    enabled: true
+    boards: []
   remoteok:
     enabled: false
 watchlist:

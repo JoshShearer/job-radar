@@ -170,7 +170,7 @@ export function classifyRemote(
   // Explicit ATS fields win - they are structured data, not prose.
   if (wp.includes("hybrid")) return "hybrid";
   if (wp.includes("remote")) return "remote";
-  if (wp.includes("onsite") || wp.includes("on-site") || wp.includes("in office")) return "onsite";
+  if (wp.includes("onsite") || wp.includes("on-site") || wp.includes("on_site") || wp.includes("in office")) return "onsite";
 
   if (HYBRID_RE.test(loc)) return "hybrid";
   if (REMOTE_RE.test(loc)) return "remote";
