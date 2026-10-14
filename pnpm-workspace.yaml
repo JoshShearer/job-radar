@@ -1,11 +1,18 @@
-# pnpm blocks dependency build scripts by default. Both of these genuinely
-# need to run:
+# pnpm blocks dependency build scripts by default; this sets which may run.
 #
-#   better-sqlite3 - compiles a native SQLite binding. Without it every command
-#                    fails at startup with "Could not locate the bindings file".
-#   esbuild        - fetches/links its platform binary, used by tsx and vitest.
+#   esbuild        - true. Its postinstall fetches/links the platform binary
+#                    that tsx and vitest use.
+#   better-sqlite3 - false. It ships prebuilt bindings (prebuilds/) for linux,
+#                    linuxmusl, darwin and win32 on x64 and arm64, and loads
+#                    them in preference to a source build. Allowing the build
+#                    makes pnpm run `node-gyp rebuild`, and pnpm does not bundle
+#                    node-gyp: without a global one the install fails
+#                    (`node-gyp: not found`, ELIFECYCLE) before linking
+#                    node_modules/.bin, so `tsc` and `vitest` are missing too.
 #
-# Without these set, `pnpm install` succeeds and the project is still broken.
+# On a platform with no prebuild, set better-sqlite3 to true and install
+# node-gyp (`pnpm add -g node-gyp`) plus a C++ toolchain (make, g++, python3).
+# tests/toolchain.test.ts pins this policy. npm ignores this file.
 allowBuilds:
-  better-sqlite3: true
+  better-sqlite3: false
   esbuild: true

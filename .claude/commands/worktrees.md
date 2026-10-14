@@ -190,9 +190,9 @@ EOF
 ```
 
 6. **Install dependencies.** A fresh worktree has no `node_modules`, and with pnpm the
-   native bindings matter — `pnpm-workspace.yaml` must keep `allowBuilds` true for
-   **better-sqlite3** and **esbuild**, or every command fails with
-   `Could not locate the bindings file`.
+   build policy matters — `pnpm-workspace.yaml` must keep `allowBuilds` **esbuild: true**
+   and **better-sqlite3: false** (it loads its shipped prebuild; allowing the build makes
+   pnpm run `node-gyp rebuild`, which fails without a global node-gyp). See CLAUDE.md Toolchain.
 
 ```bash
 cd ../job-radar-job-<NUM> && npm install

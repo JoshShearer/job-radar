@@ -15,7 +15,7 @@ How the engineering skills should consume this repo's domain documentation.
 
 This repo is **single-context**: one `CONTEXT.md` and one `docs/adr/`, both at the root.
 There is no `CONTEXT-MAP.md`. `pnpm-workspace.yaml` exists only to set `allowBuilds`
-for native dependencies — it is not a monorepo signal.
+(pnpm's build-script policy) — it is not a monorepo signal.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't
 suggest creating them upfront. `/domain-modeling` creates them lazily, when a term or a
