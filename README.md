@@ -85,13 +85,15 @@ jr void pursuit|application <event-id> --reason "..."       jr apps [--events]
 jr evidence import <file> | lint | match <id> | brief
 jr tailor <id> [--override] [--force]     jr render <id>   jr prepare <id> [--full]   jr approve <id>
 jr fill <id> [--headless]                 jr mail scan [--dry-run] | review
-jr stats | spend | failures | sources | discover <companies...>
+jr stats | spend | failures | sources | discover <companies...> [--add]
 jr benchmark-triage [--mode routing|verdict] [--limit n] [--yes]
 jr serve [--port 4180]                    jr backup [--keep 14] [--with-artifacts]
 jr import-legacy --db <file> [--old-root <dir>]       jr interview add <app> --stage x | list
 ```
 
 `npm run cli -- <command>` runs the same thing without a global install.
+
+`jr discover <companies...>` probes the public Greenhouse, Lever and Ashby board APIs for each company and prints `FOUND` with the `sources.yaml` line, `HAVE` when that board is already configured, or `--` when there is no public board (add those to `watchlist` by hand). With `--add`, each new board is written into `config/sources.yaml` after the last entry of its ATS's `boards` list, in that list's style; nothing else in the file changes, comments included. The edited file must load through the full config check before it replaces the original, so a failed add writes nothing. Added boards are live on the next `jr sweep` (unless that provider's `enabled` is false, which the command points out); `jr sources` health-checks them.
 
 ## Spending
 

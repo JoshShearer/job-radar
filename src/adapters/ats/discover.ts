@@ -1,8 +1,9 @@
 import type { Transport } from "../../ports/io.js";
 import { normalizeForIdentity } from "../../domain/text/identity.js";
+import type { AtsKind } from "../../domain/config/sources.js";
 
 /** Find a company's public board token by probing the three documented ATS APIs. */
-export type AtsKind = "greenhouse" | "lever" | "ashby";
+export type { AtsKind };
 
 export interface DiscoveryHit {
   ats: AtsKind;

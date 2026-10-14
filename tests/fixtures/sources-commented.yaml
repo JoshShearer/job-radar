@@ -1,0 +1,36 @@
+# Job Radar - source configuration (test fixture)
+#
+# Hand-written commentary that explains how the list is curated. A writer that
+# drops or reflows any of this destroys the reasoning, so `discover --add`
+# must leave every line here exactly as it is.
+sources:
+  greenhouse:
+    enabled: true
+    boards:
+      # -- Lane: headless CMS and content platforms ----------------------
+      - { token: contentful, company: Contentful }
+      - { token: storyblok, company: Storyblok }   # small board, on-lane
+
+      # -- Lane: data infra (added 2026-08-19) ---------------------------
+      # Every token below returned a non-empty job list via `discover`.
+      - { token: cockroachlabs, company: "Cockroach Labs" }
+      - { token: Grafanalabs, company: "Grafana Labs" }  # token case differs on purpose
+  lever:
+    enabled: false   # paused while the lever adapter is re-pinned
+    boards:
+      - token: prismic
+        company: Prismic
+  ashby:
+    enabled: true
+    boards:
+      # Smaller AI-product companies; weighted on purpose.
+      - token: sanity
+        company: Sanity
+      - token: langchain
+        company: LangChain
+  remoteok:
+    enabled: false
+
+# Companies with no public feed: researched by hand.
+watchlist:
+  - { company: Payload, why: "Payload CMS core team" }

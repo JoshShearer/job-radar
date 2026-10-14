@@ -1,6 +1,7 @@
 import type { RawPosting } from "../domain/catalog/posting.js";
 import type { Personal } from "../domain/candidate/personal.js";
 import type { Evidence } from "../domain/candidate/evidence.js";
+import type { AtsKind, BoardEntry } from "../domain/config/sources.js";
 
 /** HTTP for public job-board endpoints. Implementations must rate-limit per host. */
 export interface Transport {
@@ -117,4 +118,20 @@ export interface ApplicationBrowser {
 /** Ask the human a yes/no question. Absent terminal means "no". */
 export interface Prompter {
   confirm(question: string): Promise<boolean>;
+}
+
+/** What probing the public ATS endpoints found for one company. */
+export interface BoardDiscovery {
+  hits: Array<{ ats: AtsKind; token: string; jobCount: number; configLine: string }>;
+  tried: string[];
+}
+
+/**
+ * Edits sources.yaml in place, keeping its comments and layout. The whole
+ * configuration is validated with the change applied before anything is
+ * written; on any failure it throws and the file is untouched.
+ */
+export interface SourcesWriter {
+  /** Returns the entries actually added (one already in the file is skipped). */
+  addBoards(entries: readonly BoardEntry[]): { added: BoardEntry[]; file: string };
 }

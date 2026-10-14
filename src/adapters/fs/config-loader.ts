@@ -26,10 +26,10 @@ export class ConfigError extends Error {
   override name = "ConfigError";
 }
 
-function readYaml(file: string): unknown {
-  if (!existsSync(file)) throw new ConfigError(`Missing ${file}. Run \`jr init\` or copy the examples from config.example/.`);
+function readYaml(file: string, text?: string): unknown {
+  if (text === undefined && !existsSync(file)) throw new ConfigError(`Missing ${file}. Run \`jr init\` or copy the examples from config.example/.`);
   try {
-    return parseYaml(readFileSync(file, "utf8"));
+    return parseYaml(text ?? readFileSync(file, "utf8"));
   } catch (err) {
     throw new ConfigError(`${file} is not valid YAML: ${(err as Error).message}`);
   }
@@ -44,11 +44,15 @@ function parseWith<S extends z.ZodType>(schema: S, raw: unknown, file: string): 
   return parsed.data;
 }
 
-/** Load and validate every config file, then cross-check them. Fails loudly. */
-export function loadConfig(configDir: string): Config {
+/**
+ * Load and validate every config file, then cross-check them. Fails loudly.
+ * `pending` substitutes the text of a file about to be written, so a writer
+ * can validate the exact result before it touches the disk.
+ */
+export function loadConfig(configDir: string, pending: Partial<Record<keyof typeof CONFIG_FILES, string>> = {}): Config {
   const load = <S extends z.ZodType>(key: keyof typeof CONFIG_FILES, schema: S) => {
     const file = resolve(configDir, CONFIG_FILES[key]);
-    return parseWith(schema, readYaml(file), file);
+    return parseWith(schema, readYaml(file, pending[key]), file);
   };
   const config: Config = {
     strategy: load("strategy", StrategySchema),
