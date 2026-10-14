@@ -251,6 +251,8 @@ export const SourcesSchema = z
         greenhouse: z.object({ enabled: z.boolean().default(true), boards: z.array(Board).default([]) }).strict().prefault({}),
         lever: z.object({ enabled: z.boolean().default(true), boards: z.array(Board).default([]) }).strict().prefault({}),
         ashby: z.object({ enabled: z.boolean().default(true), boards: z.array(Board).default([]) }).strict().prefault({}),
+        workable: z.object({ enabled: z.boolean().default(true), boards: z.array(Board).default([]) }).strict().prefault({}),
+        smartrecruiters: z.object({ enabled: z.boolean().default(true), boards: z.array(Board).default([]) }).strict().prefault({}),
         remoteok: z.object({ enabled: z.boolean().default(false) }).strict().prefault({}),
       })
       .strict(),
