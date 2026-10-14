@@ -23,7 +23,8 @@ import { briefingHtml, briefingMarkdown } from "./reports/render.js";
 import { matchReportMarkdown } from "../domain/materials/render.js";
 import { PRIORITY_LABELS } from "../domain/evaluation/priority.js";
 import { formatRate } from "../domain/pursuit/funnel.js";
-import { backupDatabase } from "../adapters/sqlite/db.js";
+import { FsRecoveryStore } from "../adapters/fs/recovery-store.js";
+import { backup, restore } from "../app/recovery.js";
 import { discoverCompany } from "../adapters/ats/discover.js";
 import { FsSourcesWriter } from "../adapters/fs/sources-writer.js";
 import { discover } from "../app/discover.js";
@@ -569,25 +570,27 @@ program
 
 program
   .command("backup")
-  .description("Consistent database snapshot plus the irreplaceable local files")
-  .option("--keep <n>", "keep this many backups", "14")
-  .option("--out <dir>", "backup root")
-  .option("--with-artifacts", "also copy generated documents", false)
-  .action(async (o: { keep: string; out?: string; withArtifacts: boolean }) => {
+  .description("Verified recovery set: database snapshot, config (evidence, personal answers) and saved generations, with a manifest")
+  .option("--keep <n>", "keep this many verified backups (the newest verified one is never pruned)", "14")
+  .option("--out <dir>", "backup root (default data/backups)")
+  .option("--without-artifacts", "leave saved application generations out (the manifest says so)", false)
+  .option("--with-artifacts", "accepted for compatibility; artifacts are included by default", false)
+  .action(async (o: { keep: string; out?: string; withoutArtifacts: boolean; withArtifacts: boolean }) => {
+    if (o.withArtifacts && o.withoutArtifacts) throw new UserError("--with-artifacts and --without-artifacts contradict each other");
     const r = rt();
-    const root = o.out ? resolve(o.out) : r.paths.backups;
-    const stamp = r.ctx.clock.now().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const dir = resolve(root, `jr-${stamp}`);
-    const { bytes } = await backupDatabase(r.db, resolve(dir, "jr.sqlite"));
-    if (existsSync(r.paths.config)) cpSync(r.paths.config, resolve(dir, "config"), { recursive: true });
-    if (o.withArtifacts && existsSync(r.paths.artifacts)) cpSync(r.paths.artifacts, resolve(dir, "artifacts"), { recursive: true });
-    out(`Backed up to ${dir} (database ${(bytes / 1e6).toFixed(1)} MB, integrity checked)`);
-    const keep = num(o.keep, "--keep") ?? 14;
-    const all = readdirSync(root).filter((f) => f.startsWith("jr-") && statSync(resolve(root, f)).isDirectory()).sort();
-    for (const old of all.slice(0, Math.max(0, all.length - keep))) {
-      rmSync(resolve(root, old), { recursive: true, force: true });
-      out(`pruned ${old}`);
-    }
+    const store = new FsRecoveryStore(o.out ? resolve(o.out) : r.paths.backups, { db: r.db, config: r.paths.config, artifacts: r.paths.artifacts });
+    report(await withRun(r.ctx, "backup", () => backup(r.ctx, store, { withArtifacts: !o.withoutArtifacts, keep: num(o.keep, "--keep") ?? 14 })));
+  });
+
+program
+  .command("restore <backup>")
+  .description("Copy a verified backup set into an EMPTY directory outside the live home, re-checking every hash and the database")
+  .requiredOption("--to <dir>", "destination: must be new or empty, and outside the live home")
+  .option("--out <dir>", "backup root to find <backup> by name (default data/backups)")
+  .action(async (set: string, o: { to: string; out?: string }) => {
+    const r = rt();
+    const store = new FsRecoveryStore(o.out ? resolve(o.out) : r.paths.backups, null);
+    report(await withRun(r.ctx, "restore", () => restore(store, { set, to: o.to, liveHome: r.paths.home, liveDb: r.paths.db })));
   });
 
 program

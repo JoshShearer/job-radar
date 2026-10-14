@@ -87,7 +87,8 @@ jr tailor <id> [--override] [--force]     jr render <id>   jr prepare <id> [--fu
 jr fill <id> [--headless]                 jr mail scan [--dry-run] | review
 jr stats | spend | failures | sources | discover <companies...> [--add]
 jr benchmark-triage [--mode routing|verdict] [--limit n] [--yes]
-jr serve [--port 4180]                    jr backup [--keep 14] [--with-artifacts]
+jr serve [--port 4180]                    jr backup [--keep 14] [--without-artifacts] [--out <dir>]
+jr restore <backup> --to <empty-dir>
 jr import-legacy --db <file> [--old-root <dir>]       jr interview add <app> --stage x | list
 ```
 
@@ -141,6 +142,26 @@ npm run typecheck
 The suite covers the ported parsers, the verifier's adversarial corpus, the state machines, the gateway's budget and receipt rules, the whole pipeline end to end against an in-memory database, mail pagination and outages, legacy import, the web UI's security, the CLI through its real `tsx` entry point, dependency direction, and the real-browser refusal harness.
 
 `npm run gen:port` regenerates `src/ports/store.ts` from the SQLite store. `npm run gen:examples` regenerates `config.example/` from a legacy config.
+
+## Backup and recovery
+
+`jr backup` writes one recovery set under `data/backups/` (git-ignored; `--out` puts it elsewhere). Nothing is uploaded anywhere. A set is laid out like a Job Radar home:
+
+- `data/jr.sqlite`: an online-backup snapshot of the database (safe while other commands write), integrity-checked. Every fact and its history: postings, sweeps, events, applications, model-call receipts.
+- `config/`: strategy, preferences, policy, sources, and the irreplaceable `candidate/evidence.yaml` and `candidate/personal.yaml`.
+- `artifacts/`: every saved generation, byte for byte (the documents you reviewed, and may have sent). `--without-artifacts` leaves them out and the manifest says they are not recoverable from that set. In-flight `.tmp-*` generations are never copied.
+- `manifest.json`: app and schema version, the database's integrity result and row count per table, sha256 and size of every file, what was included, and what was **excluded and why**: `.env` (credentials are never copied; re-enter them), `.browser-profile/` (employer-site logins; sign in again), `reports/` (rebuildable with `jr report`).
+
+A set is written into `jr-<stamp>.partial/`; the manifest is written last with `completed: true`, then the directory is renamed to `jr-<stamp>` and every hash is re-checked. A crash leaves a `.partial` directory, which is never counted as a backup. Retention (`--keep`, default 14) counts only sets whose files still match their manifest and never prunes the newest one; `.partial` directories, sets that no longer verify, and backups from before manifests existed are listed on every run (the run reports `degraded`) and left for you to delete.
+
+**Recovering.** Restore into a new or empty directory, then point `JR_HOME` at it:
+
+```bash
+jr restore jr-2026-10-14T06-00-00-000Z --to ~/jr-restored   # a set name under data/backups, or a path
+JR_HOME=~/jr-restored npm run cli -- check
+```
+
+`restore` refuses a non-empty destination, the live home (or anything inside it), a `.partial` or manifest-less directory, and a set whose files do not match its manifest. It checks every hash before and after copying, opens the restored database and runs `integrity_check`, and compares row counts with the manifest. It never touches your live data and never regenerates anything. Putting a restored copy back as your live data is deliberately a manual step: stop the timer (`systemctl --user stop jr-daily.timer`), take a fresh `jr backup` of what is there now, rename the live `data/jr.sqlite` (and its `-wal`/`-shm` files), `config/` and `artifacts/` aside, move the restored ones into their place, and run `jr check`.
 
 ## Scheduling
 

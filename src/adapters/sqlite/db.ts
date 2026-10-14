@@ -49,8 +49,11 @@ export function schemaVersion(db: DB): number {
 export async function backupDatabase(db: DB, dest: string): Promise<{ bytes: number }> {
   mkdirSync(dirname(dest), { recursive: true });
   await db.backup(dest);
-  const copy = new Database(dest, { readonly: true });
+  // The copy is a standalone file: rollback-journal mode, so opening it later
+  // (read-only, to verify or restore) never leaves -wal/-shm files beside it.
+  const copy = new Database(dest);
   try {
+    copy.pragma("journal_mode = DELETE");
     const check = copy.pragma("integrity_check", { simple: true });
     if (check !== "ok") throw new Error(`backup failed integrity_check: ${String(check)}`);
     const tables = copy.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'").get() as { n: number };
@@ -59,4 +62,19 @@ export async function backupDatabase(db: DB, dest: string): Promise<{ bytes: num
     copy.close();
   }
   return { bytes: statSync(dest).size };
+}
+
+/** Open a database file read-only and report its integrity and size per table. Never writes. */
+export function probeDatabase(file: string): { schemaVersion: number; integrityCheck: string; tables: number; rowCounts: Record<string, number> } {
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  try {
+    const integrityCheck = String(db.pragma("integrity_check", { simple: true }));
+    const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
+    const rowCounts: Record<string, number> = {};
+    for (const n of names) rowCounts[n] = (db.prepare(`SELECT COUNT(*) AS n FROM "${n.replace(/"/g, '""')}"`).get() as { n: number }).n;
+    const hasMigrations = names.includes("schema_migration");
+    return { schemaVersion: hasMigrations ? schemaVersion(db) : 0, integrityCheck, tables: names.length, rowCounts };
+  } finally {
+    db.close();
+  }
 }
