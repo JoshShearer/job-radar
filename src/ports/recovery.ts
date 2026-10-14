@@ -15,6 +15,8 @@ export interface StagedSet {
 export interface RecoveryStore {
   readonly root: string;
   appInfo(): { name: string; version: string };
+  /** Why sets cannot be written under this root (it lies inside a tree every backup copies), or null. */
+  stagingProblem(opts: { withArtifacts: boolean }): string | null;
   /** Snapshot the database and copy the included trees into `<name>.partial/`. */
   stage(name: string, opts: { withArtifacts: boolean }): Promise<StagedSet>;
   /** Write the manifest last, then rename `<name>.partial` to `<name>`. Returns the final directory. */
@@ -30,7 +32,7 @@ export interface RecoveryStore {
   inspect(dir: string): { manifest: BackupManifest | null; problems: string[] };
   /** Null when the destination does not exist or is an empty directory; otherwise why it cannot be used. */
   destinationProblem(dest: string): string | null;
-  /** Copy exactly the manifest's files into `dest`, then re-hash them there. */
+  /** Copy exactly the manifest's files into `dest` (exclusive create: never overwrites; throws instead), then re-hash them there. */
   copyOut(dir: string, manifest: BackupManifest, dest: string): FileHashes;
   /** Open the restored database read-only: integrity_check and per-table row counts. */
   probeDatabase(file: string): DatabaseSnapshot;

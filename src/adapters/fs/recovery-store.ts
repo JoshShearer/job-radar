@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { RecoveryStore, StagedSet } from "../../ports/recovery.js";
 import {
@@ -36,18 +36,35 @@ export class FsRecoveryStore implements RecoveryStore {
     return { name: pkg.name ?? "job-radar", version: pkg.version ?? "unknown" };
   }
 
+  stagingProblem(opts: { withArtifacts: boolean }): string | null {
+    if (!this.live) return null;
+    const root = this.canonical(this.root);
+    const trees: [string, string][] = [["config/", this.live.config]];
+    if (opts.withArtifacts) trees.push(["artifacts/", this.live.artifacts]);
+    for (const [label, tree] of trees) {
+      if (!existsSync(tree)) continue;
+      const t = this.canonical(tree);
+      if (within(root, t)) return `refusing to write backups to ${root}: it is inside ${label} (${t}), which every backup copies. Choose an --out outside the included trees.`;
+    }
+    return null;
+  }
+
   async stage(name: string, opts: { withArtifacts: boolean }): Promise<StagedSet> {
     if (!this.live) throw new Error("no live data to back up");
+    const refusal = this.stagingProblem(opts);
+    if (refusal) throw new Error(refusal);
     let finalName = name;
     for (let i = 2; existsSync(join(this.root, finalName)) || existsSync(join(this.root, finalName + PARTIAL_SUFFIX)); i++) finalName = `${name}-${i}`;
     const dir = join(this.root, finalName + PARTIAL_SUFFIX);
     mkdirSync(dir, { recursive: true });
     await backupDatabase(this.live.db, join(dir, DB_PATH));
     const database = probeDatabase(join(dir, DB_PATH));
-    if (existsSync(this.live.config)) cpSync(this.live.config, join(dir, "config"), { recursive: true });
+    // Symlinks are followed: the set holds the real bytes, so it never depends on (or dangles into) the live tree.
+    const forbidden = this.canonical(this.root);
+    if (existsSync(this.live.config)) copyTree(this.live.config, join(dir, "config"), "config", { skip: () => false, forbidden, ancestors: [] });
     if (opts.withArtifacts && existsSync(this.live.artifacts)) {
       // A `.tmp-*` sibling is a generation still being written (or abandoned): never part of the set.
-      cpSync(this.live.artifacts, join(dir, "artifacts"), { recursive: true, filter: (src) => !basename(src).startsWith(".tmp-") });
+      copyTree(this.live.artifacts, join(dir, "artifacts"), "artifacts", { skip: (n) => n.startsWith(".tmp-"), forbidden, ancestors: [] });
     }
     return { name: finalName, dir, database, files: hashTree(dir) };
   }
@@ -118,12 +135,19 @@ export class FsRecoveryStore implements RecoveryStore {
   }
 
   copyOut(dir: string, manifest: BackupManifest, dest: string): FileHashes {
-    mkdirSync(dest, { recursive: true });
+    mkdirSync(dirname(dest), { recursive: true });
+    if (!existsSync(dest)) mkdirSync(dest);
     for (const rel of Object.keys(manifest.files)) {
       const target = resolve(dest, rel);
       if (!target.startsWith(dest + sep)) throw new Error(`manifest path escapes the destination: ${rel}`);
       mkdirSync(dirname(target), { recursive: true });
-      copyFileSync(join(dir, rel), target);
+      try {
+        // Exclusive create: anything that appeared after the emptiness check is never overwritten.
+        copyFileSync(join(dir, rel), target, constants.COPYFILE_EXCL);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`${rel} appeared in ${dest} after it was checked; restore never overwrites, so it stopped`);
+        throw err;
+      }
     }
     return hashTree(dest);
   }
@@ -143,12 +167,62 @@ export function hashTree(dir: string): FileHashes {
       else if (e.isFile()) {
         const rel = relative(dir, p).split(sep).join("/");
         if (rel === MANIFEST_FILE) continue;
-        const buf = readFileSync(p);
-        out[rel] = { sha256: createHash("sha256").update(buf).digest("hex"), bytes: buf.length };
+        out[rel] = hashFile(p);
       }
     }
   };
   walk(dir);
   return out;
+}
+
+/** sha256 and size of one file, read in chunks so memory stays flat however large the file. */
+function hashFile(path: string): { sha256: string; bytes: number } {
+  const h = createHash("sha256");
+  const buf = Buffer.allocUnsafe(1 << 20);
+  const fd = openSync(path, "r");
+  let bytes = 0;
+  try {
+    for (let n = readSync(fd, buf, 0, buf.length, null); n > 0; n = readSync(fd, buf, 0, buf.length, null)) {
+      h.update(buf.subarray(0, n));
+      bytes += n;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return { sha256: h.digest("hex"), bytes };
+}
+
+/**
+ * Copy a tree as real files: symlinks (to files or directories) are followed
+ * and their targets' bytes copied. A dangling link, a link loop, a special
+ * file, or a link leading to a directory that holds the backup root fails the
+ * backup rather than silently leaving something out.
+ */
+function copyTree(src: string, dest: string, label: string, opts: { skip: (name: string) => boolean; forbidden: string; ancestors: string[] }): void {
+  const real = realpathSync(src);
+  if (opts.ancestors.includes(real)) throw new Error(`${label} is a symlink loop (it leads back to ${real})`);
+  if (within(opts.forbidden, real)) throw new Error(`${label} leads to ${real}, which contains the backup root ${opts.forbidden}; refusing to copy backups into themselves`);
+  mkdirSync(dest, { recursive: true });
+  for (const name of readdirSync(src)) {
+    if (opts.skip(name)) continue;
+    const from = join(src, name);
+    const rel = `${label}/${name}`;
+    let st;
+    try {
+      st = statSync(from);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") throw new Error(`${rel} is a dangling symlink (its target does not exist)`);
+      if (code === "ELOOP") throw new Error(`${rel} is a symlink loop`);
+      throw err;
+    }
+    if (st.isDirectory()) copyTree(from, join(dest, name), rel, { ...opts, ancestors: [...opts.ancestors, real] });
+    else if (st.isFile()) copyFileSync(from, join(dest, name), constants.COPYFILE_EXCL);
+    else throw new Error(`${rel} is not a regular file or directory, so it cannot be backed up`);
+  }
+}
+
+function within(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 

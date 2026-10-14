@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { backup, restore } from "../src/app/recovery.js";
@@ -121,6 +121,130 @@ describe("jr backup", () => {
   });
 });
 
+describe("jr backup: symlinks inside the included trees", () => {
+  const manifestOf = (dir: string) => manifestSchema.parse(JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")));
+  const restoreTo = (dir: string, name: string) => restore(store, { set: dir, to: join(base, name), ...live() });
+
+  it("a symlinked file is copied as real bytes, hashed, and restored", async () => {
+    const outside = join(base, "elsewhere/evidence.yaml");
+    mkdirSync(join(base, "elsewhere"));
+    writeFileSync(outside, "claims: [the real evidence]\n");
+    rmSync(join(home, "config/candidate/evidence.yaml"));
+    symlinkSync(outside, join(home, "config/candidate/evidence.yaml"));
+    const r = await run();
+    expect(r.outcome).toBe("ok");
+    expect(lstatSync(join(r.value.dir!, "config/candidate/evidence.yaml")).isFile()).toBe(true);
+    expect(manifestOf(r.value.dir!).files["config/candidate/evidence.yaml"]?.bytes).toBe(readFileSync(outside).length);
+    const back = await restoreTo(r.value.dir!, "sym-file");
+    expect(back.outcome).toBe("ok");
+    expect(readFileSync(join(base, "sym-file/config/candidate/evidence.yaml"), "utf8")).toBe("claims: [the real evidence]\n");
+    // Losing the live target later does not touch the set.
+    rmSync(outside);
+    expect(store.inspect(r.value.dir!).problems).toEqual([]);
+  });
+
+  it("a symlinked directory (config subtree or a generation) is copied as real files", async () => {
+    const cand = join(base, "cand");
+    cpSync(join(home, "config/candidate"), cand, { recursive: true });
+    rmSync(join(home, "config/candidate"), { recursive: true });
+    symlinkSync(cand, join(home, "config/candidate"));
+    const gens = join(base, "gens");
+    cpSync(join(home, "artifacts/opp-1"), gens, { recursive: true });
+    rmSync(join(home, "artifacts/opp-1"), { recursive: true });
+    symlinkSync(gens, join(home, "artifacts/opp-1"));
+    const r = await run();
+    expect(r.outcome).toBe("ok");
+    const files = Object.keys(manifestOf(r.value.dir!).files);
+    expect(files).toEqual(expect.arrayContaining(["config/candidate/evidence.yaml", "config/candidate/personal.yaml", "artifacts/opp-1/gen-1/resume.md", "artifacts/opp-1/gen-1/cover.pdf"]));
+    expect(files.some((f) => f.includes(".tmp-"))).toBe(false);
+    expect(lstatSync(join(r.value.dir!, "config/candidate")).isDirectory()).toBe(true);
+    const back = await restoreTo(r.value.dir!, "sym-dir");
+    expect(back.outcome).toBe("ok");
+    expect(readFileSync(join(base, "sym-dir/artifacts/opp-1/gen-1/resume.md"), "utf8")).toBe("# Resume\n");
+  });
+
+  it("a dangling symlink fails the backup, is never reported complete, and retention does not run", async () => {
+    const good = await run({ keep: 1 });
+    rmSync(join(home, "config/candidate/evidence.yaml"));
+    symlinkSync(join(base, "gone.yaml"), join(home, "config/candidate/evidence.yaml"));
+    const r = await run({ keep: 1 });
+    expect(r.outcome).toBe("failed");
+    expect(r.notes.join("\n")).toMatch(/config\/candidate\/evidence\.yaml.*(dangling|does not exist)/);
+    expect(sets().filter((s) => !s.endsWith(".partial"))).toEqual([good.value.dir!.split("/").pop()]);
+    expect(store.list().filter((s) => s.state === "verified").map((s) => s.name)).toEqual([good.value.dir!.split("/").pop()]);
+  });
+
+  it("a dangling symlink in artifacts fails too", async () => {
+    symlinkSync(join(base, "nowhere"), join(home, "artifacts/opp-1/gen-9"));
+    const r = await run();
+    expect(r.outcome).toBe("failed");
+    expect(r.notes.join("\n")).toMatch(/artifacts\/opp-1\/gen-9/);
+  });
+
+  it("a symlink loop fails instead of recursing", async () => {
+    symlinkSync(join(home, "config"), join(home, "config/candidate/loop"));
+    const r = await run();
+    expect(r.outcome).toBe("failed");
+    expect(r.notes.join("\n")).toMatch(/loop/);
+  });
+
+  it("a symlink that leads to the backup root fails instead of copying backups into themselves", async () => {
+    await run();
+    symlinkSync(home, join(home, "config/home-link"));
+    const r = await run();
+    expect(r.outcome).toBe("failed");
+    expect(r.notes.join("\n")).toMatch(/backup root/);
+  });
+});
+
+describe("jr backup: retention and the set just written", () => {
+  it("never prunes the set this run wrote, even when the clock went backwards", async () => {
+    const future = await run({ keep: 1 });
+    clock.advanceMs(-3 * 24 * 3600_000);
+    const now = await run({ keep: 1 });
+    expect(now.outcome).toBe("ok");
+    expect(existsSync(now.value.dir!)).toBe(true);
+    expect(now.value.pruned).not.toContain(now.value.dir!.split("/").pop());
+    expect(store.inspect(now.value.dir!).problems).toEqual([]);
+    expect(now.value.pruned).toEqual([future.value.dir!.split("/").pop()]);
+  });
+
+  it("--keep 2 with a wound-back clock keeps the new set plus the newest other", async () => {
+    const a = await run({ keep: 2 });
+    const b = await run({ keep: 2 });
+    clock.advanceMs(-3 * 24 * 3600_000);
+    const c = await run({ keep: 2 });
+    expect(c.value.pruned).toEqual([a.value.dir!.split("/").pop()]);
+    expect(sets()).toEqual([b.value.dir!.split("/").pop(), c.value.dir!.split("/").pop()].sort());
+  });
+
+  it("planRetention protects the named set first", () => {
+    const v = (name: string) => ({ name, state: "verified" as const, problems: [] });
+    expect(planRetention([v("jr-a"), v("jr-b"), v("jr-z")], 1, "jr-a").prune).toEqual(["jr-b", "jr-z"]);
+    expect(planRetention([v("jr-a"), v("jr-b"), v("jr-z")], 2, "jr-a").prune).toEqual(["jr-b"]);
+  });
+});
+
+describe("jr backup: a backup root inside the included trees", () => {
+  for (const tree of ["config", "artifacts", "artifacts/opp-1"]) {
+    it(`refuses --out inside ${tree}/ and writes nothing there`, async () => {
+      const before = hashTree(join(home, tree.split("/")[0]!));
+      const inside = new FsRecoveryStore(join(home, tree, "backups"), { db, config: join(home, "config"), artifacts: join(home, "artifacts") });
+      const r = await backup({ clock }, inside, { withArtifacts: true, keep: 14 });
+      expect(r.outcome).toBe("refused");
+      expect(r.notes.join("\n")).toMatch(/inside/);
+      expect(existsSync(join(home, tree, "backups"))).toBe(false);
+      expect(hashTree(join(home, tree.split("/")[0]!))).toEqual(before);
+    });
+  }
+
+  it("allows a root inside artifacts/ when artifacts are not backed up", async () => {
+    const inside = new FsRecoveryStore(join(home, "artifacts/backups"), { db, config: join(home, "config"), artifacts: join(home, "artifacts") });
+    const r = await backup({ clock }, inside, { withArtifacts: false, keep: 14 });
+    expect(r.outcome).toBe("ok");
+  });
+});
+
 describe("jr restore", () => {
   it("round trip into an isolated directory preserves facts, history, candidate files and generation identity", async () => {
     const b = await run();
@@ -144,6 +268,40 @@ describe("jr restore", () => {
     const b = await run();
     const r = await restore(store, { set: b.value.dir!.split("/").pop()!, to: join(base, "by-name"), ...live() });
     expect(r.outcome).toBe("ok");
+  });
+
+  it("never overwrites a file that appears in the destination after the emptiness check", async () => {
+    const b = await run();
+    const to = join(base, "raced");
+    class Racy extends FsRecoveryStore {
+      override destinationProblem(dest: string) {
+        const p = super.destinationProblem(dest);
+        mkdirSync(join(dest, "config/candidate"), { recursive: true });
+        writeFileSync(join(dest, "config/candidate/evidence.yaml"), "mine");
+        return p;
+      }
+    }
+    const racy = new Racy(backups(), null);
+    const r = await restore(racy, { set: b.value.dir!, to, ...live() });
+    expect(r.outcome).toBe("failed");
+    expect(r.notes.join("\n")).toMatch(/config\/candidate\/evidence\.yaml/);
+    expect(readFileSync(join(to, "config/candidate/evidence.yaml"), "utf8")).toBe("mine");
+  });
+
+  it("an unrelated file appearing after the check fails the restore and is left alone", async () => {
+    const b = await run();
+    const to = join(base, "raced2");
+    class Racy extends FsRecoveryStore {
+      override destinationProblem(dest: string) {
+        const p = super.destinationProblem(dest);
+        mkdirSync(dest, { recursive: true });
+        writeFileSync(join(dest, "other.txt"), "mine");
+        return p;
+      }
+    }
+    const r = await restore(new Racy(backups(), null), { set: b.value.dir!, to, ...live() });
+    expect(r.outcome).toBe("failed");
+    expect(readFileSync(join(to, "other.txt"), "utf8")).toBe("mine");
   });
 
   it("refuses a non-empty destination and leaves it untouched", async () => {

@@ -14,7 +14,7 @@ export interface BackupResult {
 /**
  * `jr backup`: one complete, verified recovery set, then retention. A set
  * that fails verification is reported and never counted; retention only
- * prunes verified sets and never the newest one.
+ * prunes verified sets and never the one this run just wrote.
  */
 export async function backup(
   ctx: Pick<AppContext, "clock">,
@@ -24,6 +24,8 @@ export async function backup(
   const at = ctx.clock.now();
   const name = setName(at);
   const empty: BackupResult = { dir: null, files: 0, bytes: 0, pruned: [], leftovers: [] };
+  const refusal = store.stagingProblem({ withArtifacts: opts.withArtifacts });
+  if (refusal) return refused(empty, [refusal]);
   let dir: string;
   try {
     const staged = await store.stage(name, { withArtifacts: opts.withArtifacts });
@@ -48,7 +50,7 @@ export async function backup(
     `Not included: ${m.excluded.map((e) => e.path).join(", ")} (reasons in manifest.json)`,
   ];
 
-  const plan = planRetention(store.list(), opts.keep);
+  const plan = planRetention(store.list(), opts.keep, dir.slice(dir.lastIndexOf("/") + 1));
   for (const old of plan.prune) {
     store.remove(old);
     notes.push(`pruned ${old}`);
@@ -94,7 +96,13 @@ export async function restore(
   if (before.problems.length > 0) return refused(value, [`${src} does not match its manifest, so it was not restored:`, ...before.problems.map((p) => `  ${p}`)]);
   const m = before.manifest;
 
-  const after = compareHashes(m.files, store.copyOut(src, m, to));
+  let copied;
+  try {
+    copied = store.copyOut(src, m, to);
+  } catch (err) {
+    return { outcome: "failed", value, notes: [`Restore into ${to} stopped: ${err instanceof Error ? err.message : String(err)}`, `Nothing already in ${to} was overwritten; what was copied is incomplete, so delete it (after checking your own files) before trying again.`] };
+  }
+  const after = compareHashes(m.files, copied);
   if (after.length > 0) return { outcome: "failed", value, notes: [`The copy in ${to} does not match the manifest:`, ...after.map((p) => `  ${p}`), `${to} is incomplete; delete it before trying again.`] };
 
   const db = store.probeDatabase(`${to}/${DB_PATH}`);

@@ -142,18 +142,21 @@ export interface RetentionPlan {
 }
 
 /**
- * Keep the newest `keep` verified sets (at least one: the newest verified set
- * is never pruned, whatever `--keep` says). Only verified sets are counted or
- * pruned; partial, unverified and manifest-less directories are reported and
- * left for a human to delete.
+ * Keep `keep` verified sets (at least one). `protect`, the set the current
+ * run just wrote, is always kept and counted first, so a clock that went
+ * backwards can never prune it; the rest of the quota goes to the newest
+ * other verified sets. Without `protect` the newest verified set is never
+ * pruned. Only verified sets are counted or pruned; partial, unverified and
+ * manifest-less directories are reported and left for a human to delete.
  */
-export function planRetention(sets: readonly SetListing[], keep: number): RetentionPlan {
+export function planRetention(sets: readonly SetListing[], keep: number, protect?: string): RetentionPlan {
   const verified = sets.filter((s) => s.state === "verified").map((s) => s.name).sort();
   const n = Math.max(1, Math.floor(keep));
-  const cut = Math.max(0, verified.length - n);
+  const kept = new Set(protect !== undefined && verified.includes(protect) ? [protect] : []);
+  for (const name of [...verified].reverse()) if (kept.size < n) kept.add(name);
   return {
-    prune: verified.slice(0, cut),
-    keptVerified: verified.slice(cut),
+    prune: verified.filter((v) => !kept.has(v)),
+    keptVerified: verified.filter((v) => kept.has(v)),
     leftovers: sets.filter((s) => s.state !== "verified").sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
