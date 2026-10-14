@@ -112,7 +112,7 @@ collapsed → 815 pass hard filters → 40 analyzed → 2 Priority A, 5 Priority
 **Never update those numbers by estimating.** If a source was added or a filter changed, the
 counts are stale. Either:
 
-- Run `npm run radar` and use the real output, or
+- Run `npm run daily -- --no-sweep` (or `jr evaluate`) and use the real output, or
 - Leave the numbers and note the run date they came from
 
 Fabricating a plausible funnel number is the same category of error as fabricating resume
@@ -127,7 +127,7 @@ Also check the README for:
 ### `CLAUDE.md` — the rules
 
 Update only when the change altered a **mechanism** a rule depends on: a new determinism
-boundary, a new refusal in `autofill`, a new cost-control mechanism, a new source-adapter
+boundary, a new refusal in `jr fill`, a new cost-control mechanism, a new source-adapter
 requirement.
 
 Do **not** relax a rule to match code that violated it. If the code contradicts `CLAUDE.md`,

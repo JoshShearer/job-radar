@@ -1,744 +1,147 @@
 # Job Radar
 
-A local-first job intelligence pipeline. It discovers, normalizes, deduplicates, filters, scores, analyzes, ranks, and tracks senior engineering opportunities so that the scarce resource — attention — goes to the roles where you have a real advantage.
+A local-first job search assistant. It sweeps public job boards, ranks postings deterministically, spends money on model judgement only for the best-ranked few, prepares honest application material from your own evidence, fills forms in an ordinary browser, and reads application mail. It never submits, never sends, and never claims anything about you that your evidence does not.
 
-It is deliberately **not** a mass-application bot. Every application, message, and compensation number goes through a human. The system's job is to make sure the human is looking at the right ten roles instead of the wrong two hundred.
-
-The optimization target is **qualified conversations per week**, not applications per day.
-
----
-
-## What it does
-
-```
-DISCOVER → NORMALIZE → DEDUPE → FILTER → SCORE → RESEARCH → RANK → RECOMMEND
-                                                                        ↓
-                                        TRACK OUTCOME ← PREPARE MATERIAL
-                                              ↓
-                                        LEARN FROM RESULTS
-```
-
-On a real run against the shipped config: **5,792 postings fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → 2 Priority A, 5 Priority B.**
-
-A single-digit actionable slate out of five and a half thousand postings is the intended output. If the briefing is long, the filters are too loose.
-
----
+Version 2 is a ground-up rebuild. `docs/ARCHITECTURE_AUDIT_2026-10-13.md` explains why version 1 (tag `v1-final`) was replaced and what this design fixes; `docs/archive/v1/` keeps its design history. **Upgrading an existing v1 checkout: follow `MIGRATING.md` before you pull.**
 
 ## Quick start
 
 ```bash
 npm install
-cp .env.example .env          # add ANTHROPIC_API_KEY for the analysis stage
-npm run cli -- sources        # health-check every configured job board
-npm run radar                 # ingest + score + write today's briefing
+npx playwright install chromium      # form filling, PDFs, and the refusal tests
+cp .env.example .env                 # ANTHROPIC_API_KEY, optional Gmail read-only credentials
+npm run cli -- init                  # creates config/ from config.example/ (never overwrites)
+npm run cli -- check                 # validates every config file and the evidence ledger
+npm run cli -- sweep                 # fetch the configured boards
+npm run cli -- evaluate              # rank everything (free, deterministic)
+npm run cli -- top                   # the ranked list
+npm run daily                        # sweep + evaluate + briefing (reports/latest.html)
 ```
 
-`npm run radar` is the daily driver.
-
-The pipeline runs end to end **without an API key**. Only the `analyze` stage calls Claude; everything else — ingestion, dedupe, filtering, scoring, ranking, reporting, tracking — is deterministic and free.
-
----
-
-## Where the report goes
-
-Each run writes five files into `reports/` and prints the briefing to your terminal:
-
-| File | What it is |
-|---|---|
-| `reports/latest.html` | **The landing page.** Dashboard: funnel, conversion, trend, what is in flight. |
-| `reports/latest-briefing.html` | Today's slate. What to look at now. |
-| `reports/latest.md` | The briefing as Markdown, good for grep, diffing, pasting. |
-| `reports/YYYY-MM-DD.html` | Dated briefing archive, so you can compare weeks. |
-| `reports/YYYY-MM-DD.md` | Dated archive. |
+Coming from version 1: see `MIGRATING.md`. In short, copy `config/` and `data/` aside into `legacy-v1/` *before* pulling, then:
 
 ```bash
-npm run cli -- open             # the dashboard
-npm run cli -- open --briefing  # today's slate instead
-npm run cli -- open --md        # prints the briefing Markdown path
-npm run cli -- dashboard        # rebuild just the dashboard (no network, no cost)
-npm run serve                   # local server; the dashboard is at /
-npm run dev                     # the same server, rebuilding as you edit
+npm run cli -- import-legacy --db legacy-v1/data/job-radar.sqlite --old-root legacy-v1
+npm run cli -- evaluate && npm run cli -- sweep && npm run cli -- evaluate
 ```
 
-`npm run dev` is `serve --watch`: it polls the source directories the dashboard reads from and regenerates the page when one changes, about 600ms per rebuild. The browser re-requests every 2 seconds (`--reload-seconds 0` turns that off, or set your own interval).
+This converts `career-profile.yaml` and `sources.yaml` into the split config, copies `resume.yaml` as the evidence ledger and `personal.yaml` as is, and replays the old database's history as events at their original times. It never modifies the old database. Imported assessments are kept but never count as current; until enough new ones exist they still calibrate the ranking.
 
-That auto-refresh is an HTTP `Refresh` **header**, not a `<meta>` tag or a live-reload script, and that is deliberate: the generated pages promise to be self-contained and script-free, so a development convenience must not be able to alter the artifact. The served bytes stay identical to the file on disk, and there is a test asserting it.
+## What changed, and why
 
-Watch mode rebuilds the **dashboard** only. The briefing goes through `daily`, which re-scores the whole index and takes around ten seconds; the dashboard is a pure database read and takes about one.
+| Old design | Rebuild |
+|---|---|
+| One ~70-column `jobs` row: observations, scores, model output and decisions overwritten in place | **Facts are append-only** (posting versions, sweeps, events, model calls, mail). Expensive results are **memoized by the hash of their exact inputs**. The ranking is a **read model** rebuilt whole |
+| Eight overlapping "is this still current?" schemes | **One**: a model answer's address is the hash of exactly what the model was shown. "Current" means "the answer to the request we would make now". Staleness needs no code |
+| `fit_score` meant raw, projected, or analyst depending on another column | Raw keyword, calibrated projection and analyst scores are **separate fields** |
+| One `status` column mixed posting state, pursuit and outcome | **Three machines**: posting lifecycle (derived from sweeps), pursuit (your decisions), application (what employers did). State is a **fold over events in the order they happened** |
+| Candidate facts hardcoded in a TypeScript prompt, plus three config files | **One evidence ledger** (`config/candidate/evidence.yaml`). Every prompt is rendered from it |
+| Resume rewrites checked against a ~55-term deny-list; cover letters and form answers unchecked | **Allowlist verifier on all outbound text**: numbers (including spelled-out), technologies, scope, qualifiers and names must trace to the cited claims. Headline and summary are chosen from your own variants, never written |
+| Per-run spend ceiling checked after the fact; two ledgers | **One gateway** reserves the worst case against run, day and month budgets *before* each call, and receipts every attempt in one ledger |
+| Workflows and gates lived in a 2,400-line CLI | **Use cases** own their ordering and gates; the CLI and web UI are thin adapters |
+| GHOSTED written automatically while mail was never read | Silence is a **suggestion**, and only when mail coverage spans it; otherwise the funnel says "unobserved" |
+| Wall clock read in 33 places; tests went red on a calendar date | **Injected clock** everywhere in domain and app (enforced by a test) |
 
-The two answer different questions, which is why they are two pages: the briefing says *what should I look at today*, the dashboard says *is this working, and where is it stalling*. `open` never falls back from one to the other, because silently answering the question you did not ask is worse than an error.
-
-**There is still no web application.** Both pages are generated files. `serve` is a read-only static server over `reports/`: the dashboard at `/`, today's slate at `/latest-briefing.html`, and past briefings at `/archive`. It binds to **127.0.0.1 only**, never `0.0.0.0`, so nothing on your network can reach it, and it refuses to serve anything outside the reports directory (the SQLite database is not reachable at any path). Nothing on either page changes anything; the CLI does that. The interactive version, with status changes from the browser, is still a Phase 3 item; see `TODO.md`.
-
-The HTML is **fully self-contained** — no CDN, no remote fonts, no JavaScript, no network requests of any kind. It works offline, and opening it tells nobody what you are looking at. It respects your system light/dark setting and reads fine on a phone. Application links are clickable; compensation bands are colour-coded.
-
-On the dashboard, **no conversion rate is ever shown without the sample it came from**: `100% (n=1)` is rendered that way and never as `100%`, an empty stage reads `n/a` rather than `0%`, and a rate that is real but rounds down reads `<1%` rather than `0%`. Below 15 applications there is no trend chart at all, just a line saying how far off that is. A picture is the most persuasive thing on a page, and one drawn through two points is a claim the data cannot support.
-
-`reports/` is gitignored — the briefing contains your job search.
-
----
-
-## Architecture
-
-See the [C4 architecture map](docs/C4_MAP.md) for system context, containers, modules,
-and runtime flows, and the [2026-09-25 architectural review](docs/ARCHITECTURE_REVIEW_2026-09-25.md)
-for implementation-backed findings and prioritized recommendations.
-
-The [architecture implementation plan](docs/ARCHITECTURE_IMPLEMENTATION_PLAN.md)
-breaks the review into dependency-aware tasks with links to the published Linear issues.
+## Layout
 
 ```
 src/
-├── cli.ts                 Command surface (commander)
-├── config/
-│   ├── schema.ts          Zod schemas for both YAML config files
-│   ├── load.ts            Loading, caching, cross-field coherence checks
-│   └── env.ts             .env loading (real env vars win)
-├── sources/               One adapter per provider; all emit the same SourceJob
-│   ├── types.ts           SourceJob contract + shared date/interval helpers
-│   ├── greenhouse.ts      Public board API
-│   ├── lever.ts           Public postings API
-│   ├── ashby.ts           Public posting API (structured compensation)
-│   ├── remoteok.ts        Public JSON feed (attribution required)
-│   └── registry.ts        Config → active adapter list
-├── pipeline/
-│   ├── normalize.ts       SourceJob → NormalizedJob; all classification lives here
-│   ├── dedupe.ts          Exact → content-hash → bounded fuzzy matching
-│   ├── filters.ts         Hard filters (reject on evidence, never on absence)
-│   ├── score.ts           Explainable fit + Application ROI + reconciliation
-│   ├── calibration.ts     Measures and corrects the keyword engine's bias
-│   ├── ingest.ts          Orchestrates discover → normalize → dedupe → persist
-│   └── rescore.ts         Two-pass: score + calibrate, then reconcile/project
-├── analysis/
-│   ├── schema.ts          JSON Schema for structured output
-│   ├── prompt.ts          Cached system prefix + per-job turn
-│   └── analyzer.ts        Claude call, validation, caching, cost accounting
-├── report/
-│   ├── daily.ts           The daily briefing (Markdown)
-│   └── html.ts            Self-contained HTML rendering
-├── stats/funnel.ts        Conversion rates + bottleneck diagnosis
-├── db/                    SQLite schema, migrations, repository
-├── model/                 Job + status types, analysis contract
-└── lib/                   html, salary, location, seniority, http, hash, log
+  kernel/      clock, hashing, use-case results
+  domain/      pure rules: text parsing, catalog, evaluation, candidate, materials, pursuit, outcomes, browser policy, budgets, prompts
+  ports/       interfaces and records the app depends on (store, transport, model, mailbox, browser, pdf, artifacts)
+  app/         use cases: sweep, evaluate, assess, tailor, prepare, approve, fill, mail, pursuit, briefing, spend, legacy import
+  adapters/    SQLite, HTTP transport, ATS boards, Anthropic, Gmail/.eml, Playwright, filesystem, legacy reader
+  ui/          CLI, local web UI, report rendering, the composition root
+config.example/  search/strategy, candidate/preferences, policy/evaluation, operations, sources, candidate examples
 ```
 
-**The design rule that matters most:** adapters are dumb. They map a provider payload onto `SourceJob` and do no judgement. Every classification — remote status, seniority, salary, employment type — happens once, in `normalize.ts`, so a Greenhouse job and a Remote OK job describing the same role are treated identically.
-
----
-
-## Installation
-
-Requires Node 20+ (developed on 24). Works with npm or pnpm.
-
-```bash
-git clone <your-fork> job-radar
-cd job-radar
-npm install          # or: pnpm install
-cp .env.example .env
-```
-
-`better-sqlite3` compiles a native module on install; if that fails you need build tools (`build-essential` on Debian/Ubuntu).
-
-> **pnpm users:** pnpm blocks dependency build scripts by default, so `pnpm install` will appear to succeed while leaving the project broken — every command then dies with `Could not locate the bindings file`. `pnpm-workspace.yaml` is committed with the two approvals that matter:
->
-> ```yaml
-> allowBuilds:
->   better-sqlite3: true   # compiles the native SQLite binding
->   esbuild: true          # backs tsx and vitest
-> ```
->
-> If you hit that error anyway, check those are still `true` and re-run `pnpm install`.
-
----
+Dependency direction is enforced by `tests/architecture.test.ts`. Domain imports only domain, kernel and zod. App imports only app, ports, domain and kernel. Adapters never import app or ui.
 
 ## Configuration
 
-### `config/career-profile.yaml`
+| File | Owner | Holds |
+|---|---|---|
+| `search/strategy.yaml` | your search | lanes, signals, combos, title and description exclusions |
+| `candidate/preferences.yaml` | you | compensation bands, location rules, notes for the analyst |
+| `candidate/evidence.yaml` | you | **every claim about you**, with ids, skills and `verified` |
+| `candidate/personal.yaml` | you | form-filling facts; `null` means unknown, never a default |
+| `policy/evaluation.yaml` | tuning | scoring weights, priority bands, routing, selection caps, lifecycle |
+| `operations.yaml` | operations | budgets, model choices, mail, transport |
+| `sources.yaml` | your search | boards and watchlist |
 
-Everything about *you* lives here. Change your search strategy without touching application code.
+Every file is strict: an unknown key is an error, and cross-file coherence (lane weights, ordered bands, known lanes) is checked on load. The transport refuses a delay below 500 ms in config *and* in code.
 
-| Section | Controls |
-|---|---|
-| `compensation` | Target/acceptable/stretch bands, hard floor, contract fallback |
-| `location` | Remote/hybrid/onsite rules, acceptable metros, work-auth blockers |
-| `lanes` | The four role families and how much of the slate each should win |
-| `seniority` | Which titles are accepted and which are rejected outright |
-| `target_titles` | Title phrases that earn a bonus, per lane |
-| `signals` | Keyword → points → lane. The core of scoring |
-| `combos` | **Combination bonuses — the differentiation engine** |
-| `negative_signals` | Technologies that subtract points (but never reject) |
-| `hard_exclude_titles` | Wrong specialty or wrong function → reject |
-| `scoring` / `roi` | Weights, thresholds, normalization |
-| `report` | Caps on how many roles reach the daily briefing |
-
-The file is validated on load. Beyond per-field types, `load.ts` runs **cross-field coherence checks**: lane weights must sum to ~1.0, ROI weights must sum to ~1.0, compensation bands must be ordered correctly, and every signal must reference a lane that exists. A typo that would silently disable a filter fails loudly at startup instead.
-
-### `config/sources.yaml`
-
-**104 verified boards** across Greenhouse, Lever, Ashby, and Remote OK. Every token was confirmed live (HTTP 200, non-empty job list) before shipping. Re-check any time with `npm run cli -- sources`.
-
-The list is grouped by which lane each company serves, and is **deliberately weighted toward smaller companies**. The first version was seeded with recognizable names — Stripe, Databricks, Pinterest, Coinbase — and produced exactly one Priority A out of 5,000 postings, with the analyses repeating the same verdict: *"none of his real edge is valued or even mentioned here."* At a large company hiring a generic senior engineer, technical SEO, IoT, and WebGL depth count for nothing and you compete on level and scale alone.
-
-So the list now leads with headless CMS vendors (Sanity, Storyblok, Contentful, Prismic), SEO platforms (BrightEdge, Conductor, Similarweb), content and publishing tools, marketplaces, proptech and smart-building (Orchard, SmartRent, Latch, Roofstock), industrial IoT (Tulip, Augury, Samsara), and small AI-product companies (LangChain, Modal, Baseten, Browserbase, E2B). Large employers are still included for coverage; the competition proxy down-ranks them automatically.
-
-Companies with no public ATS endpoint go in `watchlist` — Payload, Ahrefs, Semrush, Botify, Statsig — surfaced as research reminders rather than scraped.
-
-**Adding companies is the highest-leverage tuning move in the system**, so it has a command:
-
-```bash
-$ npm run cli -- discover "Back Market" Gusto Ahrefs
-
-  HAVE  Back Market              ashby:backmarket (16 jobs)
-  NEW   Gusto                    greenhouse:gusto (91 jobs)
-  --    Ahrefs                   no public board (tried: ahrefs)
-
-Add these to config/sources.yaml under the matching ATS, then run `ingest`:
-
-  # -- greenhouse --
-      - { token: gusto, company: Gusto }
-
-No public ATS endpoint for: Ahrefs. Add them to `watchlist` and approach a human instead.
-```
-
-It derives plausible board tokens from the name (handling multi-word names, domains, and corporate suffixes), probes the three public APIs, skips companies already in your config, and prints a pasteable line. A board that exists but lists no jobs counts as *not found* — it is useless as a source.
-
-### Environment variables
-
-| Variable | Purpose |
-|---|---|
-| `ANTHROPIC_API_KEY` | Required only for `analyze` |
-| `JOB_RADAR_MODEL` | Analysis model (default `claude-opus-5`) |
-| `JOB_RADAR_EFFORT` | Reasoning effort: `low`…`max` (default `medium`) |
-| `JOB_RADAR_DB` | Database path override |
-| `JOB_RADAR_PROFILE` / `JOB_RADAR_SOURCES` | Config path overrides |
-| `JOB_RADAR_REPORTS` | Report output directory |
-| `JOB_RADAR_CONTACT` | Appended to the outbound User-Agent so source operators can reach you |
-| `JOB_RADAR_GMAIL_CLIENT_ID` | Gmail OAuth client, for `inbox`. Scope `gmail.readonly` |
-| `JOB_RADAR_GMAIL_CLIENT_SECRET` | Gmail OAuth client secret |
-| `JOB_RADAR_GMAIL_REFRESH_TOKEN` | Gmail refresh token. Read-only; nothing is ever sent |
-
----
+`candidate/evidence.yaml` accepts the old `resume.yaml` shape (`bullets`, a single `headline`/`summary`). Prefer `claims` and several `headlines` / `summaries` variants: tailoring selects among them and never writes one. A claim's `scope` (`led`, `owned`, `built`, `contributed`, `used`) is derived from its wording unless set explicitly.
 
 ## Commands
 
-```bash
-npm run cli -- ingest                      # fetch, normalize, dedupe, store
-npm run cli -- inbox                       # read application mail, report status changes
-npm run cli -- inbox --apply               # ...and record them
-npm run cli -- inbox-review                # mail that was ambiguous or unmatched
-npm run cli -- ingest --source ashby lever # restrict to specific sources
-npm run cli -- score                       # re-filter and re-score everything
-npm run cli -- analyze --limit 10          # Claude analysis on the top unanalyzed jobs
-npm run cli -- analyze --dry-run           # show what would be analyzed, no API calls
-npm run cli -- analyze --slate             # triage the whole eligible slate, not the top N
-npm run cli -- benchmark-triage --mode routing --limit 45 --yes   # can triage decide who earns a dossier?
-npm run cli -- daily                       # ingest + score + briefing  (= npm run radar)
-npm run cli -- daily --no-ingest           # re-report on stored data
-npm run cli -- daily --analyze             # full pass including the LLM stage
-npm run cli -- top --limit 20              # ranked table
-npm run cli -- top --all --lane growth_seo # include reviewed jobs, filter by lane
-npm run cli -- show <job-id>               # full detail (id or unique prefix)
-npm run cli -- resume import cv.txt        # structure an existing resume into the master
-npm run cli -- resume init                 # scaffold a master from career-profile
-npm run cli -- resume lint                 # check the master before trusting it
-npm run cli -- resume match <job-id>       # deterministic requirement overlap, no API call
-npm run cli -- resume tailor <job-id>      # job-specific resume + PDF, selected from the master
-npm run cli -- resume tailor <job-id> --override  # prepare anyway when the analyst said skip
-npm run cli -- apply <job-id> --open       # prepare an application pack (never submits)
-npm run cli -- autofill <job-id>           # fill the real form in a browser (never submits)
-npm run cli -- autofill <job-id> --headless # dry run: report what it would fill, no window
-npm run cli -- status <job-id> APPLIED     # move a job through the funnel
-npm run cli -- status "Acme" SCREEN        # a company name works when it is unambiguous
-npm run cli -- inflight                    # everything live, with the command to move each one
-npm run cli -- inflight --stale            # only the ones that have gone quiet
-npm run cli -- stats                       # conversion rates + bottleneck diagnosis
-npm run cli -- sources                     # health-check every board
-npm run cli -- open                        # open the dashboard
-npm run cli -- open --briefing             # open today's slate instead
-npm run cli -- dashboard                   # rebuild the dashboard from the database
-npm run cli -- migrate                     # back up, drop dead columns, vacuum (destructive)
-npm run serve                              # local briefing archive (127.0.0.1 only)
-npm run dev                                # the same server, rebuilding as you edit
-npm run cli -- discover "Back Market" Ramp # find a company's ATS board, print the config line
-npm run cli -- calibrate                   # how far the keyword engine drifts from the analysis
-npm run cli -- interview add --company X --role Y --stage Technical
-npm run cli -- interview list
-npm run cli -- backup                      # checkpoint + copy the SQLite file
-npm test                                   # 489 tests (launches Chromium)
+```
+jr init | check
+jr sweep [--source greenhouse lever]      jr evaluate      jr assess [--limit n] [--slate] [--dry-run] [--max-spend usd]
+jr daily [--no-sweep] [--mail] [--assess]  jr report        jr top [--all] [--closed] [--lane x]   jr show <id|prefix|company>
+jr pursue <id> reviewed|shortlisted|preparing|skipped       jr submitted <id> [--at iso]
+jr outcome <app> contacted|screen|interview|final|offer|rejected|withdrawn|ghosted [--at iso]
+jr void pursuit|application <event-id> --reason "..."       jr apps [--events]
+jr evidence import <file> | lint | match <id> | brief
+jr tailor <id> [--override] [--force]     jr render <id>   jr prepare <id> [--full]   jr approve <id>
+jr fill <id> [--headless]                 jr mail scan [--dry-run] | review
+jr stats | spend | failures | sources | discover <companies...>
+jr benchmark-triage [--mode routing|verdict] [--limit n] [--yes]
+jr serve [--port 4180]                    jr backup [--keep 14] [--with-artifacts]
+jr import-legacy --db <file> [--old-root <dir>]       jr interview add <app> --stage x | list
 ```
 
-Job IDs accept unique prefixes: `show 5cc58b` works as well as the full id.
+`npm run cli -- <command>` runs the same thing without a global install.
 
----
+## Spending
 
-## How scoring works
+Only `assess`, `tailor`, `prepare`, `evidence import` and `benchmark-triage` call a model, and all of them go through `src/app/gateway.ts`:
 
-Two numbers come out, and they answer **different questions**:
+1. **Same request, same answer.** A request is addressed by the hash of its exact prompt, model and effort. Prompts contain nothing volatile: no calibrated scores, no "posted N days ago", no URLs. So an unchanged posting is never re-bought, however much time passes.
+2. **Reserve before calling.** The worst case (prompt size plus the configured `max_output_tokens`) is reserved against the run, day and month budgets in one database transaction. A call that could cross a ceiling is refused *before* it is made.
+3. **Receipt for everything.** Refusals, truncations, invalid JSON, schema failures and API errors are all receipted. A call without a usage block counts at its reserved worst case, never as zero.
+4. **One schema.** The JSON Schema sent to the API is generated from the Zod schema the response is validated against.
 
-**`fitScore` (0–100)** — "how well does this role match what I can actually do?" Honest match quality. Lane priorities are deliberately *not* applied, so a great proptech role still reads as a great role.
+Selection for assessment is by **rank**, spread across companies with per-company caps, and never gated on an absolute keyword score. Two-stage routing (a cheap triage verdict, then a dossier only when earned) is deterministic and configured in `policy/evaluation.yaml`.
 
-**`applicationRoi` (0–100)** — "is this worth my time this week?" This folds in lane priority, applicant competition, compensation probability, recency, and how reachable a human is.
+`jr tailor` and `jr prepare` reuse their plan unless the **posting** changed materially. An evidence edit re-composes and re-verifies the saved plan for free, so a stale plan can miss a new claim but can never assert a removed one. `--force` re-plans on purpose. Generations are immutable directories under `artifacts/`; an older one that may already have been sent is never overwritten.
 
-That separation is the point. A 95% match at a famous company with 5,000 applicants **should** rank below an 88% match at a 40-person company where your background is unusual — and here it does.
+## Outbound text
 
-### The pipeline
+Every sentence of a cover letter, form answer or outreach draft is a separate item citing claim ids, and `src/domain/materials/verify.ts` checks each one:
 
-1. **Positive signals** — each keyword scores its weight, doubled when it appears in the title. Title and body hits take the *stronger* placement rather than summing, so repetition doesn't inflate a score.
-2. **Title match bonus** — the title matching a target role family earns a flat bonus, once per lane.
-3. **Combination bonuses** — the differentiation engine. `Payload CMS + Next.js`, `technical SEO + TypeScript`, `React + Three.js + proptech`, `IoT + web platform`. These are where an unusual advantage actually lives, and they are weighted accordingly.
-4. **Negative signals** — subtract points, doubled in the title. A technology in the title *is* the job; the same word in the body is usually an adjacent team.
-5. **Freshness** — decays linearly from full points to zero between the configured day thresholds.
-6. **Normalize** — divide and clamp to 0–100.
+- **numbers**, in digits or words ("two hundred", "40%", "3x"), must appear in the cited claims;
+- **technologies** (a lexicon, your declared skills, and anything technology-shaped) must appear in the cited claims or be tagged on them;
+- **scope** may not exceed the cited claims' (`contributed` never becomes `led`);
+- **qualifiers** (leadership, team size, org-wide, scale, open source, migration, speaking, seniority titles, revenue impact, awards) must be present in the evidence;
+- **names** must appear in the evidence or be the target company or role.
 
-### Competition proxy
+A resume rewrite that fails reverts to your own wording. A pack sentence that fails is removed and listed in `pack-review.md`. A form answer with any failed sentence is not used at all. Uncited sentences may only frame the application. `fill` uses a pack's answers and cover letter only after you `jr approve` that generation.
 
-Company size is approximated by **how many open roles that company has in your own index** — a company with 600 listings is a large employer with heavy inbound applicant flow; one with 12 is not. It's imperfect, but it's real data already on hand, which beats guessing at headcount. Posting age reduces the score further, because applicants accumulate over time.
+## Form filling
 
-### Explainability
+`jr fill` opens an ordinary, undisguised Chromium, fills what the rules can, and hands you the window. It never submits, never ticks a checkbox, never affirms an attestation, and never answers a demographic question. A value unset in `personal.yaml` is left blank and reported. An active bot challenge stops the run. When you close the window it offers to save answers you typed by hand, then asks whether *you* submitted. Only your "yes" records an application.
 
-Scoring never emits a bare number. Every job carries the reasoning:
+## Mail
 
-```
-Fit = 79   Application ROI = 83   Lane: Senior Full-Stack / Platform
-
-Strong matches:
-  * COMBO: IoT + web platform - LoopString connects TypeScript cloud apps to Linux edge devices.
-  * COMBO: AI agents + product engineering - Agent architecture with human-in-the-loop design.
-  * Title matches target role "staff software engineer"
-  * ai agent
-  * typescript
-
-Weaknesses:
-  * Wants rust (no direct evidence in profile)
-
-Compensation: GREEN - Range top $213k reaches the stretch band.
-Competition proxy: 61/100 (262 open roles at this company in the index).
-```
-
----
-
-## Hard filters
-
-The governing principle: **reject on evidence, never on absence of evidence.**
-
-A missing salary, an unlabeled location, or an unfamiliar tool is *not* a rejection — those are handled by scoring, which down-ranks. Only things positively known to disqualify a role become filters:
-
-- Wrong specialty **named in the title** (iOS, embedded, Java, SAP…)
-- Wrong function named in the title (marketing manager, recruiter, PM…)
-- Below senior
-- Location unworkable — onsite/hybrid outside Austin, or remote scoped to a region you can't work in
-- Work authorization you can't satisfy (clearances)
-- Mandatory domain experience you don't have (ML research, PhD)
-- **Published** compensation below the hard floor
-- Internship / part-time
-
-The most important distinction in the whole system: **a technology in the TITLE is the core job; the same technology in the body is usually a nice-to-have.** Title exclusions reject. Body mentions only subtract points. Senior engineers learn tools; they do not change specialty.
-
-`UNKNOWN` compensation never rejects. Most small companies where you'd be differentiated don't publish a range, and treating silence as a negative systematically filters out the best lane.
-
----
-
-## Compensation model
-
-Salary parsing is deterministic and heavily tested — no LLM. The hard part isn't finding numbers, it's *not* finding the wrong ones: job descriptions are full of dollar figures that aren't compensation (`401(k)`, `$50B processed`, `$500 wellness stipend`, `10,000 customers`).
-
-The parser requires a compensation cue **nearer to the number than any anti-cue**, and rejects anything outside a plausible band for its detected period. Period detection picks the **nearest** cue rather than a fixed precedence — without that, every annual range that happens to mention an hourly contractor rate later in the paragraph gets mislabeled hourly.
-
-Bands, compared against annualized figures (hourly × 2080):
-
-| Band | Meaning |
-|---|---|
-| `GREEN` | Comfortably reaches the target |
-| `YELLOW` | Could plausibly reach it, or total package may compensate |
-| `RED` | Strong evidence it's below the acceptable range |
-| `UNKNOWN` | Insufficient information — **not a rejection** |
-
----
-
-## Claude analysis
-
-The only stage that costs money, so it's built around not spending it twice:
-
-- **Deterministic prefilters run first.** Only jobs that passed the hard filters are eligible, and `analyze` then takes the top K by rank. Selection is by rank rather than by an absolute score because the keyword engine ranks far better than it scores: its mean absolute error against the analyst is 26.6 points, and its hit rate is not monotonic between raw 40 and 75. Spend is bounded by `--limit` and `max_spend_per_run_usd`, which bound it directly.
-- **Content-addressed caching.** Analyses are keyed on a hash of description + title + company + model + profile. An unchanged job is never re-analyzed. Change the profile and the key changes, so re-analysis happens exactly when it should.
-- **Prompt caching.** The candidate profile is a stable system prefix marked `cache_control: ephemeral`, so the large invariant half of each request bills at cache-read rates after the first call.
-- **Truncated descriptions** to a fixed character budget.
-- **Structured output** via a hand-written JSON Schema, then re-validated with Zod before anything touches the database. Malformed output is rejected, not stored.
-
-If a job's description changes on a later ingest, its cached analysis and score are invalidated automatically.
-
-Output includes fit, ROI, lane, recommendation, strengths, risks, missing requirements (each labeled *mandatory domain* vs *learnable tool*), differentiation, compensation read, interview probability, competition estimate, and outreach target **titles** — never invented names.
-
-Measured on a real run of 28 jobs with `claude-opus-5` at `medium` effort: **100% prompt-cache hit rate, ~$0.048/job.** `analyze` reports uncached / cache-write / cache-read / output tokens separately and warns if the cache is never read, since caching is what makes analyzing a large slate affordable.
-
-**Two-tier analysis is on** as of 2026-09-09 (`analysis_detail.two_stage`). A cheap triage verdict runs first and only jobs that earn one get the full dossier, decided deterministically by `deservesDossier`. It was enabled on a routing benchmark — `benchmark-triage --mode routing --limit 45 --yes` — that measured **0 missed dossiers across 45 baselines**. Triage is a *router*, not a replacement: the verdict-accuracy bar still fails at 88.9% against 92%, so triage alone is not trusted to reach the final verdict.
-
-**The predicted cost saving has not yet appeared.** The first two-tier pass measured **$0.0474/job against a $0.0459/job single-stage baseline** — no reduction. Two of six jobs earned dossiers and those pay for both calls. Six jobs is a small sample, so this is not evidence the change is wrong; it is a reason not to record a projected saving as an achieved one until several daily passes have run.
-
-### The analysis overrules the keyword engine
-
-Where the two layers disagree, the analysis wins — `reconcileWithAnalysis` maps its recommendation onto priority and blends ROI 70/30 toward it.
-
-This is not deference for its own sake. Keyword matching structurally **cannot read level or scale**. A posting demanding "10+ years of large-scale distributed systems and 3+ years as an org-wide technical lead" contains every right technology word and is still a two-level mismatch. That exact case occurred on the first live run: the keyword engine scored it 96 and made it Priority A; the analysis scored it 33 and said skip.
-
-Hard-filter rejections still stand regardless. The analysis cannot make an onsite-in-Seattle role workable.
-
-### Calibration — the system corrects its own bias
-
-The deterministic layer runs optimistic, and the bias is measurable. `calibrate` fits it from every job that has both a keyword score and an analysis:
-
-```
-Calibrated on 29 analyzed jobs. The keyword engine over-scores fit by 20 points
-on average (25% high), so unanalyzed jobs are projected at 0.75x fit / 0.70x ROI
-to keep the ranking comparable.
-```
-
-Unanalyzed jobs are then shown at their **projected** score, so they sit in one honest ranking alongside analyzed ones instead of floating above them on an uncorrected number. Every job records how its score was reached:
-
-| `score_confidence` | Meaning |
-|---|---|
-| `analyzed` | An analysis backs it |
-| `projected` | Deterministic, scaled by the measured correction |
-| `raw` | Deterministic, uncorrected — not enough samples yet |
-
-Three deliberate constraints:
-
-- **It uses the median ratio, not the mean.** One role scored 8 against a keyword 60 would otherwise drag the whole correction down.
-- **It refuses to act below 8 samples**, the same anti-overfitting stance as the funnel diagnosis. It still reports what it measured.
-- **A projected job can never reach Priority A.** "Apply and contact a human today" should rest on an actual analysis, not on a statistical correction of a keyword count.
-
-Eligibility for analysis is gated on the **raw** score, not the projected one — otherwise a stronger correction would shrink the candidate pool every time it improved. The two numbers answer different questions: raw asks *"worth an API call?"*, projected asks *"where does this belong in the ranking?"*
-
----
-
-## The resume pipeline
-
-Nothing downstream is worth running without this. `apply` writes about your background and `autofill` uploads a file; both are only as good as the master resume they draw on.
-
-```bash
-npm run cli -- resume import ~/my-resume.txt    # or: resume init
-npm run cli -- resume lint
-npm run cli -- resume match b5b545ce17f3        # free, deterministic, no API call
-npm run cli -- resume tailor b5b545ce17f3
-```
-
-### The master resume
-
-`config/resume.yaml` (gitignored) holds every real bullet, each with a stable id, the skills it is **evidence for**, and a `verified` flag. `resume import` structures an existing resume into it: the model may split prose into bullets and tag skills, but may not add an employer, date, metric, or technology, and marks anything it had to guess as `verified: false`.
-
-Two fields carry the weight:
-
-- **`skills: [...]`** on a bullet means "this bullet proves I can do these things". An untagged bullet is invisible to tailoring, because nothing can match it to a requirement.
-- **`verified: false`** excludes a bullet from every generated resume, permanently, until you confirm it.
-
-### Provenance is enforced, not requested
-
-A tailored resume is a **selection**, not a composition. The model returns bullet ids and replacement strings; the document is assembled from master data here. Every plan is then checked:
-
-| Check | On failure |
-|---|---|
-| Cited bullet id exists in the master | citation dropped |
-| Cited bullet is `verified: true` | citation dropped |
-| Rewrite introduces no new technology | **reverted to your original wording** |
-| Rewrite introduces no new or inflated number | **reverted to your original wording** |
-| Skill group names only declared skills | undeclared skills dropped |
-
-Reverting is always available and always correct, so overreaching can only ever produce a *worse* resume, never a false one. "200+ experiments" cannot become "500+", and a bullet with no metric cannot acquire one.
-
-### Right technology, wrong scope
-
-`resume match` is deterministic and free, and it separates three states rather than two:
-
-- **covered** — a verified bullet evidences it
-- **partial** — you have the technology but not the scope being asked for
-- **gap** — nothing
-
-That middle state is the whole point. On the Vercel role, *"Have contributed to the Next.js or React open-source projects"* names two technologies you genuinely use, so naive keyword matching calls it covered. It is not: using a library is not contributing to it, and OSS contribution is on your do-not-claim list. Requirements asking for **leadership**, **open-source contribution**, **enterprise scale**, **migration work**, or **public speaking** must evidence that scope separately, and a stated years threshold is checked against your career span rather than against any single bullet.
-
-Applied to the Vercel posting, this moved required coverage from a flattering number to an honest **24%**, and reproduced the same do-not-claim list the paid analysis produced, for free.
-
-`resume tailor` writes `resume.md`, `resume.html`, `resume.pdf`, and `resume-match.md` into the job's folder. **`autofill` attaches that PDF automatically**, preferring it over anything generic in `resumes/`.
-
----
-
-## The verdict gate
-
-Both commands that spend — `resume tailor` and `apply` — read the standing analysis before
-calling a model, and stop on a posting the analyst did not endorse:
-
-```
-Vercel - DevRel Engineer, Agentic Infrastructure is not endorsed: the analyst said skip (fit 38).
-Its reasoning: The keyword engine scored this 57/60 on string matches for TypeScript, Next.js,
-Vercel and 'agentic', but it misread the role: this is Developer Relations,...
-
-Nothing was spent. If you disagree - and you may well be right:
-  npm run cli -- resume tailor 139d9f2720b7 --override
-```
-
-This exists because 22 of the first 43 applications were prepared against a standing `skip` or
-`network_or_watch` verdict. The tool had already formed the judgement, printed it in the
-briefing, and then sold the full package anyway without a word of friction.
-
-**It never hard-blocks.** The human outranks the analyst, and the reason for the gate is to
-make the disagreement visible at the moment money would be spent — not to overrule you.
-`--override` proceeds and records `overrodeVerdict` on the run, so the disagreement is
-deliberate and auditable. The reason line is the analyst's own words, truncated on a word
-boundary, never re-summarised.
-
-A job that has **not been analyzed** warns rather than refusing: there is no verdict to
-disagree with, and the only way to satisfy such a gate would be to spend on an analysis.
-
----
-
-## Preparing an application
-
-```bash
-npm run cli -- apply b5b545ce17f3 --open
-```
-
-Generates a complete package into `applications/<job-id>-<company>/` as Markdown and HTML: the positioning frame, which resume variant to start from and 3-5 strategic edits, a suggested summary rewrite, a cover note, draft answers to the form questions that role is likely to ask, outreach drafts, a compensation strategy (target / anchor / walk-away, and whether to ask for their range first), and interview prep built only from real history.
-
-Two sections make it worth reading before anything else:
-
-- **Decide these first** — the genuine tradeoffs only you can resolve. On the Vercel forward-deployed role that was travel (25-40% is a week a month, and it is a requirement rather than a preference), Professional Services versus product engineering, and whether a 216-day-old req is even live.
-- **Do NOT claim** — requirements in the posting you cannot evidence, stated explicitly so the boundary is not left implicit. Claiming one of these is the single unrecoverable mistake in a job search.
-
-**It prepares and never submits.** No form is filled, no message is sent, no request goes anywhere except to the model. Status advances to `APPLY`, the intent half of the pair, and never to `APPLIED`: recording an application that has not been submitted would put a phantom data point into the funnel, and the funnel is the thing that tells you what to fix. It advances only from `NEW`, `REVIEWED`, or `SAVED`, so preparing a fresh pack for a role already at `SCREEN` leaves it at `SCREEN`.
-
-`applications/` is gitignored.
-
----
-
-## Filling the actual form
-
-`apply` produces text. `autofill` puts it into the employer's form.
-
-```bash
-cp config/personal.example.yaml config/personal.yaml   # once; gitignored
-npm run cli -- autofill b5b545ce17f3
-```
-
-A real Chromium window opens on the posting, the form fills in front of you, and the run stops. **The submit button is never touched.** Headed is the default on purpose: watching it type is the review step. `--headless` is a dry run that reports what it would fill and then throws the filled page away.
-
-Every run writes `applications/<job-id>-<company>/autofill-report.md` plus a full-page screenshot, split into what was filled, what needs you, and what was deliberately left alone.
-
-**It learns the answers you type.** While the window is open the form is read back every couple of seconds. When you close it, anything you answered by hand that no rule could answer is offered for `personal.yaml`, and once saved, `decide()` checks that list before every built-in rule — so the same question fills itself on every application after this one. That is the whole economics of the tool: a free-text question should cost you one answer, not one per company.
-
-Nothing is written without your say-so, the file is copied aside first, and its comments survive. **Demographic questions and attestations are never captured**, whatever you typed into them: storing a disclosure you chose to make on one form would have the tool make it silently on the next, which is the refusal below turned inside out.
-
-**After you close the browser it asks one question:** whether you submitted the form yourself. Answering `y` records `APPLIED`; anything else records nothing: `n`, a blank line, walking away, a piped run with no terminal. It asks *after* the window closes because that is when you know the answer, and it never looks at the page to work it out: whether a form went through is a fact you own, and inferring it from a URL or a success-looking screen would be guessing at it. Nothing about this touches the submit button.
-
-### What it will not answer
-
-Three categories are refused by design, and the refusals are the point of the feature:
-
-| Category | Why |
-|---|---|
-| Demographic self-identification (gender, race, orientation, transgender, disability, veteran) | Yours to disclose or withhold. Never software's to answer. |
-| Attestations — "I acknowledge I have read…", "I confirm the above is accurate" | A statement that a human read something and stands behind it. |
-| Anything unset in `personal.yaml` | An unstated fact is not a default. See below. |
-
-Checkboxes are never ticked, for the same reason: on an application form they are almost always consent.
-
-### Unknown is not a default
-
-`work_eligibility` ships as `null`, not `false`. Answering "no sponsorship needed" for someone who needs it is a false statement on a job application, not a mis-ranking, so both questions stay blank and get flagged until you state them yourself. The same rule covers phone, city, and links: **nothing is invented to fill a gap.**
-
-`desired_salary` is empty by default too. The first number on the form anchors the whole negotiation, and the prepared pack's advice is usually to ask for their range first.
-
-When a dropdown can't be matched confidently, the report prints the options the form actually offered so you can paste the right one into `personal.yaml` and never see that question again. Two options that differ only in whether sponsorship is required will not be guessed between.
-
-### Bot protection
-
-An **active** challenge (Cloudflare interstitial, a reCAPTCHA challenge popup) stops the run. A **passive** widget — the invisible reCAPTCHA badge nearly every Greenhouse form embeds — does not, but is reported so you know it's there.
-
-Nothing is solved, scored, spoofed, or worked around. This drives an ordinary browser, does not disguise itself, and leaves submission to a human. If a site's bot scoring objects to that, fill the form by hand.
-
----
-
-## Status tracking and funnel analytics
-
-```
-NEW → REVIEWED → SAVED/APPLY → APPLIED → CONTACTED → SCREEN
-    → INTERVIEW → FINAL → OFFER
-    (or SKIPPED / REJECTED / WITHDRAWN / GHOSTED)
-```
-
-Two of those transitions happen without you typing anything: `apply` advances a job to `APPLY`, and `autofill` offers to record `APPLIED` after you close the browser. Neither ever moves a job backwards, and neither ever sets a terminal outcome.
-
-### Reading what the employer said
-
-`inbox` closes the loop the other way, from application mail:
-
-```bash
-npm run cli -- inbox                 # report what it would change, write nothing
-npm run cli -- inbox --apply         # record the status changes
-npm run cli -- inbox-review          # mail it refused to act on
-```
-
-It is **read-only on the mailbox.** The Gmail scope is `gmail.readonly`, the only verbs used against Gmail are `GET`, and there is no code path that sends, replies, labels, archives or deletes. This feature reads mail; it never writes any.
-
-Three refusals shape it:
-
-- **Ambiguity goes to review, never to a guess.** A rejection from a company where three applications are in flight identifies a *company*, not a job. Choosing the most recent would silently close two live applications, so it goes to `inbox-review` instead. Only an email that names one title outright resolves.
-- **Classification is deterministic.** Reading a rejection is parsing, not judgement, so it is phrase matching that can be audited when a status change looks wrong — never a model call. An email carrying two verdicts at once ("rejected for the Staff role, invited for the Senior role") is ambiguous by construction.
-- **`GHOSTED` is not parsed.** No email ever says you are being ghosted; it is the *absence* of mail. So it is a sweep over elapsed time in the daily pass, measured from the last contact rather than from the application, so a job mid-conversation is never ghosted for having been applied to a while ago.
-
-Without Gmail credentials, point `inbox.eml_dir` at a directory of `.eml` files (or pass `--eml <dir>`) to see exactly what the classifier would do to real mail before aiming it at a live mailbox.
-
-`SCREEN`, `REJECTED`, `GHOSTED` and the rest describe what an employer did. `inbox` records the ones an employer put in writing; anything it cannot read unambiguously is still yours to say.
-
-The rest is deliberately low-friction rather than automatic:
-
-```bash
-npm run cli -- inflight            # everything live, its age, and the command to move it
-npm run cli -- inflight --stale    # only what has gone quiet
-npm run cli -- status "Acme" SCREEN  # a company name resolves when it is unambiguous
-```
-
-An ambiguous company name is never resolved by picking one; the candidates are printed and the command stops. The daily briefing carries a **Needs an outcome** section listing anything past its expected response window, with the exact command per row; past 30 days of silence it says a role has probably been ghosted, and still waits for you to confirm it.
-
-`stats` computes conversion between adjacent funnel stages and diagnoses the bottleneck — but **refuses to diagnose below ~15 applications**, reporting a sample warning instead. Confident nonsense from four data points is worse than no diagnosis.
-
-Once there's volume, it distinguishes the failure modes that call for opposite responses:
-
-- 50 applications → 2 screens ⇒ targeting/positioning problem
-- 30 applications → 10 screens → 7 technicals → 4 finals → 0 offers ⇒ **stop optimizing the resume**; the problem is closing
-
-That second case is called out explicitly, because it's the most common misdiagnosis in a job search.
-
----
-
-## Running it on a schedule
-
-Fresh postings are the whole game, and ingest had only ever been run by hand — on four distinct days in total. `daily` already bundles backup-worthy work (ingest, score, optional analyze, the GHOSTED sweep, and the briefing); the only missing piece was a scheduler.
-
-```bash
-./deploy/install-timer.sh
-```
-
-That installs a **user** systemd timer — no privilege needed, and `systemctl --user status` rather than sudo when you want to know why last night's run failed.
-
-Three details in the unit that are load-bearing rather than boilerplate:
-
-- **The backup runs first, then the pass.** If a run corrupts something or a migration goes wrong, the copy taken moments earlier is the one you want. Backing up afterwards preserves the damage.
-- **`Persistent=true`.** Laptops are asleep at 07:15. Without it the run is silently skipped and the index quietly goes stale, which is the exact failure the schedule exists to prevent.
-- **`backup --keep 14`.** The database is 130MB (254MB before `migrate` dropped the unread `description_raw` column on 2026-09-09). A daily copy with no retention is several GB a month, on the same disk as the thing being protected.
-
-**The scheduled pass does not call the API.** `--analyze` is deliberately absent from the unit, so the schedule costs nothing: ingest, score, the GHOSTED sweep and the briefing are all free. To turn paid analysis on, add `-- --analyze` to the second `ExecStart` and `systemctl --user daemon-reload`. Spend is then bounded by `scoring.max_spend_per_run_usd`, checked *before* the call that would cross it, so an unattended run cannot cost more than that ceiling however many jobs arrived overnight — a ~$45/month worst case at the default $1.50.
-
-### Failures land where you already look
-
-An unattended schedule that silently stops is worse than no schedule: the briefing keeps arriving, built from an index nothing has refreshed, and looks exactly like a quiet week in the job market.
-
-So the briefing carries a **Scheduler** section whenever the last successful ingest is more than two days old, or any run failed in the last three:
-
-```
-### Scheduler
-
-- **Last successful ingest was 6 days ago.** Everything below is being chosen
-  from a stale index. Check `systemctl --user status job-radar-daily.timer`.
-- `analyze` failed 2026-08-20 05:02: Error: --max-spend expects a number, got "1.5O"
-```
-
-The journal has the detail (`journalctl --user -u job-radar-daily.service`); the briefing is what actually gets read.
-
-Lingering must be on for a user timer to fire while you are logged out — the installer checks and tells you if it is not.
-
----
-
-## Data retention
-
-Nothing overwrites history. The `jobs` row holds current state; `job_events` is append-only and records how it got there — `discovered`, `description_changed`, `salary_changed`, `status_changed`, `analyzed`. `job_sources` keeps **every** URL a canonical job was seen at, since syndication is the norm.
-
-That history is itself signal: a role whose salary quietly moved, or whose description was rewritten, tells you something about the company's hiring.
-
----
-
-## Deduplication
-
-Jobs are syndicated aggressively — the same opening appears on the company's Greenhouse board, on Remote OK, and on aggregators, each with a different id and a slightly different title. Three passes, cheapest first:
-
-1. **Exact key** — normalized company + normalized title + location bucket
-2. **Content hash** — identical description at the same company (a repost under a new title is still one opportunity)
-3. **Bounded fuzzy** — Jaccard token similarity ≥ 0.85 within the same company and location bucket
-
-Deliberately deterministic; an LLM is not involved and shouldn't be. Dedupe runs over every job on every ingest, must be reproducible, and a hash comparison is both cheaper and more correct than a judgement call.
-
-Level markers are preserved on purpose: `Engineer II` and `Engineer III` are different roles with different pay, and collapsing them would hide one.
-
----
-
-## Adding a job source
-
-1. Write an adapter in `src/sources/` implementing `JobSource`, emitting `SourceJob[]`.
-2. Catch your own errors and record them on `ctx.stats` — **one failing source must never abort a run.**
-3. Add a config block to `config/sources.yaml` and its schema entry in `src/config/schema.ts`.
-4. Register it in `src/sources/registry.ts`.
-5. Add a test in `tests/sources.test.ts` pinning the real payload shape.
-
-No other file changes. Normalization, dedupe, filtering, and scoring all operate on the shared shape.
-
----
-
-## Legal and ethical constraints
-
-These are load-bearing, not decoration:
-
-- **Only public, documented endpoints.** Greenhouse, Lever, and Ashby public board APIs; Remote OK's public JSON feed. No authentication is bypassed, no CAPTCHAs solved, no robots protections circumvented, no paywalls touched, no anti-bot systems defeated.
-- **Rate limiting is not optional.** `PoliteFetcher` serializes requests per host with a configurable delay, honors `Retry-After`, and backs off on 429/5xx. It cannot be configured to zero delay.
-- **Remote OK attribution is a condition of use.** Their API terms require a followed link back and naming them as the source. The generated report does this automatically. If you strip that attribution, disable the source in `config/sources.yaml` rather than quietly violating the terms.
-- **Never invent experience.** The analysis prompt forbids fabricating employers, metrics, technologies, or people's names, and forbids claiming to have inspected a company's site or codebase. Outreach targets are role titles only.
-
-If a company has no public feed, it goes in `watchlist` and gets researched by hand.
-
----
-
-## Backing up the database
-
-```bash
-npm run cli -- backup                 # → data/backups/job-radar-<timestamp>.sqlite
-npm run cli -- backup --out ~/Dropbox/job-radar
-```
-
-The command checkpoints the write-ahead log before copying, so the backup is complete rather than a torn snapshot. `data/` is gitignored — the database contains your application history and never belongs in the repo.
-
----
+`jr mail scan` reads application mail read-only (Gmail `gmail.readonly`, or a directory of `.eml` files) and records outcomes employers put in writing, at the email's own time. Windows are read with full pagination. The cursor advances only over windows read completely, so an outage or a large backlog is re-read rather than skipped. Ambiguous mail goes to `jr mail review`, never to a guess.
 
 ## Testing
 
 ```bash
-npm test          # 489 tests (launches Chromium; npm run test:unit for the fast loop)
+npm test            # everything, including real Chromium (~50s)
+npm run test:unit   # without the browser harness
 npm run typecheck
 ```
 
-Coverage is concentrated where correctness actually matters and bugs would be silent:
+The suite covers the ported parsers, the verifier's adversarial corpus, the state machines, the gateway's budget and receipt rules, the whole pipeline end to end against an in-memory database, mail pagination and outages, legacy import, the web UI's security, the CLI through its real `tsx` entry point, dependency direction, and the real-browser refusal harness.
 
-- **Salary parsing** — ranges, k-suffixes, hourly, annualization, and the false-positive cases (401k, revenue, stipends, customer counts)
-- **Location** — remote/hybrid/onsite classification, metro rules, non-US geo-blocking
-- **Seniority and employment type**
-- **Deduplication** — syndication, level preservation, stability
-- **Hard filters** — every reject reason, plus the things that must *not* reject
-- **Scoring** — lane assignment, combos, determinism, bounds, small-company-beats-big-company ranking
-- **Source adapters** — mocked against real observed payload shapes, including failure isolation
-- **The shipped config itself** — lane and ROI weights must sum correctly
+`npm run gen:port` regenerates `src/ports/store.ts` from the SQLite store. `npm run gen:examples` regenerates `config.example/` from a legacy config.
 
-External services are mocked. The suite runs offline in under a second.
+## Scheduling
 
----
+`deploy/` holds a user-level systemd timer for `jr backup` then `jr daily --mail`. The scheduled pass does not spend unless you add `--assess`; budgets in `operations.yaml` then bound it per run, per day and per month.
 
-## Status
+## Legal and ethical constraints
 
-**Phase 1 is complete, running, and verified end to end against live sources and the live API.** See `TODO.md` for what's next.
-
-Implemented: TypeScript project, SQLite schema, normalized job model, four sources, deduplication, hard filters, explainable scoring, structured Claude analysis with two-layer reconciliation and self-correcting calibration, Markdown + HTML briefing, a generated funnel dashboard, outcome capture through the apply path, manual status tracking, funnel metrics, interview database, browser autofill that stops at the submit button, provenance-checked resume tailoring, a fixture-driven regression harness for the autofill browser layer, answers learned from the browser and reused, 902 tests.
-
-A representative full run: 5,792 fetched from 104 boards → 579 duplicates collapsed → 815 pass hard filters → 40 analyzed → **2 Priority A, 5 Priority B.** A single-digit actionable slate out of five thousand postings is the intended output, not a bug.
-
-Not yet implemented: company research, resume tailoring, outreach drafting, reverse company search, opportunity detection, web dashboard.
-
----
-
-## License
-
-Private. Contains a personal career profile.
+Only public, documented board endpoints, rate-limited per host with a floor that cannot be configured away and `Retry-After` honored. No authentication bypassed, no CAPTCHA solved, no bot detection evaded. Remote OK attribution is printed whenever that source is enabled. Nothing is ever sent on your behalf.

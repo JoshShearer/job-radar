@@ -1,0 +1,21 @@
+[Unit]
+Description=Job Radar daily pass (backup, sweep, mail, evaluate, briefing)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/Dev/job-radar
+# Rewritten by install-timer.sh to the node your shell uses (user units do not see nvm).
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/job-radar/env
+# Backup FIRST: if a pass damages something, the copy taken moments earlier is the one you want.
+ExecStart=/usr/bin/env npm run --silent cli -- backup --keep 14
+# Free by default. Add --assess to spend; operations.yaml budgets bound it per run, day and month.
+ExecStart=/usr/bin/env npm run --silent daily -- --mail
+TimeoutStartSec=45min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/Documents/Dev/job-radar/data %h/Documents/Dev/job-radar/reports %h/Documents/Dev/job-radar/artifacts

@@ -157,10 +157,11 @@ git diff HEAD@{1} HEAD -- config/ 2>/dev/null | head -1 && echo "CONFIG_CHANGED"
 | Change | Action |
 |---|---|
 | `.env.example` | Review local `.env` — a new key means a stage will fail at runtime, not at typecheck |
-| `config/*.yaml` | Config is validated on load with cross-field checks; re-run `npm run cli -- sources` if `sources.yaml` moved |
+| `config.example/` | The shape `jr init` copies; strict, coherence-checked on load. Run `npm run cli -- check`, and `sources` if `sources.yaml` moved |
 
-> `config/personal.yaml` and `config/resume.yaml` are gitignored and will never show here.
-> If they are missing locally, the resume and apply commands fail — that is expected, not drift.
+> `config/candidate/evidence.yaml` and `config/candidate/personal.yaml` are gitignored and will
+> never show here. If they are missing locally, tailor, prepare and fill refuse — that is
+> expected, not drift.
 
 ## Step 4.6: Stale local branches
 

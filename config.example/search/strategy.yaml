@@ -1,0 +1,688 @@
+lanes:
+  full_stack:
+    label: Senior Full-Stack / Platform
+    weight: 0.3
+  ai_product:
+    label: AI-enabled Product Engineering
+    weight: 0.24
+  solutions_eng:
+    label: Solutions Engineering / Customer-Facing Technical
+    weight: 0.2
+  growth_seo:
+    label: Growth Engineering / Technical SEO
+    weight: 0.18
+  spatial_iot:
+    label: Proptech / 3D / IoT
+    weight: 0.08
+seniority:
+  accept:
+    - senior
+    - staff
+    - lead
+    - principal
+    - founding
+    - architect
+    - head of
+    - director
+  reject:
+    - intern
+    - internship
+    - junior
+    - jr.
+    - entry level
+    - entry-level
+    - new grad
+    - graduate program
+    - apprentice
+    - associate engineer
+    - i (entry
+    - level 1
+target_titles:
+  full_stack:
+    - senior software engineer
+    - senior full stack
+    - senior fullstack
+    - staff software engineer
+    - staff full stack
+    - lead software engineer
+    - senior product engineer
+    - senior platform engineer
+    - web platform engineer
+    - founding engineer
+    - senior application engineer
+    - senior backend engineer
+    - senior frontend engineer
+  growth_seo:
+    - growth engineer
+    - senior growth engineer
+    - seo engineer
+    - technical seo engineer
+    - organic growth engineer
+    - search engineer
+    - technical seo lead
+    - programmatic seo
+    - seo platform engineer
+    - web performance engineer
+    - full stack growth engineer
+    - marketing engineer
+  ai_product:
+    - ai engineer
+    - ai product engineer
+    - applied ai engineer
+    - llm engineer
+    - agent engineer
+    - ai platform engineer
+    - ai infrastructure engineer
+  solutions_eng:
+    - solutions engineer
+    - senior solutions engineer
+    - staff solutions engineer
+    - principal solutions engineer
+    - solutions architect
+    - senior solutions architect
+    - technical solutions engineer
+    - enterprise solutions engineer
+    - solutions consultant
+    - customer engineer
+    - senior customer engineer
+    - partner solutions engineer
+    - technical account manager
+    - implementation engineer
+    - professional services engineer
+  spatial_iot:
+    - 3d engineer
+    - webgl engineer
+    - graphics engineer
+    - iot engineer
+    - digital twin
+    - spatial computing
+    - firmware platform engineer
+signals:
+  - term: typescript
+    weight: 9
+    lane: full_stack
+  - term: javascript
+    weight: 4
+    lane: full_stack
+  - term: react
+    weight: 8
+    lane: full_stack
+  - term: next.js
+    weight: 9
+    lane: full_stack
+  - term: nextjs
+    weight: 9
+    lane: full_stack
+  - term: node.js
+    weight: 7
+    lane: full_stack
+  - term: nodejs
+    weight: 7
+    lane: full_stack
+  - term: express
+    weight: 3
+    lane: full_stack
+  - term: python
+    weight: 6
+    lane: full_stack
+  - term: payload cms
+    weight: 14
+    lane: full_stack
+  - term: payloadcms
+    weight: 14
+    lane: full_stack
+  - term: headless cms
+    weight: 7
+    lane: full_stack
+  - term: postgres
+    weight: 6
+    lane: full_stack
+  - term: postgresql
+    weight: 6
+    lane: full_stack
+  - term: mongodb
+    weight: 5
+    lane: full_stack
+  - term: sqlite
+    weight: 2
+    lane: full_stack
+  - term: graphql
+    weight: 5
+    lane: full_stack
+  - term: rest api
+    weight: 4
+    lane: full_stack
+  - term: aws
+    weight: 6
+    lane: full_stack
+  - term: cloudfront
+    weight: 4
+    lane: full_stack
+  - term: vercel
+    weight: 7
+    lane: full_stack
+  - term: firebase
+    weight: 3
+    lane: full_stack
+  - term: ci/cd
+    weight: 3
+    lane: full_stack
+  - term: react native
+    weight: 5
+    lane: full_stack
+  - term: stripe
+    weight: 5
+    lane: full_stack
+  - term: marketplace
+    weight: 6
+    lane: full_stack
+  - term: e-commerce
+    weight: 5
+    lane: full_stack
+  - term: ecommerce
+    weight: 5
+    lane: full_stack
+  - term: architecture
+    weight: 5
+    lane: full_stack
+  - term: system design
+    weight: 4
+    lane: full_stack
+  - term: end-to-end ownership
+    weight: 6
+    lane: full_stack
+  - term: product engineer
+    weight: 6
+    lane: full_stack
+  - term: startup
+    weight: 4
+    lane: full_stack
+  - term: founding
+    weight: 6
+    lane: full_stack
+  - term: 0 to 1
+    weight: 5
+    lane: full_stack
+  - term: zero to one
+    weight: 5
+    lane: full_stack
+  - term: technical seo
+    weight: 16
+    lane: growth_seo
+  - term: programmatic seo
+    weight: 16
+    lane: growth_seo
+  - term: seo
+    weight: 10
+    lane: growth_seo
+  - term: generative engine optimization
+    weight: 12
+    lane: growth_seo
+  - term: answer engine optimization
+    weight: 12
+    lane: growth_seo
+  - term: structured data
+    weight: 7
+    lane: growth_seo
+  - term: json-ld
+    weight: 8
+    lane: growth_seo
+  - term: schema.org
+    weight: 7
+    lane: growth_seo
+  - term: search console
+    weight: 9
+    lane: growth_seo
+  - term: ga4
+    weight: 6
+    lane: growth_seo
+  - term: google analytics
+    weight: 4
+    lane: growth_seo
+  - term: core web vitals
+    weight: 9
+    lane: growth_seo
+  - term: web performance
+    weight: 7
+    lane: growth_seo
+  - term: lighthouse
+    weight: 6
+    lane: growth_seo
+  - term: crawl
+    weight: 5
+    lane: growth_seo
+  - term: indexation
+    weight: 8
+    lane: growth_seo
+  - term: sitemap
+    weight: 7
+    lane: growth_seo
+  - term: hreflang
+    weight: 8
+    lane: growth_seo
+  - term: canonical
+    weight: 6
+    lane: growth_seo
+  - term: landing page
+    weight: 5
+    lane: growth_seo
+  - term: growth engineering
+    weight: 12
+    lane: growth_seo
+  - term: organic growth
+    weight: 9
+    lane: growth_seo
+  - term: organic search
+    weight: 9
+    lane: growth_seo
+  - term: experimentation
+    weight: 7
+    lane: growth_seo
+  - term: a/b test
+    weight: 6
+    lane: growth_seo
+  - term: conversion rate
+    weight: 4
+    lane: growth_seo
+  - term: acquisition
+    weight: 4
+    lane: growth_seo
+  - term: content platform
+    weight: 5
+    lane: growth_seo
+  - term: publishing
+    weight: 3
+    lane: growth_seo
+  - term: llm
+    weight: 9
+    lane: ai_product
+  - term: large language model
+    weight: 9
+    lane: ai_product
+  - term: openai
+    weight: 5
+    lane: ai_product
+  - term: anthropic
+    weight: 6
+    lane: ai_product
+  - term: claude
+    weight: 6
+    lane: ai_product
+  - term: rag
+    weight: 8
+    lane: ai_product
+  - term: retrieval augmented
+    weight: 8
+    lane: ai_product
+  - term: ai agent
+    weight: 10
+    lane: ai_product
+  - term: agentic
+    weight: 10
+    lane: ai_product
+  - term: tool calling
+    weight: 8
+    lane: ai_product
+  - term: function calling
+    weight: 7
+    lane: ai_product
+  - term: prompt engineering
+    weight: 5
+    lane: ai_product
+  - term: evaluation harness
+    weight: 8
+    lane: ai_product
+  - term: evals
+    weight: 7
+    lane: ai_product
+  - term: vector database
+    weight: 6
+    lane: ai_product
+  - term: embeddings
+    weight: 6
+    lane: ai_product
+  - term: ai product
+    weight: 8
+    lane: ai_product
+  - term: workflow automation
+    weight: 6
+    lane: ai_product
+  - term: human-in-the-loop
+    weight: 6
+    lane: ai_product
+  - term: solutions engineer
+    weight: 12
+    lane: solutions_eng
+  - term: solutions architect
+    weight: 11
+    lane: solutions_eng
+  - term: sales engineer
+    weight: 9
+    lane: solutions_eng
+  - term: pre-sales
+    weight: 10
+    lane: solutions_eng
+  - term: presales
+    weight: 10
+    lane: solutions_eng
+  - term: post-sales
+    weight: 7
+    lane: solutions_eng
+  - term: technical discovery
+    weight: 8
+    lane: solutions_eng
+  - term: proof of concept
+    weight: 9
+    lane: solutions_eng
+  - term: proof-of-concept
+    weight: 9
+    lane: solutions_eng
+  - term: customer-facing
+    weight: 8
+    lane: solutions_eng
+  - term: customer facing
+    weight: 8
+    lane: solutions_eng
+  - term: technical account
+    weight: 8
+    lane: solutions_eng
+  - term: account management
+    weight: 7
+    lane: solutions_eng
+  - term: solution architecture
+    weight: 8
+    lane: solutions_eng
+  - term: professional services
+    weight: 6
+    lane: solutions_eng
+  - term: field engineering
+    weight: 6
+    lane: solutions_eng
+  - term: enterprise customers
+    weight: 5
+    lane: solutions_eng
+  - term: technical evaluation
+    weight: 6
+    lane: solutions_eng
+  - term: rfp
+    weight: 5
+    lane: solutions_eng
+  - term: onboarding customers
+    weight: 6
+    lane: solutions_eng
+  - term: customer onboarding
+    weight: 6
+    lane: solutions_eng
+  - term: integration support
+    weight: 5
+    lane: solutions_eng
+  - term: technical champion
+    weight: 6
+    lane: solutions_eng
+  - term: quota
+    weight: 4
+    lane: solutions_eng
+  - term: three.js
+    weight: 13
+    lane: spatial_iot
+  - term: threejs
+    weight: 13
+    lane: spatial_iot
+  - term: webgl
+    weight: 12
+    lane: spatial_iot
+  - term: webgpu
+    weight: 8
+    lane: spatial_iot
+  - term: 3d
+    weight: 5
+    lane: spatial_iot
+  - term: proptech
+    weight: 12
+    lane: spatial_iot
+  - term: real estate
+    weight: 6
+    lane: spatial_iot
+  - term: digital twin
+    weight: 12
+    lane: spatial_iot
+  - term: smart building
+    weight: 10
+    lane: spatial_iot
+  - term: iot
+    weight: 10
+    lane: spatial_iot
+  - term: mqtt
+    weight: 12
+    lane: spatial_iot
+  - term: node-red
+    weight: 12
+    lane: spatial_iot
+  - term: websocket
+    weight: 6
+    lane: spatial_iot
+  - term: real-time
+    weight: 5
+    lane: spatial_iot
+  - term: telemetry
+    weight: 5
+    lane: spatial_iot
+  - term: edge device
+    weight: 8
+    lane: spatial_iot
+  - term: industrial automation
+    weight: 8
+    lane: spatial_iot
+  - term: scada
+    weight: 6
+    lane: spatial_iot
+  - term: plc
+    weight: 5
+    lane: spatial_iot
+combos:
+  - name: Solutions engineering + production engineering
+    all:
+      - solutions engineer
+      - typescript
+    bonus: 20
+    lane: solutions_eng
+    why: Six years as Sales Engineer / Account Manager at Valin plus production TypeScript ownership. Pre-sales orgs usually get one or the other.
+  - name: Solutions engineering + developer/API platform
+    all:
+      - solutions engineer
+      - api
+    bonus: 14
+    lane: solutions_eng
+    why: A technical seller whose demo is code, not slides. The product being an API is what makes the engineering half of the record load-bearing.
+  - name: Pre-sales + AI product
+    all:
+      - pre-sales
+      - llm
+    bonus: 16
+    lane: solutions_eng
+    why: Quota-carrying technical sales history against a product category he has actually built with.
+  - name: Customer-facing technical + industrial/data-center domain
+    all:
+      - solutions
+      - data center
+    bonus: 16
+    lane: solutions_eng
+    why: Valin's account base included data-center clients and ARES was controls and instrumentation. Server hardware and network operations are not abstractions here, which is unusual for an application engineer.
+  - name: Payload CMS + Next.js
+    all:
+      - payload
+      - next
+    bonus: 22
+    lane: full_stack
+    why: Direct match for ShroomSpy production stack. Extremely rare combination.
+  - name: Technical SEO + full-stack engineering
+    all:
+      - seo
+      - typescript
+    bonus: 20
+    lane: growth_seo
+    why: Engineer who can ship the SEO fix, not just file the ticket.
+  - name: Programmatic SEO + TypeScript/Next
+    all:
+      - programmatic seo
+      - next
+    bonus: 22
+    lane: growth_seo
+    why: 35+ programmatic landing pages already built and measured.
+  - name: SEO + marketplace/ecommerce
+    all:
+      - seo
+      - marketplace
+    bonus: 16
+    lane: growth_seo
+    why: ShroomSpy is a production SEO-driven marketplace.
+  - name: React + Three.js + proptech
+    all:
+      - react
+      - three
+    bonus: 20
+    lane: spatial_iot
+    why: Lead Application Platform Developer on an AI 3D real-estate platform.
+  - name: IoT + web platform
+    all:
+      - iot
+      - typescript
+    bonus: 18
+    lane: spatial_iot
+    why: LoopString connects TypeScript cloud apps to Linux edge devices.
+  - name: MQTT + cloud application
+    all:
+      - mqtt
+      - cloud
+    bonus: 16
+    lane: spatial_iot
+    why: Directly built this, end to end.
+  - name: Founding/startup ownership + senior IC
+    all:
+      - founding
+      - senior
+    bonus: 14
+    lane: full_stack
+    why: Founder experience with real production delivery, not just title.
+  - name: LLM product + TypeScript
+    all:
+      - llm
+      - typescript
+    bonus: 16
+    lane: ai_product
+    why: AI-assisted product engineering in the actual stack, not ML research.
+  - name: AI agents + product engineering
+    all:
+      - agent
+      - product
+    bonus: 14
+    lane: ai_product
+    why: Agent architecture with human-in-the-loop design.
+  - name: Experimentation + engineering
+    all:
+      - experimentation
+      - engineer
+    bonus: 12
+    lane: growth_seo
+    why: 200+ measured SEO experiments.
+negative_signals:
+  - term: kubernetes
+    weight: 4
+  - term: terraform
+    weight: 3
+  - term: golang
+    weight: 5
+  - term: go
+    weight: 3
+  - term: rust
+    weight: 5
+  - term: scala
+    weight: 6
+  - term: kafka
+    weight: 3
+  - term: spark
+    weight: 4
+  - term: hadoop
+    weight: 5
+  - term: on-call rotation
+    weight: 2
+  - term: pytorch
+    weight: 5
+  - term: tensorflow
+    weight: 5
+  - term: cuda
+    weight: 6
+hard_exclude_titles:
+  - ios engineer
+  - ios developer
+  - android engineer
+  - android developer
+  - embedded engineer
+  - embedded software
+  - firmware engineer
+  - java engineer
+  - java developer
+  - .net developer
+  - .net engineer
+  - c# developer
+  - salesforce developer
+  - sap
+  - abap
+  - sharepoint
+  - drupal
+  - wordpress developer
+  - php developer
+  - ruby on rails developer
+  - qa engineer
+  - test engineer
+  - sdet
+  - data engineer
+  - data scientist
+  - machine learning research
+  - ml research
+  - research scientist
+  - devops engineer
+  - site reliability engineer
+  - security engineer
+  - network engineer
+  - database administrator
+  - technical writer
+  - recruiter
+  - designer
+  - product manager
+  - project manager
+  - program manager
+  - scrum master
+  - marketing manager
+  - marketing lead
+  - marketing director
+  - product marketing
+  - content manager
+  - content strategist
+  - community manager
+  - seo manager
+  - seo specialist
+  - seo strategist
+  - growth manager
+  - account executive
+  - account manager
+  - customer success
+  - business development
+  - operations manager
+  - chief of staff
+  - business analyst
+  - marketing analyst
+  - financial analyst
+  - manager
+  - decision scientist
+  - data analyst
+  - analytics engineer
+  - research engineer
+  - applied scientist
+hard_exclude_description:
+  - phd in machine learning
+  - phd required
+  - publications at neurips
+  - publications in top-tier ml
+  - active security clearance
+  - must have an active ts/sci

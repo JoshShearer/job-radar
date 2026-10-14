@@ -1,5 +1,7 @@
 # Analysis spend is bounded by `--limit`, not by an absolute fit score
 
+> **Still in force in version 2** (2026-10-14). Selection is by rank in `src/domain/evaluation/selection.ts`; spend is bounded by `jr assess --limit` and the run/day/month budgets in `config/operations.yaml`, reserved per call by `src/app/gateway.ts`; eligibility is `src/domain/evaluation/eligibility.ts`; `--min-fit` remains the per-pass floor. The names below (`analyze`, `fit_score`, `filter_passed`, `max_spend_per_run_usd`) are version 1's.
+
 The `analyze` stage selects jobs by **rank** — the top K ordered by `fit_score DESC` — with
 no absolute floor. Spend is bounded directly by `--limit` and `max_spend_per_run_usd`, and
 *eligibility* by the deterministic hard filters (`filter_passed`). This replaced

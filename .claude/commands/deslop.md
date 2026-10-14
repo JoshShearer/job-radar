@@ -62,7 +62,7 @@ specific fixes with before/after examples.
    - [Part IV: Job Radar Patterns](#part-iv-job-radar-patterns) — *Project-specific conventions*
      - [The Determinism Boundary](#the-determinism-boundary) — the single most violated rule here
      - [Truthfulness as a Mechanism](#truthfulness-as-a-mechanism) — provenance, not good intentions
-     - [Refusals Are Features](#refusals-are-features) — the answers `autofill` must not give
+     - [Refusals Are Features](#refusals-are-features) — the answers `jr fill` must not give
      - [Cost Discipline](#cost-discipline) — the only stage that spends money
      - [Adapters Stay Dumb](#adapters-stay-dumb) — one place for judgement
      - [Config Over Code](#config-over-code) — tuning is data
@@ -146,7 +146,7 @@ Ordered by value, with the affected location count for each.
 
 | Priority | Type | Examples |
 |---|---|---|
-| **P0: Critical** | `CLAUDE.md` non-negotiables | Model prose into a rendered resume, `autofill` clicking submit, a model call in `src/pipeline/` |
+| **P0: Critical** | `CLAUDE.md` non-negotiables | Model text into a document unverified, `jr fill` clicking submit, a model call outside the gateway |
 | **P1: High** | Correctness and cost | Cache key that misses, unvalidated model output stored, an adapter that can abort a run |
 | **P2: Medium** | Structural | Classification logic leaking into an adapter, tuning hardcoded in TypeScript |
 | **P3: Low** | Style | Naming, ordering, minor structure |
@@ -2971,77 +2971,84 @@ always the easier implementation, and here it is almost always the wrong one.
 
 | Use deterministic code for | Use model reasoning for |
 |---|---|
-| Deduplication | Semantic fit |
-| Salary parsing | Career positioning |
-| Date parsing | Company analysis |
-| Location classification | Job-description interpretation |
-| Seniority classification | Outreach personalization |
-| Schema validation | Interview prep |
-| Hard filters | |
-| Scoring arithmetic | |
+| Deduplication and identity | Semantic fit and positioning |
+| Salary, date, location, seniority parsing | Posting and company interpretation |
+| Eligibility (hard filters) | Resume selection and rewording (then verified) |
+| Scoring, calibration, ranking, selection | Cover letters and form answers (then verified) |
+| Dossier routing | Evidence import from free text (then reviewed) |
+| Verification of outbound text | |
+| Mail classification | |
 
-The sanctioned model boundaries are exactly four files: `src/analysis/analyzer.ts`,
-`src/analysis/prepare.ts`, `src/resume/tailor.ts`, `src/resume/import.ts`. An
-`@anthropic-ai/sdk` import anywhere else is a P0.
+There is exactly one model boundary: `src/app/gateway.ts` (`callModel`), behind the
+`ModelClient` port whose only adapter is `src/adapters/anthropic/client.ts`. An
+`@anthropic-ai/sdk` import anywhere else, or a `modelClient()` call outside the gateway, is a P0.
 
 ```ts
 // BAD — a model comparing two strings
 const isSameJob = await classify(`Are these the same posting?\n${a}\n${b}`);
 
 // GOOD — deterministic, reproducible, free, auditable when a ranking looks wrong
-const isSameJob = fingerprint(a) === fingerprint(b);
+const isSameJob = dedupeKey(a) === dedupeKey(b);
 ```
 
 The test: could this run over the whole index on every pass, cost nothing, and produce the
 same answer twice? If not, it does not belong on the deterministic side.
 
-**Detection:** `grep -rn "@anthropic-ai/sdk" src/` returning anything outside those four files.
+**Detection:** `grep -rn "@anthropic-ai/sdk" src/` returning anything but the Anthropic
+adapter; `tests/architecture.test.ts` enforces dependency direction and the clock rule.
 
 ### Truthfulness as a Mechanism
 
 The rule is not "try not to fabricate." The rule is that fabrication must be structurally
 impossible.
 
-`config/resume.yaml` is the only source of resume fact. A tailored resume is a **selection**
-from it: the model returns bullet ids and replacement strings, and `src/resume/render.ts`
-assembles the document from master data.
+`config/candidate/evidence.yaml` is the only source of claims about the candidate. A tailored
+resume is a **selection** from it: the model returns claim ids and optional rewordings, and
+`src/domain/materials/compose.ts` assembles the document from the ledger. Every outbound
+sentence (resume rewrite, cover letter, form answer, outreach) is checked by
+`src/domain/materials/verify.ts`, an **allowlist**: numbers (with their units), technologies,
+scope, qualifiers and names must trace to the cited claims. The target (company, role,
+department) may be *named*, never used as evidence.
 
 ```ts
 // BAD — model prose reaches the document
 const bullet = response.content[0].text;
 doc.push(bullet);
 
-// GOOD — the model chooses; the renderer assembles from master
-const { bulletIds, rewrites } = TailorSchema.parse(response);
-const doc = renderFromMaster(resume, bulletIds, rewrites);
+// GOOD — the model chooses; composition assembles from the ledger and verifies each sentence
+const plan = validateStructured(ResumePlanSchema, raw);
+const { resume, repairs } = composeResume(evidence, plan, verifyContext(evidence, target));
 ```
 
-`enforceProvenance` (`src/resume/tailor.ts`) must keep **repairing** rather than trusting:
+The verifier must keep **repairing** rather than trusting:
 
-- Unknown or `verified: false` citations are dropped
-- A rewrite that introduces a technology or a number is reverted to the master wording
+- Unknown, `verified: false` or wrong-owner citations are dropped
+- A failing resume rewrite reverts to the candidate's own wording
+- A failing pack sentence is removed and listed; a form answer with any failure is not used
+- Uncited first-person text may only express interest or intent
 
-Reverting is always available, so overreaching can only produce a worse resume, never a false
-one. **Do not "fix" a reverted rewrite by loosening the check.** That inverts the whole
-mechanism, and it is the specific failure mode `CLAUDE.md` calls out by name.
+Reverting is always available, so overreaching can only produce worse material, never false
+material. **Do not "fix" a refusal by loosening the check.** A *false* refusal may be fixed
+only with a test that pins the real overreach on the same input as still refused, and a
+`MATERIAL_RULES_VERSION` bump.
 
-`resume match` keeps three states, not two. `partial` — right technology, wrong scope — is
-the category that prevents over-claiming. Each entry in `QUALIFIERS`
-(`src/resume/requirements.ts`) — leadership, open source, enterprise scale, migration, public
-speaking — must be evidenced independently of the skill match. **Using a library is not
-contributing to it.**
+Requirement matching keeps three states, not two. `partial` (right technology, wrong scope)
+is the category that prevents over-claiming. Each qualifier must be evidenced independently
+of the skill match. **Using a library is not contributing to it.**
 
 **Anti-patterns:**
 
-- A code path where a model's output string reaches a rendered document
-- A provenance check relaxed so a desirable rewrite passes
+- A code path where a model's output string reaches a rendered document unverified
+- A verifier rule relaxed so a desirable sentence passes
+- Target context (posting title, department) licensing a technology, qualifier or number
 - `partial` collapsed into pass/fail "for simplicity"
 - A qualifier inferred from the skill match rather than evidenced
+- Any prompt, config prose or code describing the candidate
 - Any generated text claiming the system inspected a company's website, traffic, or codebase
 
 ### Refusals Are Features
 
-`autofill` fills a real employer's form and stops. Three refusals are load-bearing and must
+`jr fill` fills a real employer's form and stops. Three refusals are load-bearing and must
 never be "improved" into answers:
 
 1. **Demographic self-identification** is the candidate's to disclose or withhold
@@ -3050,14 +3057,15 @@ never be "improved" into answers:
 
 The third is the subtle one. `work_eligibility` is nullable on purpose: answering "no
 sponsorship needed" for someone who needs it is a false statement on a job application, not
-a mis-ranking.
+a mis-ranking. A drafted pack answer does not fill an unknown either: only questions no rule
+owns receive pack text, and only from an approved generation.
 
 ```ts
 // BAD — an unset value becomes an answer
-const needsSponsorship = personal.work_eligibility ?? "no";
+const needsSponsorship = personal.work_eligibility.requires_sponsorship ?? false;
 
 // GOOD — unknown stays unknown, and the field is left for the human
-if (personal.work_eligibility == null) return { kind: "skip", reason: "unset" };
+if (p.work_eligibility.requires_sponsorship === null) return { action: "skip", why: "unset", consequential: true };
 ```
 
 Also invariant:
@@ -3066,68 +3074,71 @@ Also invariant:
 - When a dropdown match is not confident, **leave it blank and report the options offered**
 - `chooseOption` reserves a score of **1.0 for exact string equality**, precisely so
   full-token-coverage ties (`"…for any employer"` vs `"…for my current employer only"`) are
-  refused instead of guessed. Lowering that threshold converts a refusal into a fabrication.
+  refused instead of guessed; radios are judged against their **whole group** for the same
+  reason. Lowering that threshold converts a refusal into a fabrication.
+- A saved override answers a demographic or attestation question only if it names that kind
+  of question itself.
 
 And the system never sends. No application, no email, no LinkedIn message. It prepares; a
-human sends. That is the whole point of the design.
+human sends. A submission is recorded only on the human's explicit yes.
 
 **Anti-patterns:**
 
 - A `click()` on anything `isSubmitControl` matches
-- A default that fills a blank `personal.yaml` value
-- A relaxed `chooseOption` threshold
+- A default, or a pack answer, filling a blank `personal.yaml` value
+- A relaxed `chooseOption` threshold, or a radio scored alone
 - Any transmission path that does not require a human action
 
 ### Only Public, Documented Endpoints
 
 No bypassing authentication, CAPTCHAs, rate limits, robots protections, anti-bot systems, or
-paywalls. `autofill` drives an ordinary browser and does not disguise itself: no stealth
+paywalls. `jr fill` drives an ordinary browser and does not disguise itself: no stealth
 plugins, no automation-flag masking, no fingerprint spoofing, no CAPTCHA solving. An active
 challenge stops the run.
 
 If bot scoring rejects a legitimate human-reviewed submission, the fix is to fill that form
-by hand. If a company has no public feed, it goes in `watchlist` and gets researched by hand.
+by hand. If a company has no public feed, it goes in the watchlist and gets researched by hand.
 
-Rate limiting in `PoliteFetcher` (`src/lib/http.ts`) is load-bearing. Do not remove it and do
-not make it configurable to zero.
+The 500 ms per-host floor in `src/adapters/http/polite-transport.ts` (and in the config
+schema) is load-bearing, as is honoring `Retry-After`. Do not remove it and do not make it
+configurable lower.
 
 Remote OK attribution is a condition of API use: a followed link back, naming them as source.
-`src/report/daily.ts` emits it. If that attribution is ever removed, the correct move is to
-disable the source, not to keep the data.
+The briefing (`src/app/briefing.ts`, `src/ui/reports/render.ts`) emits it. If that attribution
+is ever removed, the correct move is to disable the source, not to keep the data.
 
 ### Cost Discipline
 
-`analyze` is the only stage that spends money. Four mechanisms keep it cheap, and all four
-must survive every change:
+Every paid call goes through `src/app/gateway.ts`, and these must survive every change:
 
-1. **Deterministic prefilters** gate eligibility (`filter_passed`), with selection by rank (`analysis_threshold` was retired in JOB-32)
-2. **Content-addressed cache** keyed on description + title + company + model + profile
-3. **Prompt caching** on the stable system prefix (`cache_control: ephemeral`)
-4. **Truncated description budget**
-
-Never re-analyze an unchanged job. When a description changes, `repo.upsert` invalidates the
-cached analysis and score — keep that behavior.
+1. **Same request, same answer**: a request is addressed by the hash of its exact prompt,
+   model and effort. Nothing volatile (relative dates, calibrated scores, URLs) enters a prompt.
+2. **Reserve before calling**: the worst case is reserved against run, day and month budgets
+   in one transaction; a call that could cross a ceiling is refused before it is made.
+3. **Receipt for everything**, failures included; unknown usage counts at its worst case.
+   Reported spend comes from the ledger.
+4. **Selection by rank**, never by an absolute fit gate (ADR-0001).
+5. **Prompt caching** on the stable system prefix and a **truncated description budget**.
 
 **Anti-patterns:**
 
-- A cache key that omits an input the output depends on (silently re-analyzes everything)
-- A cache key that includes something volatile like a timestamp (same effect, harder to spot)
-- `cache_control` dropped from the system prefix — invisible to `tsc`, visible on the bill
-- A prefilter loosened so more jobs reach the model
+- An address that omits an input the output depends on (serves a wrong answer)
+- Volatile content in a prompt (silently re-buys everything; invisible to `tsc`)
+- `cache_control` dropped from the system prefix: visible only on the bill
+- A spend total summed from successes instead of read from the ledger
 
-**Detection:** these regress silently. A test suite passing tells you nothing here. Run
-`analyze` twice and confirm the second run does no work.
+**Detection:** these regress silently. A test suite passing tells you little here. Run
+`jr assess --dry-run` twice around a change and confirm unchanged postings come from cache.
 
 ### Adapters Stay Dumb
 
-Adapters map a provider payload onto `SourceJob` and do **no** classification. All judgement
-happens once, in `src/pipeline/normalize.ts`.
+Adapters map a provider payload onto `RawPosting` and do **no** classification. All judgement
+happens once, in `src/domain/catalog/normalize.ts`.
 
-Every adapter catches its own errors and records them on `ctx.stats`. **One failing source
-must never abort a run.** There is a test for this; keep it passing.
+One failing board **must never abort a sweep**. There is a test for this; keep it passing.
 
-Every adapter has a test in `tests/sources.test.ts` pinning the real observed payload shape,
-so a provider renaming a field surfaces as a failing test rather than silently empty results.
+Every adapter has a test pinning the real observed payload shape, so a provider renaming a
+field surfaces as a failing test rather than silently empty results.
 
 ```ts
 // BAD — the adapter decides seniority
@@ -3139,53 +3150,56 @@ return { title };
 
 This is [Separation of Concerns](#separation-of-concerns) and
 [Single Source of Truth](#single-source-of-truth) with a specific consequence: classification
-duplicated across 104 boards drifts, and the drift is invisible until a ranking looks wrong.
+duplicated across 200+ boards drifts, and the drift is invisible until a ranking looks wrong.
 
 ### Config Over Code
 
-Search strategy lives in `config/career-profile.yaml`. Scoring weights, filters, lanes,
-thresholds, and exclusions are all data.
+Search strategy (`config/search/strategy.yaml`), preferences (`config/candidate/preferences.yaml`),
+policy (`config/policy/evaluation.yaml`), operations and sources are data.
 
 **If a tuning change requires editing TypeScript, that is a design bug — move it to config.**
 
-Config is validated on load with cross-field coherence checks: lane weights sum to 1,
-compensation bands ordered, signals reference real lanes. Keep those checks. A typo that
-silently disables a filter is worse than a crash — this is
+Every config file is strict (an unknown key is an error), and cross-file coherence is checked
+on load: lane weights, ordered bands, known lanes. Keep those checks. A typo that silently
+disables a filter is worse than a crash — this is
 [Fail-Fast](#fail-fast--defensive-programming) applied where the failure would otherwise be a
 quietly wrong shortlist.
 
-A misplaced config key is an error, not a silent no-op.
-
 ### Structured Output
 
-All model output reaching the database passes a JSON Schema **and** is re-validated with Zod
-(`AnalysisSchema`, `src/model/job.ts`). Malformed output is rejected, never stored. A model
-never writes free prose into a column.
+All model output is validated with Zod (`validateStructured`) before anything is stored, and
+the JSON Schema sent to the API is generated from the same Zod schema
+(`toStructuredOutputSchema`), with stripped constraints restated in descriptions. Malformed
+output is rejected and receipted, never stored. A model never writes free prose into a column.
 
 ```ts
 // BAD
-db.insert({ analysis: response.content[0].text });
+store.put({ assessment: response.content[0].text });
 
 // GOOD
-const parsed = AnalysisSchema.safeParse(raw);
-if (!parsed.success) return reject(parsed.error);
-db.insert({ analysis: parsed.data });
+const v = validateStructured(dossierSchema(lanes), raw);
+if (!v.ok) throw new ModelFailure(v.error, "schema", key);
 ```
 
 This is [Parse, Don't Validate](#parse-dont-validate) with a database behind it.
+
+### Facts Are Append-Only
+
+Posting versions, sweeps, events, model calls and mail are never updated or deleted.
+Corrections are `void_event`s; state is a fold over events in occurrence order; derived values
+are memoized by input hash or rebuilt whole (ADR-0002). An UPDATE on a fact table is a P1.
 
 ### Job Radar Priority Matrix
 
 | Priority | Type | Examples |
 |---|---|---|
-| **P0: Critical** | `CLAUDE.md` non-negotiables | Model prose into a rendered resume; a loosened provenance check; `autofill` submitting, ticking, or defaulting an unset value; stealth or CAPTCHA handling; a model call in `src/pipeline/`; Remote OK attribution removed |
-| **P1: High** | Correctness and cost | Cache key that re-analyzes unchanged jobs; model output stored without Zod validation; an adapter that can abort a run; `PoliteFetcher` delays weakened; config coherence checks removed |
-| **P2: Medium** | Structural | Classification in an adapter; tuning hardcoded in TypeScript; a new source with no pinned-payload test |
+| **P0: Critical** | `CLAUDE.md` non-negotiables | Model text into a document unverified; a loosened verifier rule; `jr fill` submitting, ticking, or defaulting an unset value; stealth or CAPTCHA handling; a model call outside the gateway; Remote OK attribution removed |
+| **P1: High** | Correctness and cost | Volatile content in a prompt; a call not reserved or not receipted; model output stored without Zod validation; an adapter that can abort a sweep; the transport floor weakened; config coherence checks removed; an UPDATE on a fact table |
+| **P2: Medium** | Structural | Classification in an adapter; tuning hardcoded in TypeScript; a new source with no pinned-payload test; a dependency-direction exception |
 | **P3: Low** | Style | Naming, ordering, minor structure |
 
 **Always check:** when adding a source, verify the endpoint is public and documented, and
-confirm it live — board tokens in `config/sources.yaml` were each confirmed to return HTTP
-200 with a non-empty job list. Repo-existence is not endpoint-availability.
+confirm it live with `jr sources`. Repo-existence is not endpoint-availability.
 
 ---
 ## When to Relax Rules
