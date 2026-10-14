@@ -29,7 +29,7 @@ export async function discover(ctx: AppContext, companies: readonly string[], de
   const have = configuredBoardKeys(sources);
   const lines: DiscoverLine[] = [];
   // One slot per company, in input order; an addition's slot is filled after the write.
-  const pending: Array<{ entry: BoardEntry; jobCount: number; slot: number }> = [];
+  const pending: Array<{ entry: BoardEntry; jobCount: number; configLine: string; slot: number }> = [];
   const found: string[] = [];
 
   for (const company of companies) {
@@ -53,7 +53,7 @@ export async function discover(ctx: AppContext, companies: readonly string[], de
       continue;
     }
     have.add(key);
-    pending.push({ entry: { ats: hit.ats, token: hit.token, company }, jobCount: hit.jobCount, slot: found.length });
+    pending.push({ entry: { ats: hit.ats, token: hit.token, company }, jobCount: hit.jobCount, configLine: hit.configLine, slot: found.length });
     found.push(`FOUND ${company}: ${board} (${hit.jobCount} jobs)`);
     lines.push({ company, status: "added", board });
   }
@@ -64,11 +64,14 @@ export async function discover(ctx: AppContext, companies: readonly string[], de
   try {
     result = deps.writer.addBoards(pending.map((p) => p.entry));
   } catch (err) {
+    // The write was refused, so fall back to the paste step: every found board keeps its line.
     for (const l of lines) if (l.status === "added") l.status = "found";
+    const notes = [...found];
+    for (const p of pending) notes[p.slot] += `\n${p.configLine}`;
     return {
       outcome: "failed",
       value: lines,
-      notes: [...found, `Nothing was written to sources.yaml: ${(err as Error).message}`],
+      notes: [...notes, `Nothing was written to sources.yaml: ${(err as Error).message}`],
     };
   }
   const addedKeys = new Set(result.added.map((e) => boardKey(e.ats, e.token)));

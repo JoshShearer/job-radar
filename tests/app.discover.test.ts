@@ -140,7 +140,7 @@ describe("discover --add", () => {
     expect(insertedLines(before, readFileSync(file, "utf8"))).toEqual(["      - token: porter", "        company: Porter"]);
   });
 
-  it("writes nothing when the result would fail the full config loader", async () => {
+  it("writes nothing when the config on disk already fails the full loader", async () => {
     const env = envFor({ [GH("clickhouse")]: board(3) });
     // Break cross-file coherence after the context loaded: lane weights no longer sum to 1.
     const strategyFile = join(dir, "search/strategy.yaml");
@@ -155,6 +155,88 @@ describe("discover --add", () => {
     expect(readFileSync(file, "utf8")).toBe(before);
   });
 
+  /** A scratch config whose sources.yaml is the fixture with `sources.ashby.boards` replaced by `boards`. */
+  function withAshbyBoards(boards: string): void {
+    const src = join(mkdtempSync(join(tmpdir(), "jr-src-")), "sources.yaml");
+    writeFileSync(src, readFileSync(FIXTURE, "utf8").replace(/(ashby:\n {4}enabled: true\n {4}boards:\n)(?: {6}.*\n)+/, `$1${boards}`));
+    dir = scratchConfig(src);
+    file = join(dir, "sources.yaml");
+  }
+
+  // The splice indents the new entry like the last entry's first content line.
+  // When the dash sits on a line of its own, that line is the map's, one level
+  // too deep, and the spliced text is not the original plus the new board. The
+  // pre-edit load passes; the structural gate is what refuses, and it says so in
+  // its own words rather than as a raw parser error.
+  for (const [name, entry] of [
+    ["a dash on its own line", "      -\n        token: sanity\n        company: Sanity\n"],
+    ["a dash on its own line before a flow map", "      -\n        { token: sanity, company: Sanity }\n"],
+    ["an anchor on the dash line", "      - &s\n        token: sanity\n        company: Sanity\n"],
+  ] as const) {
+    it(`refuses, writing nothing, when the last entry has ${name}`, async () => {
+      withAshbyBoards(entry);
+      const before = readFileSync(file, "utf8");
+      expect(() => loadConfig(dir)).not.toThrow();
+      const r = await run(envFor({ [ASHBY("llamaindex")]: board(1) }), ["LlamaIndex"], true);
+      expect(r.outcome).toBe("failed");
+      const text = r.notes.join("\n");
+      expect(text).toMatch(/Nothing was written to sources\.yaml: Inserting into .* would change more than the new boards/);
+      expect(text).not.toMatch(/would not load/);
+      expect(readFileSync(file, "utf8")).toBe(before);
+    });
+  }
+
+  it("adds after a flow entry that spans two lines", async () => {
+    withAshbyBoards("      - { token: sanity,\n          company: Sanity }\n");
+    const before = readFileSync(file, "utf8");
+    const r = await run(envFor({ [ASHBY("llamaindex")]: board(1) }), ["LlamaIndex"], true);
+    expect(r.outcome).toBe("ok");
+    expect(insertedLines(before, readFileSync(file, "utf8"))).toEqual(["      - { token: llamaindex, company: LlamaIndex }"]);
+  });
+
+  // Here the edited text parses to exactly the original plus the new board, so
+  // the structural gate passes; only the post-edit load (schema: a company must
+  // be non-blank) stands between it and the disk.
+  for (const company of ["", "   "]) {
+    it(`writes nothing when only the post-edit load fails (company ${JSON.stringify(company)})`, () => {
+      const before = readFileSync(file, "utf8");
+      expect(() => loadConfig(dir)).not.toThrow();
+      const writer = new FsSourcesWriter(dir);
+      expect(() => writer.addBoards([{ ats: "greenhouse", token: "blankco", company }])).toThrow(/would not load, so it was not written/);
+      expect(readFileSync(file, "utf8")).toBe(before);
+    });
+  }
+
+  it("keeps a CRLF file CRLF throughout", async () => {
+    const src = join(mkdtempSync(join(tmpdir(), "jr-src-")), "sources.yaml");
+    writeFileSync(src, readFileSync(FIXTURE, "utf8").replace(/\n/g, "\r\n"));
+    dir = scratchConfig(src);
+    file = join(dir, "sources.yaml");
+    const before = readFileSync(file, "utf8");
+    for (const [ats, company, route] of [["greenhouse", "ClickHouse", GH("clickhouse")], ["ashby", "LlamaIndex", ASHBY("llamaindex")]] as const) {
+      const r = await run(envFor({ [route]: board(1) }), [company], true);
+      expect(r.outcome, ats).toBe("ok");
+    }
+    const after = readFileSync(file, "utf8");
+    expect(after.replace(/\r\n/g, ""), "no bare LF").not.toMatch(/\n/);
+    expect(after.replace(/\r\n/g, ""), "no bare CR").not.toMatch(/\r/);
+    expect(insertedLines(before.replace(/\r\n/g, "\n"), after.replace(/\r\n/g, "\n"))).toEqual([
+      "      - { token: clickhouse, company: ClickHouse }",
+      "      - token: llamaindex",
+      "        company: LlamaIndex",
+    ]);
+  });
+
+  it("a refused write still prints each found board's line to paste", async () => {
+    withAshbyBoards("      -\n        token: sanity\n        company: Sanity\n");
+    const r = await run(envFor({ [ASHBY("llamaindex")]: board(1), [GH("clickhouse")]: board(3) }), ["LlamaIndex", "ClickHouse"], true);
+    expect(r.outcome).toBe("failed");
+    const text = r.notes.join("\n");
+    expect(text).toMatch(/FOUND LlamaIndex: ashby:llamaindex \(1 jobs\)\n {6}- \{ token: llamaindex, company: LlamaIndex \}/);
+    expect(text).toMatch(/FOUND ClickHouse: greenhouse:clickhouse \(3 jobs\)\n {6}- \{ token: clickhouse, company: ClickHouse \}/);
+    expect(r.value.map((l) => l.status)).toEqual(["found", "found"]);
+  });
+
   it("refuses, writing nothing, when the target list has no entry to add after", async () => {
     const empty = join(mkdtempSync(join(tmpdir(), "jr-src-")), "sources.yaml");
     writeFileSync(empty, readFileSync(FIXTURE, "utf8").replace(/ashby:\n {4}enabled: true\n {4}boards:\n(?: {6}.*\n)+/, "ashby:\n    enabled: true\n    boards: []  # none yet\n"));
@@ -165,6 +247,7 @@ describe("discover --add", () => {
     const r = await run(envFor({ [ASHBY("llamaindex")]: board(1) }), ["LlamaIndex"], true);
     expect(r.outcome).toBe("failed");
     expect(r.notes.join("\n")).toMatch(/Nothing was written.*add ashby:llamaindex by hand/);
+    expect(r.notes.join("\n")).toMatch(/FOUND LlamaIndex: ashby:llamaindex \(1 jobs\)\n {6}- \{ token: llamaindex, company: LlamaIndex \}/);
     expect(readFileSync(file, "utf8")).toBe(before);
   });
 
