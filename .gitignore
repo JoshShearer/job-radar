@@ -2,58 +2,47 @@ node_modules/
 dist/
 *.log
 
-# Local database and any backups of it
-data/
+# Local database, its backups, and generated output. Root-anchored: an
+# unanchored `reports/` also ignored src/ui/reports/ and dropped it from a commit.
+/data/
 *.sqlite
-*.sqlite-journal
-*.sqlite-wal
-*.sqlite-shm
-
-# Generated reports
-reports/
-
-# Personal resume source + generated variants (never commit these)
-resumes/*
-!resumes/README.md
-!resumes/.gitkeep
+*.sqlite-*
+/reports/
+/artifacts/
 
 # Secrets
 .env
 .env.local
 .env.*.local
 
+# Candidate facts: every claim about you, and form-filling facts.
+# The search strategy, preferences and policy under config/ ARE committed.
+config/candidate/evidence.yaml
+config/candidate/personal.yaml
+config/candidate/*.bak
+
+# Persistent browser profile used by `jr fill` (holds cookies/sessions)
+/.browser-profile/
+
+# Left on disk by the previous version (v1-final) in an existing checkout.
+# Personal data: never commit it. See MIGRATING.md.
+/legacy-v1/
+/applications/
+/resumes/*
+config/resume.yaml
+config/resume.yaml.*.bak
+config/personal.yaml
+config/personal.yaml.*.bak
+
 # Editor / OS
 .DS_Store
 .vscode/
 .idea/
 
-# Generated application packages (personal material)
-applications/
-
-# Real contact details, work-authorization answers, links
-config/personal.yaml
-# Timestamped copies written before `autofill` saves a learned answer. Same
-# personal data as the original, so the same rule applies.
-config/personal.yaml.*.bak
-
-# Persistent browser profile used by `autofill` (holds cookies/sessions)
-.browser-profile/
-
-# Master resume (real employment history)
-config/resume.yaml
-config/resume.yaml.*.bak
-
-# Claude Code working notes: session handoffs, plans, last critique verdict.
-# The commands themselves (.claude/commands/, .claude/linear.md) ARE committed.
+# Claude Code working notes and /run-tickets state (machine-local)
 .claude/scratch/*
 !.claude/scratch/.gitkeep
 .claude/last-critique.md
 .worktree-meta.json
-
-# /run-tickets orchestration state (scratch, not project content)
 .planning/
-
-# /run-tickets state: one stamped file per run, machine-local, never committed.
-# A GLOB, not a literal name: the stamp varies, and an unignored state file is one
-# `git add -A` away from being committed.
 .claude/pipeline-state*.json

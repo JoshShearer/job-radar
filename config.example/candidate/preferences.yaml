@@ -1,0 +1,36 @@
+compensation:
+  currency: USD
+  target_min: 160000
+  target_max: 180000
+  acceptable_min: 145000
+  reject_below_max: 135000
+  stretch_min: 190000
+  stretch_max: 220000
+  contract_min_hourly: 85
+  contract_max_hourly: 110
+  prefer_employment_type: full_time
+location:
+  home_metro: Austin, TX
+  remote_ok: true
+  hybrid_metros:
+    - Austin
+    - Austin, TX
+    - Austin, Texas
+  onsite_ok_metros:
+    - Austin
+    - Austin, TX
+    - Austin, Texas
+  relocation_ok: false
+  work_authorization_blockers:
+    - security clearance
+    - ts/sci
+    - top secret
+    - polygraph
+    - must be a us citizen
+    - us citizenship required
+    - citizenship is required
+    - eu work authorization required
+    - must reside in the uk
+    - must be located in canada
+notes:
+  - Stable full-time W-2 work is strongly preferred over contract.

@@ -52,7 +52,7 @@ statuses, or branch patterns.
 | `/critique` is self-contained | No agents were ported; the critic protocol is inlined. |
 | `/check-constraints` was rewritten, not ported | The constraints are entirely different: truthfulness, refusals, determinism, cost. |
 | Single repo, not an umbrella | `/orient`, `/finish`, and `/update-packages` collapse their multi-repo loops. |
-| Worktrees install deps and link personal config | A fresh worktree has no `node_modules`, and `config/personal.yaml` / `config/resume.yaml` are gitignored, so the resume and apply commands would fail silently without symlinks. |
+| Worktrees install deps and link personal config | A fresh worktree has no `node_modules` and no `config/` (`jr init` creates it), and `config/candidate/evidence.yaml` / `config/candidate/personal.yaml` are gitignored, so tailor, prepare and fill would refuse without symlinks. |
 
 ## Not ported
 

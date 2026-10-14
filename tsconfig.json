@@ -1,9 +1,6 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    // DOM is here only for the `page.evaluate` body in src/apply/autofill.ts,
-    // which runs inside the browser and needs real DOM types to be checked.
-    // Nothing else in this Node-only codebase should touch a DOM global.
     "lib": ["ES2023", "DOM"],
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -11,13 +8,11 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
-    "exactOptionalPropertyTypes": false,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true,
-    "verbatimModuleSyntax": false
+    "noEmit": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }
