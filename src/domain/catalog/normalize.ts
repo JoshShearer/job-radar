@@ -7,7 +7,7 @@ import { mergeSalary, parseSalary } from "../text/salary.js";
 import type { PostingSnapshot, RawPosting } from "./posting.js";
 
 /** Bumped whenever normalization output can change for the same input. */
-export const NORMALIZE_VERSION = "normalize@2"; // 2: board URLs kept only when http(s)
+export const NORMALIZE_VERSION = "normalize@3"; // 2: board URLs kept only when http(s); 3: workplaceType "on_site" (Workable) reads as onsite
 
 export function locationPrefs(p: Preferences): LocationPrefs {
   return {

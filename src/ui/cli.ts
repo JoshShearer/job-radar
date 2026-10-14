@@ -106,7 +106,7 @@ program
 
 function countBoards(c: ReturnType<AppContext["config"]>): number {
   const s = c.sources.sources;
-  return s.greenhouse.boards.length + s.lever.boards.length + s.ashby.boards.length + (s.remoteok.enabled ? 1 : 0);
+  return s.greenhouse.boards.length + s.lever.boards.length + s.ashby.boards.length + s.workable.boards.length + s.smartrecruiters.boards.length + (s.remoteok.enabled ? 1 : 0);
 }
 
 /* --------------------------------------------------------------- pipeline */
