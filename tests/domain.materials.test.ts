@@ -121,6 +121,20 @@ describe("verifier: holes found by the 2026-10-14 adversarial review", () => {
     passes("I'd welcome a conversation if the team sees transferable value in that background.", []);
   });
 
+  it("an interest frame does not license a present-tense experience claim", () => {
+    // Found by a security review of the PR: these passed behind "I'm excited" / "I'd love".
+    refused("I'm excited to apply because I manage a platform group today.", []);
+    refused("I'd love to bring what I do now: I lead platform engineering.", []);
+    refused("I'm eager to join, as someone who runs infrastructure for a living.", []);
+    refused("I'm interested because I currently own the payments stack.", []);
+    refused("I want to keep working as a platform engineer.", []);
+    refused("I'm applying since I specialize in frontend performance.", []);
+    // Interest in the target's work is still fine.
+    passes("I'd like to work on the checkout flow at Initech.", []);
+    passes("I'm excited about how the team runs its platform.", []);
+    passes("I'm interested in a role where a small team owns infrastructure end to end.", []);
+  });
+
   it("the target context names the target; it never licenses a claim inside a cited sentence", () => {
     const k = verifyContext(TEST_EVIDENCE, ["Initech", "Senior Engineer, Kubernetes Platform", "Enterprise Platform"]);
     refused("Contributed to the checkout flow on Kubernetes.", ["acme-3"], k);

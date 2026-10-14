@@ -50,8 +50,10 @@ export interface Problem {
  * 4: uncited first-person text must be framed as interest; target context
  *    names but never licenses; sentence-initial names checked; figures keep
  *    their unit; oversight and sole-ownership words are scope.
+ * 5: present-tense first-person experience ("I manage", "someone who runs")
+ *    is an experience claim even behind an interest frame.
  */
-export const MATERIAL_RULES_VERSION = 4;
+export const MATERIAL_RULES_VERSION = 5;
 
 export interface VerifyContext {
   claims: ReadonlyMap<string, IndexedClaim>;
@@ -267,7 +269,7 @@ const FIRST_PERSON = /\b(I|me|my|mine|myself)\b|\bI['\u2019](m|ve|d|ll)\b/;
 const INTENT_FRAME =
   /\b(I['\u2019]m|I am) (applying|writing|interested|excited|eager|keen|drawn|happy|glad|looking forward)\b|\bI['\u2019]d (like|love|welcome|enjoy|appreciate|be glad|be happy|bring)\b|\bI would (like|love|welcome|appreciate|enjoy|bring)\b|\bI (want|hope|look forward|wanted)\b|\bthank you\b/i;
 const EXPERIENCE_CLAIM =
-  /\bI have\b|\bI['\u2019]ve\b|\bI had\b|\bI was\b|\bI (am|['\u2019]m) (an?|the)\b|\bas I (have|did|do)\b|\byears?\b|\bmy (experience|career|time at|role at|team|work at)\b|\bfounding\b|\bdoctorate\b|\bph\.?d\b|\bdegree\b|\bcertifi(ed|cation)\b/i;
+  /\bI have\b|\bI['\u2019]ve\b|\bI had\b|\bI was\b|\bI (am|['\u2019]m) (an?|the)\b|\bas I (have|did|do)\b|\byears?\b|\bmy (experience|career|time at|role at|team|work at)\b|\bfounding\b|\bdoctorate\b|\bph\.?d\b|\bdegree\b|\bcertifi(ed|cation)\b|\bI (currently |now |also |still |personally )?(manage|lead|run|own|oversee|head|direct|mentor|supervise|work|build|maintain|specialize|specialise|handle|teach|advise|consult|ship|architect|operate)s?\b|\bsomeone who\b|\bwork(ing)? as\b|\bfor a living\b|\bwhat I do\b/i;
 
 export function scopeOf(text: string): Scope {
   for (const [scope, re] of SCOPE_PATTERNS) if (re.test(text)) return scope;
