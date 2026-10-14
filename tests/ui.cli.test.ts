@@ -99,6 +99,24 @@ describe("jr, end to end through the real entry point", () => {
     const dirs = readdirSync(join(home, "data/backups"));
     expect(dirs).toHaveLength(1);
     expect(existsSync(join(home, "data/backups", dirs[0]!, "config/operations.yaml"))).toBe(true);
+    expect(existsSync(join(home, "data/backups", dirs[0]!, "manifest.json"))).toBe(true);
+  });
+
+  it("restores a backup into an empty directory, and refuses the live home and a non-empty one", () => {
+    const set = readdirSync(join(home, "data/backups"))[0]!;
+    const to = mkdtempSync(join(tmpdir(), "jr-cli-restore-"));
+    const r = jr("restore", set, "--to", join(to, "home"));
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/every hash matched/);
+    expect(r.out).toMatch(/integrity_check ok/);
+    expect(readFileSync(join(to, "home/config/candidate/evidence.yaml"))).toEqual(readFileSync(join(home, "config/candidate/evidence.yaml")));
+    const again = jr("restore", set, "--to", join(to, "home"));
+    expect(again.code).toBe(1);
+    expect(again.out).toMatch(/not empty/);
+    const live = jr("restore", set, "--to", join(home, "restored"));
+    expect(live.code).toBe(1);
+    expect(live.out).toMatch(/live Job Radar home/);
+    expect(existsSync(join(home, "restored"))).toBe(false);
   });
 
   it("a config typo fails loudly instead of disabling a rule", () => {
