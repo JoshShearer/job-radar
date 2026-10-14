@@ -25,6 +25,8 @@ import { PRIORITY_LABELS } from "../domain/evaluation/priority.js";
 import { formatRate } from "../domain/pursuit/funnel.js";
 import { backupDatabase } from "../adapters/sqlite/db.js";
 import { discoverCompany } from "../adapters/ats/discover.js";
+import { FsSourcesWriter } from "../adapters/fs/sources-writer.js";
+import { discover } from "../app/discover.js";
 import { readLegacy } from "../adapters/legacy/reader.js";
 import { convertLegacyConfig } from "../adapters/legacy/config.js";
 import { CONFIG_FILES, ConfigError } from "../adapters/fs/config-loader.js";
@@ -542,14 +544,16 @@ program
 
 program
   .command("discover <companies...>")
-  .description("Find a company's public ATS board and print the sources.yaml line")
-  .action(async (companies: string[]) => {
-    const t = ctx().transport();
-    for (const name of companies) {
-      const r = await discoverCompany(name, t);
-      const hit = r.hits[0];
-      out(hit ? `FOUND ${name}: ${hit.ats}:${hit.token} (${hit.jobCount} jobs)\n${hit.configLine}` : `--    ${name}: no public board (tried ${r.tried.join(", ")}); add it to the watchlist`);
-    }
+  .description("Find a company's public ATS board and print the sources.yaml line (--add writes it in)")
+  .option("--add", "add each new board to config/sources.yaml under its ATS, keeping the file's comments and layout", false)
+  .action(async (companies: string[], o: { add: boolean }) => {
+    const c = ctx();
+    const t = c.transport();
+    report(
+      await withRun(c, "discover", () =>
+        discover(c, companies, { probe: (name) => discoverCompany(name, t), writer: o.add ? new FsSourcesWriter(c.paths.config) : null }),
+      ),
+    );
   });
 
 /* --------------------------------------------------------------- operations */
