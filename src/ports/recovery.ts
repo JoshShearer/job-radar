@@ -1,10 +1,12 @@
-import type { BackupManifest, DatabaseSnapshot, FileHashes, SetListing } from "../domain/recovery/recovery-set.js";
+import type { BackupManifest, DatabaseSnapshot, FileHashes, SetListing, TreeCopy } from "../domain/recovery/recovery-set.js";
 
 /** A recovery set written into `<root>/<name>.partial/`, not yet complete. */
 export interface StagedSet {
   name: string;
   dir: string;
   database: DatabaseSnapshot;
+  /** Every root the set promises (config/, and artifacts/ when included): copied, or absent from the live home. */
+  trees: TreeCopy[];
   files: FileHashes;
 }
 

@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { RecoveryStore, StagedSet } from "../../ports/recovery.js";
 import {
   compareHashes,
   DB_PATH,
   MANIFEST_FILE,
+  manifestProblems,
   manifestSchema,
   PARTIAL_SUFFIX,
   SET_PREFIX,
@@ -13,6 +14,8 @@ import {
   type DatabaseSnapshot,
   type FileHashes,
   type SetListing,
+  type TreeCopy,
+  type TreePath,
 } from "../../domain/recovery/recovery-set.js";
 import { backupDatabase, probeDatabase, type DB } from "../sqlite/db.js";
 import { writeFileAtomic } from "./yaml-writers.js";
@@ -61,12 +64,10 @@ export class FsRecoveryStore implements RecoveryStore {
     const database = probeDatabase(join(dir, DB_PATH));
     // Symlinks are followed: the set holds the real bytes, so it never depends on (or dangles into) the live tree.
     const forbidden = this.canonical(this.root);
-    if (existsSync(this.live.config)) copyTree(this.live.config, join(dir, "config"), "config", { skip: () => false, forbidden, ancestors: [] });
-    if (opts.withArtifacts && existsSync(this.live.artifacts)) {
-      // A `.tmp-*` sibling is a generation still being written (or abandoned): never part of the set.
-      copyTree(this.live.artifacts, join(dir, "artifacts"), "artifacts", { skip: (n) => n.startsWith(".tmp-"), forbidden, ancestors: [] });
-    }
-    return { name: finalName, dir, database, files: hashTree(dir) };
+    const trees: TreeCopy[] = [copyRoot("config/", this.live.config, dir, { skip: () => false, forbidden })];
+    // A `.tmp-*` sibling is a generation still being written (or abandoned): never part of the set.
+    if (opts.withArtifacts) trees.push(copyRoot("artifacts/", this.live.artifacts, dir, { skip: (n) => n.startsWith(".tmp-"), forbidden }));
+    return { name: finalName, dir, database, trees, files: hashTree(dir) };
   }
 
   complete(staged: StagedSet, manifest: BackupManifest): string {
@@ -124,7 +125,7 @@ export class FsRecoveryStore implements RecoveryStore {
     } catch (err) {
       return { manifest: null, problems: [`${MANIFEST_FILE} is not a valid completed manifest: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`] };
     }
-    return { manifest, problems: compareHashes(manifest.files, hashTree(dir)) };
+    return { manifest, problems: [...manifestProblems(manifest), ...compareHashes(manifest.files, hashTree(dir))] };
   }
 
   destinationProblem(dest: string): string | null {
@@ -192,33 +193,86 @@ function hashFile(path: string): { sha256: string; bytes: number } {
   return { sha256: h.digest("hex"), bytes };
 }
 
+type Entry = { kind: "absent" } | { kind: "file" } | { kind: "dir"; real: string };
+
 /**
- * Copy a tree as real files: symlinks (to files or directories) are followed
- * and their targets' bytes copied. A dangling link, a link loop, a special
- * file, or a link leading to a directory that holds the backup root fails the
- * backup rather than silently leaving something out.
+ * What one path in the live home is, checked the same way for an included
+ * root and for every entry under it: lstat says whether anything is there at
+ * all, stat follows it. Only "nothing there" is `absent`; a dangling link, a
+ * loop, an unreadable path or a special file throws, so it can never be
+ * mistaken for a tree that is legitimately missing.
  */
-function copyTree(src: string, dest: string, label: string, opts: { skip: (name: string) => boolean; forbidden: string; ancestors: string[] }): void {
-  const real = realpathSync(src);
+function classify(path: string, label: string): Entry {
+  try {
+    lstatSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    throw new Error(`${label} cannot be inspected (${(err as NodeJS.ErrnoException).code ?? String(err)})`);
+  }
+  let st;
+  try {
+    st = statSync(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw new Error(`${label} is a dangling symlink (its target does not exist)`);
+    if (code === "ELOOP") throw new Error(`${label} is a symlink loop`);
+    throw new Error(`${label} cannot be followed (${code ?? String(err)})`);
+  }
+  if (st.isDirectory()) {
+    try {
+      return { kind: "dir", real: realpathSync(path) };
+    } catch (err) {
+      throw new Error(`${label} cannot be resolved (${(err as NodeJS.ErrnoException).code ?? String(err)})`);
+    }
+  }
+  if (st.isFile()) return { kind: "file" };
+  throw new Error(`${label} is not a regular file or directory, so it cannot be backed up`);
+}
+
+/**
+ * Copy one included root of the live home into the set through the same
+ * checked walker as everything under it. The root is `absent` only when
+ * nothing exists at that path; anything else that is not a readable
+ * directory fails the backup.
+ */
+function copyRoot(path: TreePath, src: string, setDir: string, opts: { skip: (name: string) => boolean; forbidden: string }): TreeCopy {
+  const label = path.slice(0, -1);
+  const root = classify(src, label);
+  if (root.kind === "absent") return { path, state: "absent", files: [] };
+  if (root.kind !== "dir") throw new Error(`${label} (${src}) is not a directory, so it cannot be backed up`);
+  const files: string[] = [];
+  copyTree(src, root.real, join(setDir, label), label, { ...opts, ancestors: [], files });
+  return { path, state: "copied", files };
+}
+
+/**
+ * Copy a directory as real files: symlinks (to files or directories) are
+ * followed and their targets' bytes copied. A dangling link, a link loop, an
+ * unreadable directory, a special file, or a link leading to a directory that
+ * holds the backup root fails the backup rather than silently leaving
+ * something out. Every file copied is recorded in `opts.files`.
+ */
+function copyTree(src: string, real: string, dest: string, label: string, opts: { skip: (name: string) => boolean; forbidden: string; ancestors: string[]; files: string[] }): void {
   if (opts.ancestors.includes(real)) throw new Error(`${label} is a symlink loop (it leads back to ${real})`);
   if (within(opts.forbidden, real)) throw new Error(`${label} leads to ${real}, which contains the backup root ${opts.forbidden}; refusing to copy backups into themselves`);
+  let names: string[];
+  try {
+    names = readdirSync(src);
+  } catch (err) {
+    throw new Error(`${label} cannot be read (${(err as NodeJS.ErrnoException).code ?? String(err)})`);
+  }
   mkdirSync(dest, { recursive: true });
-  for (const name of readdirSync(src)) {
+  for (const name of names) {
     if (opts.skip(name)) continue;
     const from = join(src, name);
     const rel = `${label}/${name}`;
-    let st;
-    try {
-      st = statSync(from);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") throw new Error(`${rel} is a dangling symlink (its target does not exist)`);
-      if (code === "ELOOP") throw new Error(`${rel} is a symlink loop`);
-      throw err;
+    const e = classify(from, rel);
+    if (e.kind === "absent") throw new Error(`${rel} disappeared while it was being backed up`);
+    if (e.kind === "dir") copyTree(from, e.real, join(dest, name), rel, { ...opts, ancestors: [...opts.ancestors, real] });
+    else {
+      copyFileSync(from, join(dest, name), constants.COPYFILE_EXCL);
+      opts.files.push(rel);
     }
-    if (st.isDirectory()) copyTree(from, join(dest, name), rel, { ...opts, ancestors: [...opts.ancestors, real] });
-    else if (st.isFile()) copyFileSync(from, join(dest, name), constants.COPYFILE_EXCL);
-    else throw new Error(`${rel} is not a regular file or directory, so it cannot be backed up`);
   }
 }
 

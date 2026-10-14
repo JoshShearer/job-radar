@@ -29,7 +29,7 @@ export async function backup(
   let dir: string;
   try {
     const staged = await store.stage(name, { withArtifacts: opts.withArtifacts });
-    const manifest = buildManifest({ name: staged.name, createdAt: at.toISOString(), app: store.appInfo(), database: staged.database, withArtifacts: opts.withArtifacts, files: staged.files });
+    const manifest = buildManifest({ name: staged.name, createdAt: at.toISOString(), app: store.appInfo(), database: staged.database, withArtifacts: opts.withArtifacts, trees: staged.trees, files: staged.files });
     dir = store.complete(staged, manifest);
   } catch (err) {
     return {
@@ -105,7 +105,12 @@ export async function restore(
   const after = compareHashes(m.files, copied);
   if (after.length > 0) return { outcome: "failed", value, notes: [`The copy in ${to} does not match the manifest:`, ...after.map((p) => `  ${p}`), `${to} is incomplete; delete it before trying again.`] };
 
-  const db = store.probeDatabase(`${to}/${DB_PATH}`);
+  let db;
+  try {
+    db = store.probeDatabase(`${to}/${DB_PATH}`);
+  } catch (err) {
+    return { outcome: "failed", value, notes: [`The restored database in ${to} could not be opened: ${err instanceof Error ? err.message : String(err)}`] };
+  }
   const rows = compareRowCounts(m.database.rowCounts, db.rowCounts);
   if (db.integrityCheck !== "ok" || rows.length > 0) {
     return { outcome: "failed", value: { ...value, rowCounts: db.rowCounts }, notes: [`The restored database in ${to} failed verification: integrity_check ${db.integrityCheck}`, ...rows.map((p) => `  ${p}`)] };

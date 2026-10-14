@@ -43,6 +43,64 @@ export const EXCLUDED: readonly Inclusion[] = [
 
 export const ARTIFACTS_EXCLUDED: Inclusion = { path: "artifacts/", reason: "left out on request (--without-artifacts); saved generations are NOT recoverable from this set" };
 
+export const ARTIFACTS_ABSENT: Inclusion = { path: "artifacts/", reason: "absent: the live home had no artifacts/ directory when this set was written (no generation had been saved yet), so there was nothing to include" };
+
+export type TreePath = "config/" | "artifacts/";
+
+/**
+ * What the adapter found at one included root of the live home and copied.
+ * `absent` means the root did not exist at all (lstat: no entry); a root that
+ * exists but cannot be followed or read never becomes `absent`, it fails.
+ * `files` are the set-relative paths the walker copied, so they can be held
+ * against what was actually hashed.
+ */
+export interface TreeCopy {
+  path: TreePath;
+  state: "copied" | "absent";
+  files: string[];
+}
+
+/**
+ * Why the copied trees do not add up to a complete set, or empty. Every tree
+ * the set promises must be accounted for; config/ must be present and
+ * non-empty (a set without it can never restore a working home); and every
+ * file the walker copied must be exactly what was hashed under that tree.
+ */
+export function treeProblems(withArtifacts: boolean, trees: readonly TreeCopy[], files: FileHashes): string[] {
+  const problems: string[] = [];
+  const expected: TreePath[] = withArtifacts ? ["config/", "artifacts/"] : ["config/"];
+  for (const t of trees) if (!expected.includes(t.path)) problems.push(`${t.path} was copied but is not part of this set`);
+  for (const path of expected) {
+    const found = trees.filter((t) => t.path === path);
+    if (found.length !== 1) {
+      problems.push(`${path} was ${found.length === 0 ? "never checked" : "checked more than once"}, so the set cannot say whether it is complete`);
+      continue;
+    }
+    const tree = found[0]!;
+    const hashed = Object.keys(files).filter((f) => f.startsWith(path)).sort();
+    if (tree.state === "absent") {
+      if (path === "config/") problems.push("config/ is missing from the live home; a set without config can never restore a working home");
+      if (hashed.length > 0) problems.push(`${path} was reported absent but ${hashed.length} files were hashed under it`);
+      continue;
+    }
+    if (path === "config/" && tree.files.length === 0) problems.push("config/ has no files; a set without config can never restore a working home");
+    const copied = new Set(tree.files);
+    for (const f of tree.files) if (!(f in files)) problems.push(`${f} was copied but is not in the set`);
+    for (const f of hashed) if (!copied.has(f)) problems.push(`${f} is in the set but the walker never copied it`);
+  }
+  return problems;
+}
+
+/** Why a parsed manifest cannot describe a complete set, or empty. Checked on every inspect, so a set missing its config is never counted as verified. */
+export function manifestProblems(m: BackupManifest): string[] {
+  const problems: string[] = [];
+  if (!m.files[DB_PATH]) problems.push(`no ${DB_PATH} in the manifest`);
+  if (!m.included.some((i) => i.path === "config/")) problems.push("config/ is not listed as included");
+  if (!Object.keys(m.files).some((f) => f.startsWith("config/"))) problems.push("the set holds no config/ files; it can never restore a working home");
+  for (const i of m.included) if (m.excluded.some((e) => e.path === i.path)) problems.push(`${i.path} is listed as both included and not included`);
+  return problems;
+}
+
 const fileEntry = z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/), bytes: z.number().int().nonnegative() });
 
 export const manifestSchema = z
@@ -88,21 +146,28 @@ export function buildManifest(input: {
   app: { name: string; version: string };
   database: DatabaseSnapshot;
   withArtifacts: boolean;
+  trees: readonly TreeCopy[];
   files: FileHashes;
 }): BackupManifest {
   if (input.database.integrityCheck !== "ok") throw new Error(`database snapshot failed integrity_check: ${input.database.integrityCheck}`);
   if (!input.files[DB_PATH]) throw new Error(`the recovery set has no ${DB_PATH}`);
-  return manifestSchema.parse({
+  const problems = treeProblems(input.withArtifacts, input.trees, input.files);
+  if (problems.length > 0) throw new Error(`the set is not complete: ${problems.slice(0, 10).join("; ")}`);
+  const artifactsCopied = input.trees.some((t) => t.path === "artifacts/" && t.state === "copied");
+  const manifest = manifestSchema.parse({
     format: MANIFEST_FORMAT,
     completed: true,
     name: input.name,
     createdAt: input.createdAt,
     app: input.app,
     database: { path: DB_PATH, ...input.database, integrityCheck: "ok" },
-    included: input.withArtifacts ? [...INCLUDED, ARTIFACTS] : [...INCLUDED],
-    excluded: input.withArtifacts ? [...EXCLUDED] : [...EXCLUDED, ARTIFACTS_EXCLUDED],
+    included: artifactsCopied ? [...INCLUDED, ARTIFACTS] : [...INCLUDED],
+    excluded: !input.withArtifacts ? [...EXCLUDED, ARTIFACTS_EXCLUDED] : artifactsCopied ? [...EXCLUDED] : [...EXCLUDED, ARTIFACTS_ABSENT],
     files: input.files,
   });
+  const after = manifestProblems(manifest);
+  if (after.length > 0) throw new Error(`the set is not complete: ${after.join("; ")}`);
+  return manifest;
 }
 
 /** Every difference between what the manifest promises and what is on disk. Empty means verified. */
