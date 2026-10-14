@@ -109,8 +109,8 @@ JOB-<NUM>: <title> — <status>
 - PR #XX (<state>) — <url>
 
 ### Changed Files (X files, Y commits ahead)
-- src/sources/workable.ts
-- tests/sources.test.ts
+- src/adapters/ats/workable.ts
+- tests/adapters.sources.test.ts
 
 ### Actions
 - Open in Claude: `cd ../job-radar-job-<NUM> && claude`
@@ -145,7 +145,7 @@ File overlap detected:
 
 | File | Branches |
 |------|----------|
-| src/pipeline/normalize.ts | JOB-12, JOB-14 |
+| src/domain/catalog/normalize.ts | JOB-12, JOB-14 |
 ```
 
 **High-collision files in this repo** — flag these loudly when they appear in 2+ branches,
@@ -153,11 +153,12 @@ because everything funnels through them:
 
 | File | Why it collides |
 |---|---|
-| `src/pipeline/normalize.ts` | All source classification happens here, once |
-| `src/sources/registry.ts` | Every new adapter registers here |
-| `src/db/schema.ts` | Migrations conflict destructively |
-| `config/career-profile.yaml` | All tuning lives here |
-| `src/cli.ts` | Every new subcommand lands here |
+| `src/domain/catalog/normalize.ts` | All posting classification happens here, once |
+| `src/adapters/ats/registry.ts` | Every new adapter registers here |
+| `src/adapters/sqlite/schema.ts` | Two branches each appending a `MIGRATIONS` entry take the same version number |
+| `src/adapters/sqlite/store.ts` + `src/ports/store.ts` | The port is generated from the store (`npm run gen:port`) |
+| `src/domain/config/schema.ts` / `config.example/` | All tuning shape lives here |
+| `src/ui/cli.ts` | Every new subcommand lands here |
 
 No overlap → `All clear — no file overlap between active branches.`
 
@@ -197,15 +198,20 @@ EOF
 cd ../job-radar-job-<NUM> && npm install
 ```
 
-7. **Link the gitignored personal config.** These files are not in git, so a new worktree
-   cannot run the resume or apply commands without them. Symlink rather than copy, so
-   there is exactly one real copy on disk:
+7. **Create config, then link the gitignored candidate files.** A fresh worktree has no
+   `config/`: `jr init` copies `config.example/` (never overwriting). The evidence ledger,
+   personal file and `.env` are not in git, so link them from the primary checkout by
+   absolute path (one real copy on disk). A worktree uses its own `data/` database, so it
+   never writes the primary's.
 
 ```bash
+PRIMARY_ABS="$(cd ../job-radar && pwd)"
 cd ../job-radar-job-<NUM>
-for f in config/personal.yaml config/resume.yaml .env; do
-  [ -f "../job-radar/$f" ] && ln -sf "../job-radar/$f" "$f"
+npm run -s cli -- init
+for f in config/candidate/evidence.yaml config/candidate/personal.yaml .env; do
+  [ -f "$PRIMARY_ABS/$f" ] && ln -sf "$PRIMARY_ABS/$f" "$f"
 done
+ls -l config/candidate/ .env
 ```
 
    Report which ones were linked and which were absent.
@@ -216,8 +222,8 @@ done
 ```
 Worktree created: ../job-radar-job-<NUM>/
 
-Dependencies installed. Linked: config/personal.yaml, .env
-Not found (resume commands will fail here): config/resume.yaml
+Dependencies installed. Config initialized. Linked: config/candidate/personal.yaml, .env
+Not found (tailor/prepare will refuse here): config/candidate/evidence.yaml
 
 To start working:
   cd ../job-radar-job-<NUM> && claude
@@ -246,7 +252,7 @@ git worktree remove ../job-radar-job-<NUM> --force
 5. Report success.
 
 > Removing a worktree deletes its `node_modules` and its symlinks, not the real
-> `config/personal.yaml` in the primary workspace. Confirm the links are symlinks before
+> `config/candidate/` files in the primary workspace. Confirm the links are symlinks before
 > `--force`, and stop if any is a real file — that would mean personal data lives only there.
 
 ---

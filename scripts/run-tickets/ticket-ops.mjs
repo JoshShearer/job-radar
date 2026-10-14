@@ -86,6 +86,8 @@ const FORBIDDEN_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "JOB_RADAR_DB",
+  "JR_HOME",
+  "JR_DB",
   "JOB_RADAR_PERSONAL",
   "JOB_RADAR_RESUME",
   "JOB_RADAR_REPORTS",
@@ -97,11 +99,18 @@ const FORBIDDEN_ENV = [
 ];
 /**
  * The owner's personal material: real contact and work-authorization answers, real employment
- * history, and the logged-in browser profile `autofill` uses. Gitignored, so a fresh lane has none,
- * and a lane never needs one (a repro points JOB_RADAR_PERSONAL / JOB_RADAR_RESUME at an example
- * or fixture file inside the lane, per command). One appearing is a copy of the owner's data.
+ * history (the evidence ledger), and the logged-in browser profile `jr fill` uses. Gitignored, so a
+ * fresh lane has none, and a lane never needs one (a repro runs with JR_HOME pointing at a scratch
+ * directory inside the lane, seeded by `jr init` from config.example/). One appearing is a copy of
+ * the owner's data. v1's paths stay listed: they remain on disk in a migrated checkout.
  */
-const PERSONAL_PATHS = ["config/personal.yaml", "config/resume.yaml", ".browser-profile"];
+const PERSONAL_PATHS = [
+  "config/candidate/evidence.yaml",
+  "config/candidate/personal.yaml",
+  ".browser-profile",
+  "config/personal.yaml",
+  "config/resume.yaml",
+];
 /** A key-shaped Anthropic value (the `.env.example` placeholder `sk-ant-...` is not one). */
 const KEY_VALUE_RE = /sk-ant-[A-Za-z0-9_-]{16,}/;
 
@@ -122,8 +131,8 @@ const NEXT = {
   critic: { pass: "verify", concerns: "verify", block: "fix" },
   verify: { pass: "merge", fail: "fix" },
 };
-/** Paths whose change needs the owner before merge (CLAUDE.md: a live autofill run ships them). */
-const OWNER_GATED = /^src\/apply\//;
+/** Paths whose change needs the owner before merge (CLAUDE.md: a live `jr fill` run ships them). */
+const OWNER_GATED = /^src\/(domain\/browser|adapters\/browser)\/|^src\/app\/fill\.ts$/;
 /**
  * Files that DEFINE the gates, or what the critic grades against. Freezing this script does not
  * freeze what `npm test` and `npm run typecheck` do: a ticket could weaken the test config, the
@@ -140,8 +149,8 @@ const GATE_FILES = [
   ".npmrc",
   "tsconfig.json",
   "vitest.config.ts",
-  "src/config/env.ts",
-  "src/config/load.ts",
+  "src/adapters/fs/paths.ts",
+  "src/ui/compose.ts",
   "CLAUDE.md",
   ".claude/commands/critique.md",
   ".claude/commands/check-constraints.md",
@@ -337,7 +346,16 @@ function appendToPrBody(pr, text) {
  * mtime: the paid key, the personal answers and resume, the logged-in browser profile, the real
  * database, and the timer's env directory.
  */
-const PRIMARY_PRIVATE = [".env", "config/personal.yaml", "config/resume.yaml", ".browser-profile", "data/job-radar.sqlite"];
+const PRIMARY_PRIVATE = [
+  ".env",
+  "config/candidate/evidence.yaml",
+  "config/candidate/personal.yaml",
+  ".browser-profile",
+  "data/jr.sqlite",
+  "config/personal.yaml",
+  "config/resume.yaml",
+  "data/job-radar.sqlite",
+];
 function privateFingerprint(state) {
   const paths = PRIMARY_PRIVATE.map((p) => path.join(state.primary, p));
   const envDir = path.join(configHome(), "job-radar");
@@ -394,7 +412,7 @@ function runGates() {
  * clean proves nothing about that. Runs the commit's own loadEnvFile with forbidden vars removed.
  */
 function keyProbe() {
-  if (!fs.existsSync("src/config/env.ts")) return { visible: false, ran: false };
+  if (!fs.existsSync("src/adapters/fs/paths.ts")) return { visible: false, ran: false };
   const env = { ...process.env };
   for (const k of FORBIDDEN_ENV) delete env[k];
   const r = run(
@@ -404,7 +422,8 @@ function keyProbe() {
       "tsx",
       "--input-type=module",
       "-e",
-      "const m = await import('./src/config/env.ts'); m.loadEnvFile(); console.log(process.env.ANTHROPIC_API_KEY ? 'PAID KEY VISIBLE' : 'no paid key')",
+      // Mirrors the composition root (src/ui/compose.ts): resolve the home, load its .env.
+      "const m = await import('./src/adapters/fs/paths.ts'); const { resolve } = await import('node:path'); m.loadEnvFile(resolve(m.resolvePaths().home, '.env')); console.log(process.env.ANTHROPIC_API_KEY ? 'PAID KEY VISIBLE' : 'no paid key')",
     ],
     { env },
   );
@@ -481,7 +500,7 @@ function unitsFingerprint() {
 }
 /**
  * Listening sockets owned by a process running in the lane: a server an agent left behind, or one
- * on the owner's port 4321 (`serve` silently moves to the next port when its own is taken).
+ * on the owner's port 4180 (`jr serve`'s default; an agent must pass another port).
  */
 function laneListeners(lane) {
   const r = run("ss", ["-Hltnp"]);
@@ -498,7 +517,7 @@ function laneListeners(lane) {
         continue;
       }
       if (cwd === real || cwd.startsWith(`${real}/`))
-        problems.push(`pid ${m[1]} is listening on :${port} from the lane${port === "4321" ? " (the owner's port)" : ""}`);
+        problems.push(`pid ${m[1]} is listening on :${port} from the lane${port === "4180" ? " (the owner's port)" : ""}`);
     }
   }
   return problems;
@@ -868,7 +887,7 @@ const commands = {
       const probe = keyProbe();
       if (probe.visible)
         throw new Stop("blocked", "the paid key is visible to the CLI from the lane at this commit; not pushed");
-      if (probe.ran && probe.code !== 0) return fail("the key probe could not load src/config/env.ts", probe.out);
+      if (probe.ran && probe.code !== 0) return fail("the key probe could not load src/adapters/fs/paths.ts", probe.out);
 
       if (t.prNumber) {
         const pr = prView(t.prNumber, "state,baseRefName");
@@ -986,7 +1005,7 @@ const commands = {
       if (gated.length)
         throw new Stop(
           "blocked",
-          `owner gate: ${gated.join(", ")} changed; CLAUDE.md requires a live autofill run before an src/apply/ change ships. PR left open for the owner.`,
+          `owner gate: ${gated.join(", ")} changed; CLAUDE.md requires a live \`jr fill --headless\` run before a browser change ships. PR left open for the owner.`,
         );
 
       // The base must not have moved since Verify: a squash onto a newer base is a tree nobody

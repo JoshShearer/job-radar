@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Job Radar daily pass
+
+[Timer]
+OnCalendar=*-*-* 07:15:00
+# A sleeping laptop runs the missed pass at wake instead of silently skipping it.
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,38 +1,37 @@
 {
   "name": "job-radar",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Local-first job intelligence pipeline: discover, normalize, dedupe, filter, score, analyze, and track senior engineering opportunities.",
+  "description": "Job Radar rebuilt: append-only facts, memoized derivations, evidence-checked materials, one model gateway.",
   "engines": {
     "node": ">=22.12.0"
   },
+  "bin": {
+    "jr": "src/ui/cli.ts"
+  },
   "scripts": {
-    "radar": "tsx src/cli.ts daily",
-    "cli": "tsx src/cli.ts",
-    "ingest": "tsx src/cli.ts ingest",
-    "score": "tsx src/cli.ts score",
-    "analyze": "tsx src/cli.ts analyze",
+    "cli": "tsx src/ui/cli.ts",
+    "daily": "tsx src/ui/cli.ts daily",
+    "serve": "tsx src/ui/cli.ts serve",
     "test": "vitest run",
-    "test:watch": "vitest",
+    "test:unit": "vitest run --exclude tests/browser.refusals.test.ts",
+    "test:browser": "vitest run tests/browser.refusals.test.ts",
     "typecheck": "tsc --noEmit",
-    "serve": "tsx src/cli.ts serve --open",
-    "dev": "tsx src/cli.ts serve --watch --open",
-    "discover": "tsx src/cli.ts discover",
-    "test:unit": "vitest run --exclude tests/autofill.browser.test.ts",
-    "test:browser": "vitest run tests/autofill.browser.test.ts"
+    "gen:port": "tsx scripts/gen-store-port.ts",
+    "gen:examples": "tsx scripts/gen-example-config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
+    "playwright": "^1.62.1",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
-    "playwright": "^1.62.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

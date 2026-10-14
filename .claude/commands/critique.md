@@ -154,8 +154,9 @@ git log origin/main..HEAD --oneline
 ```
 
 `workflow` → all `.claude/` files instead.
-`architecture` → `CLAUDE.md`, `README.md`, `TODO.md`, `src/cli.ts`, `src/db/schema.ts`,
-`src/pipeline/normalize.ts`, `src/config/schema.ts`, plus anything the user's concern names.
+`architecture` → `CLAUDE.md`, `README.md`, `CONTEXT.md`, `TODO.md`, `docs/adr/`, `src/ui/compose.ts`,
+`src/adapters/sqlite/schema.ts`, `src/domain/catalog/normalize.ts`, `src/domain/config/schema.ts`,
+`tests/architecture.test.ts`, plus anything the user's concern names.
 
 ## Step 2: Auto-pass check
 
@@ -175,15 +176,15 @@ Score the change:
 
 | Factor | Points | Condition |
 |---|---|---|
-| Resume provenance touched | +2 | `src/resume/provenance.ts`, `render.ts`, or `tailor.ts` changed |
-| Apply refusals touched | +2 | `src/apply/` changed — refusals and the never-submit guarantee live here |
-| Cost controls touched | +2 | `src/analysis/` changed in a way affecting cache keys, prefilters, prompt caching, or the description budget |
-| Determinism boundary crossed | +2 | A model call appears in `src/pipeline/`, `src/lib/`, or `src/db/` |
-| Schema change | +1 | `src/db/schema.ts` or `src/analysis/schema.ts` changed |
+| Verification touched | +2 | `src/domain/materials/` or `src/domain/candidate/requirements.ts` changed |
+| Fill refusals touched | +2 | `src/domain/browser/`, `src/adapters/browser/` or `src/app/fill.ts` changed: refusals and the never-submit guarantee live here |
+| Cost controls touched | +2 | `src/app/gateway.ts`, `src/domain/budget/`, `src/domain/llm/`, `src/app/assess*.ts` or `selection.ts` changed |
+| Determinism boundary crossed | +2 | A model call anywhere but through `src/app/gateway.ts` |
+| Schema change | +1 | `src/adapters/sqlite/schema.ts` or an assessment/plan Zod schema changed |
 | No test changes | +1 | No `tests/*` modified alongside code |
 | New external dependency | +1 | `package.json` dependencies added |
 | Workflow changes | +1 | `.claude/` modified |
-| Config schema changes | +1 | `src/config/schema.ts` or `config/*.yaml` structure changed |
+| Config schema changes | +1 | `src/domain/config/schema.ts` or `config.example/` structure changed |
 | Deletes more than it adds | +1 | Net negative diff |
 | Files changed > 10 | +1 | |
 
@@ -244,51 +245,60 @@ Conduct two independent L2 reviews. The second must not reference the first. Com
 
 Generic review misses the failure modes that actually matter here. Work through these:
 
-**Truthfulness (`src/resume/`, `src/analysis/`)**
-- Can any path emit resume prose that did not come from `config/resume.yaml`? Model output
-  reaching a rendered document directly is a BLOCK, not a concern.
-- Does `enforceProvenance` still *repair* rather than trust? Unknown or `verified: false`
-  citations dropped, and a rewrite introducing a technology or a number reverted to master
-  wording?
-- Has a rewrite check been loosened to make a reverted rewrite pass? That is the exact
-  failure `CLAUDE.md` warns about.
-- Does `resume match` still return three states? Collapsing `partial` into pass/fail removes
-  the mechanism that prevents over-claiming.
+**Truthfulness (`src/domain/materials/`, `src/domain/candidate/`, `src/domain/llm/prompts.ts`)**
+- Can any path put model text into a resume, cover letter or form answer without
+  `verifySegment`? Model output reaching a rendered document unverified is a BLOCK.
+- Does the verifier still *repair* rather than trust? Unknown, `verified: false` or wrong-owner
+  citations dropped; a failing rewrite reverted to the candidate's wording; a failing pack
+  sentence removed; a form answer with any failure unused?
+- Has a rule been loosened to make a refused sentence pass? A false-refusal fix needs a test
+  pinning the real overreach on the same input as still refused, and a `MATERIAL_RULES_VERSION`
+  bump. Can the target context (company, title, department) now license a technology,
+  qualifier or number?
+- Does requirement matching still return three states? Collapsing `partial` removes the
+  mechanism that prevents over-claiming.
+- Does any prompt or config prose describe the candidate? Only the evidence ledger may.
 
-**Refusals (`src/apply/`)**
+**Refusals (`src/domain/browser/`, `src/adapters/browser/`, `src/app/fill.ts`)**
 - Does anything now click submit, tick a checkbox, answer a demographic question, or accept
   an attestation? Any of these is a BLOCK.
-- Does an unset `personal.yaml` value fall back to a default anywhere? An unset value is
-  unknown. A default answer on a job application is a false statement.
-- Does `chooseOption` still reserve 1.0 for exact string equality? A loosened threshold turns
-  a refusal into a guess.
+- Does an unset `personal.yaml` value fall back to a default, or get filled from a drafted pack
+  answer? An unset value is unknown. A default answer on a job application is a false statement.
+- Does `chooseOption` still reserve 1.0 for exact string equality, and are radios still judged
+  against their whole group? A loosened threshold turns a refusal into a guess.
+- Any `page.evaluate` body with a named function (`__name` under tsx)?
 - Any stealth, fingerprint masking, automation-flag hiding, or CAPTCHA handling added?
 
-**Determinism (`src/pipeline/`, `src/lib/`)**
-- Is a model being used for string comparison, parsing, arithmetic, or classification?
+**Determinism (`src/domain/`)**
+- Is a model being used for string comparison, parsing, arithmetic, routing or classification?
   Those must be reproducible, cheap over the whole index, and auditable.
-- Do adapters in `src/sources/` still do zero classification?
+- Does domain or app code read the wall clock instead of `ctx.clock`?
+- Do adapters in `src/adapters/ats/` still do zero classification?
 
-**Cost (`src/analysis/`)**
-- Are all four mechanisms intact — deterministic prefilters, the content-addressed cache,
-  prompt caching on the stable prefix, and the truncated description budget?
-- Can an unchanged job be re-analyzed? Does `repo.upsert` still invalidate cached analysis
-  and score when a description changes?
+**Cost (`src/app/gateway.ts`, `src/domain/budget/`, `src/app/assess.ts`)**
+- Is every paid call still through the gateway: addressed by the hash of exactly what is sent,
+  reserved at worst case before the call, receipted on every outcome?
+- Can an unchanged posting be re-bought? Look for volatile content entering a prompt.
+- Is selection still by rank (ADR-0001), not an absolute fit gate?
 
-**Politeness (`src/lib/http.ts`, `src/sources/`)**
-- Is `PoliteFetcher` rate limiting still enforced and non-zero?
+**Facts (`src/adapters/sqlite/`, `src/app/`)**
+- Any UPDATE or DELETE on a fact table? Corrections are `void_event`s.
+- An edited applied migration instead of a new `MIGRATIONS` entry?
+
+**Politeness (`src/adapters/http/`, `src/adapters/ats/`)**
+- Is the 500 ms per-host floor still enforced in code and config, and `Retry-After` honored?
 - Any endpoint added that is not public and documented?
 
-**Attribution (`src/report/`)**
-- Does `src/report/daily.ts` still emit the Remote OK followed link and name them as source?
+**Attribution (`src/app/briefing.ts`, `src/ui/reports/`)**
+- Does the briefing still emit the Remote OK followed link and name them as source?
 
-**Resilience (`src/sources/`)**
-- Can one failing source abort a run? There is a test for this — is it still meaningful, or
+**Resilience (`src/app/sweep.ts`)**
+- Can one failing board abort a sweep? There is a test for this: is it still meaningful, or
   did the change route around it?
 
 **Structured output**
-- Does all model output reaching the database still pass a JSON Schema *and* Zod
-  (`AnalysisSchema`)? Is malformed output rejected rather than stored?
+- Does all model output still pass Zod (`validateStructured`) before storage, with the JSON
+  Schema generated from the same Zod schema? Is malformed output rejected and receipted?
 
 ## Step 5: Record the verdict
 
@@ -318,8 +328,8 @@ Show the full verdict. For CONCERNS or BLOCK, list actionable items with `file:l
 
 1. **Be specific.** "This could have bugs" is useless. A finding has the shape
    "`<file>:<line>` does X, so input Y produces wrong result Z" — cite the line you actually
-   read. `enforceProvenance` lives in `src/resume/render.ts`, the vocabulary and rewrite
-   checks it calls live in `src/resume/provenance.ts`; name whichever one you traced.
+   read. Verification lives in `src/domain/materials/verify.ts`, composition and reverting in
+   `src/domain/materials/compose.ts`; name whichever one you traced.
 2. **Construct failure scenarios, not hypotheticals.** Trace the call chain.
 3. **Don't nitpick style.** There is no linter here, but style is still not your job.
 4. **Score honestly.** A 95 means you traced the paths and found almost nothing. If you

@@ -74,13 +74,13 @@ touches a command path, actually run it before shipping:
 
 | Changed area | Run |
 |---|---|
-| `src/sources/`, `src/pipeline/ingest.ts` | `npm run cli -- sources` |
-| `src/pipeline/` (score, filters, dedupe, normalize) | `npm run cli -- score` |
-| `src/report/` | `npm run radar` then `npm run cli -- open` |
-| `src/analysis/` | `npm run cli -- analyze` on a small slice — this one costs money |
-| `src/resume/` | `npm run cli -- resume match <job-id>` |
-| `src/apply/` | `npm run cli -- autofill <job-id>` against a real posting, and confirm it stopped at submit |
-| `src/config/` | any command — config is validated on load |
+| `src/adapters/ats/`, `src/adapters/http/`, `src/app/sweep.ts` | `npm run cli -- sources` |
+| `src/domain/catalog/`, `src/domain/evaluation/` (identity, eligibility, scoring, ranking) | `npm run cli -- evaluate` then `top` |
+| `src/app/briefing.ts`, `src/ui/` | `npm run cli -- report` (and `serve` for the web UI) |
+| `src/app/gateway.ts`, `src/app/assess*.ts`, `src/domain/llm/` | `npm run cli -- assess --dry-run`, then `assess --limit 2 --max-spend 0.5` — this one costs money |
+| `src/domain/materials/`, `src/domain/candidate/` | `npm run cli -- evidence match <id>` and `render <id>` (free) |
+| `src/domain/browser/`, `src/adapters/browser/` | `npm run cli -- fill <id> --headless` against a real posting, and confirm it stopped at submit |
+| `src/domain/config/` | `npm run cli -- check` — config is validated on load |
 
 Record what you ran and the outcome; it goes in the PR body under Testing.
 
@@ -137,11 +137,12 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
 
 Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`.
-Scopes mirror `src/`: `sources`, `pipeline`, `analysis`, `resume`, `apply`, `report`, `config`, `db`, `cli`.
+Scopes mirror the layers and areas: `catalog`, `evaluation`, `assess`, `materials`, `fill`, `mail`, `pursuit`, `gateway`, `sources`, `db`, `config`, `cli`, `web`.
 Description: imperative, lowercase, no trailing period.
 
-> Never `git add` `config/personal.yaml`, `config/resume.yaml`, `data/`, `reports/`,
-> `resumes/*`, or `applications/`. They are gitignored because they hold real personal
+> Never `git add` `config/candidate/evidence.yaml`, `config/candidate/personal.yaml`, `.env`,
+> `data/`, `reports/`, `artifacts/`, `legacy-v1/`, or v1's `config/resume.yaml`,
+> `config/personal.yaml`, `resumes/*`, `applications/`. They are gitignored because they hold real personal
 > data. If `git status` shows any of them as untracked, stop and investigate rather than
 > committing.
 
@@ -159,7 +160,7 @@ Produce for the PR body:
 2. Approach
 3. Key decisions and rationale
 4. Dependencies added
-5. Schema or config changes (`src/db/schema.ts`, `config/*.yaml` keys)
+5. Schema or config changes (`src/adapters/sqlite/schema.ts` `MIGRATIONS`, config keys in `src/domain/config/schema.ts`)
 6. Testing — what was run, including the Step 4b command and its result
 7. Known limitations
 
@@ -187,9 +188,9 @@ gh pr create --base <base-branch> --title "<type>(<scope>): <description>" --bod
 - <db columns or config keys added>
 
 ### Testing
-- `npm test` — 316 passed
+- `npm test` — <n> passed
 - `npm run typecheck` — clean
-- `npm run cli -- sources` — 104 boards, 0 errors
+- `npm run cli -- sources` — <n> boards, <n> errors
 
 ## Test Plan
 - [ ] <verification step a human should do>

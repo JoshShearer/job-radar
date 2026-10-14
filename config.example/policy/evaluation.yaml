@@ -1,0 +1,68 @@
+scoring:
+  normalize_divisor: 1.6
+  title_match_bonus: 18
+  title_multiplier: 2
+  freshness_full_days: 7
+  freshness_zero_days: 45
+  freshness_max_points: 10
+  evergreen_days: 180
+  stale_warning_days: 90
+  report_threshold: 45
+roi:
+  weights:
+    fit: 0.34
+    differentiation: 0.2
+    compensation: 0.16
+    competition: 0.15
+    recency: 0.1
+    reachability: 0.05
+  competition:
+    big_tech_penalty: 25
+    unknown_company_neutral: 55
+    small_company_bonus: 20
+priority:
+  A:
+    min_fit: 78
+    min_roi: 72
+  a_without_combo_min_fit: 88
+  B:
+    min_fit: 65
+    min_roi: 55
+  C:
+    min_fit: 45
+reconcile:
+  analyst_roi_weight: 0.7
+calibration:
+  min_sample: 8
+  min_ratio: 0.25
+  max_ratio: 1.5
+assessment:
+  two_stage: true
+  dossier_for:
+    - apply_and_outreach
+    - apply
+    - network_or_watch
+  dossier_min_fit: 70
+  description_char_budget: 7000
+  max_attempts: 2
+selection:
+  per_company_cap: 2
+  backfill_cap: 3
+  cold_after: 6
+  unexplored_bonus: 8
+  cold_penalty: 15
+  fresh_days: 21
+  fresh_bonus: 12
+lifecycle:
+  park_after_days: 3
+  max_fraction_per_board: 0.8
+report:
+  max_priority_a: 3
+  max_priority_b: 7
+  max_priority_c: 5
+  max_total: 12
+source_policy:
+  min_analyzed_for_verdict: 30
+  retire_below_apply_rate: 0.04
+  watch_below_selection_rate: 0.1
+  min_passed_for_selection_verdict: 100

@@ -92,7 +92,7 @@ describe("ship", () => {
 
   it("blocks a commit whose env loader can see a paid key", () => {
     symlinkSync(resolve(REPO, "node_modules"), resolve(c.lane, "node_modules"));
-    built(c, "src/config/env.ts", 'export function loadEnvFile() { process.env.ANTHROPIC_API_KEY = "x"; }\n');
+    built(c, "src/adapters/fs/paths.ts", 'export function resolvePaths() { return { home: "." }; }\nexport function loadEnvFile() { process.env.ANTHROPIC_API_KEY = "x"; }\n');
     const r = ops(c, ["ship", "JOB-1"]);
     expect(r.code).toBe(3);
     expect(ticket(c).blockedReason).toContain("paid key");
@@ -178,8 +178,8 @@ describe("merge", () => {
     expect(ticket(c).phase).toBe("fix");
   });
 
-  it("leaves an src/apply/ change open for the owner's live autofill run", () => {
-    graded(c, "src/apply/x.ts");
+  it("leaves a browser-fill change open for the owner's live `jr fill` run", () => {
+    graded(c, "src/adapters/browser/x.ts");
     expect(ops(c, ["merge", "JOB-1"]).code).toBe(3);
     expect(ticket(c).blockedReason).toContain("owner gate");
   });

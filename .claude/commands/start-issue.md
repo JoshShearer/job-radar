@@ -130,9 +130,9 @@ Tip: `/worktrees create JOB-XX` to work on several in parallel.
 Surface these only when the issue's area label or description implicates them:
 
 - **Sources**: add a test in `tests/sources.test.ts` pinning the real observed payload shape.
-  The adapter must catch its own errors and record them on `ctx.stats` — one failing source
-  must never abort a run, and there is a test for that.
-- **Pipeline / scoring**: tuning belongs in `config/career-profile.yaml`, not TypeScript.
+  An adapter's failure must stay that board's failure: one failing board must never abort a
+  sweep, and there is a test for that.
+- **Evaluation / scoring**: tuning belongs in `config/` (strategy, preferences, policy), not TypeScript.
   If the change requires editing TS to tune, that is a design bug.
 - **Analysis**: any new model output reaching the database needs a JSON Schema *and* Zod
   re-validation.

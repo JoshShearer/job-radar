@@ -23,14 +23,14 @@ opencode, where the subagent type is `general` rather than `general-purpose`).
 |---|---|
 | **The run does not wait on a human.** | Open questions get a recorded default posted to Linear; Verify and merge into `main` are automated. Anything needing the owner blocks **that ticket** and the run moves on. Only these stop the whole run: the Fix cap, `main is red`, a broken `origin/main` at Step 0c, a failed lane-safety check, Linear unreachable at Step 0, expired `gh` auth, and a refused permission. A failed Verify, a critic BLOCK and a merge conflict are **not** blocks: they go to Fix. |
 | **Base and merge target is `main`** (`origin/HEAD`, verified 2026-10-08). Merging deploys nothing: the daily timer runs the owner's primary checkout, which moves only when the owner pulls. | The run merges into `main` only. There is no branch protection (private repo, free plan), so `--match-head-commit` and the verdict pins below are the whole merge gate. |
-| **The primary `.env` holds a live `ANTHROPIC_API_KEY`** - the only credential here that spends money (`analyze`, `tailor`, `apply`). The timer's `~/.config/job-radar/env` (created by `deploy/install-timer.sh`) holds it too, with the Gmail credentials. `loadEnvFile` reads `.env` from the checkout the CLI runs in and never overrides an exported variable. `JOB_RADAR_DB` / `_PERSONAL` / `_RESUME` / `_REPORTS` / `_PROFILE` / `_SOURCES` can point any checkout at the owner's real 238 MB database, resume or work-authorization answers. | **The lane `.env` is GENERATED from an allowlist** (`JOB_RADAR_MODEL`, `_EFFORT`, `_CONTACT`, `_DEBUG`) by `ticket-ops guard --init`, never linked - the version this replaced symlinked the primary's `.env` and gave every lane a paid key. The guard refuses the lane if a forbidden variable is **exported** in the launching shell, or the lane `.env` is a symlink, carries any other key, any `sk-ant-` value or the primary's path. `src/config/env.ts` and `src/config/load.ts` decide which `.env` loads, so they are gate files, and `ship` re-runs the key probe on every pushed head and refuses a diff that adds a key-shaped `sk-ant-` value, the primary's path, or `.config/job-radar`. A ticket whose acceptance needs a paid model call blocks. |
-| **The owner's personal material is gitignored** (`config/personal.yaml`, `config/resume.yaml`, `.browser-profile/`, `applications/`, `data/`), so a lane starts without it and resolves every default path inside itself. | The guard refuses a lane in which `config/personal.yaml`, `config/resume.yaml` or `.browser-profile` appears. A repro points `JOB_RADAR_PERSONAL` / `JOB_RADAR_RESUME` at `config/*.example.yaml` or a `tests/fixtures` file **per command**. The lane's own `data/` is a fresh, empty database and is fine. |
-| **`autofill` types into a live employer's form**, and CLAUDE.md requires a live autofill run before any `src/apply/` change ships. A lane has no personal answers and no logged-in profile. | Agents run autofill **only** against `file://` fixtures. `ticket-ops merge` refuses a diff touching `src/apply/` (PR left open, ticket blocked "owner gate"). |
+| **The primary `.env` holds a live `ANTHROPIC_API_KEY`** - the only credential here that spends money (`assess`, `tailor`, `prepare`, `evidence import`, `benchmark-triage`). The timer's `~/.config/job-radar/env` (created by `deploy/install-timer.sh`) holds it too, with the Gmail credentials. `loadEnvFile` reads `.env` from the CLI's home (`JR_HOME`, default the checkout) and never overrides an exported variable. `JR_HOME` / `JR_DB` can point any checkout at the owner's real database, evidence ledger or work-authorization answers (v1's `JOB_RADAR_DB` / `_PERSONAL` / `_RESUME` stay forbidden too). | **The lane `.env` is GENERATED from an allowlist** (`JOB_RADAR_MODEL`, `_EFFORT`, `_CONTACT`, `_DEBUG`) by `ticket-ops guard --init`, never linked - the version this replaced symlinked the primary's `.env` and gave every lane a paid key. The guard refuses the lane if a forbidden variable is **exported** in the launching shell, or the lane `.env` is a symlink, carries any other key, any `sk-ant-` value or the primary's path. `src/adapters/fs/paths.ts` and `src/ui/compose.ts` decide which `.env` loads, so they are gate files, and `ship` re-runs the key probe on every pushed head and refuses a diff that adds a key-shaped `sk-ant-` value, the primary's path, or `.config/job-radar`. A ticket whose acceptance needs a paid model call blocks. |
+| **The owner's personal material is gitignored** (`config/candidate/evidence.yaml`, `config/candidate/personal.yaml`, `.browser-profile/`, `artifacts/`, `data/`, and v1's leftovers), so a lane starts without it and resolves every default path inside itself. | The guard refuses a lane in which a candidate file or `.browser-profile` appears. A repro runs `npm run cli -- init` in the lane (it copies `config.example/`, including example `candidate/evidence.yaml` and `personal.yaml`), or sets `JR_HOME` **per command** to a scratch directory inside the lane seeded the same way. The lane's own `data/` is a fresh, empty database and is fine. |
+| **`jr fill` types into a live employer's form**, and CLAUDE.md requires a live `jr fill --headless` run before any browser change ships. A lane has no personal answers and no logged-in profile. | Agents run fill **only** against `file://` fixtures (the harness in `tests/browser.refusals.test.ts`). `ticket-ops merge` refuses a diff touching `src/domain/browser/`, `src/adapters/browser/` or `src/app/fill.ts` (PR left open, ticket blocked "owner gate"). |
 | **`deploy/install-timer.sh` writes the owner's user units, if installed** (none were on 2026-10-08), and resolves the repo from its own location: run from a lane, it repoints the daily timer at a directory Step 8 deletes. | Never run it or `systemctl --user` in a run. `guard` fingerprints every `job-radar` entry under `~/.config/systemd/user/` (unit files, `*.d/` drop-ins, `timers.target.wants/` links) and `~/.config/job-radar/` once, at the first Step 0c - never retaken, even on resume - and every `ticket-ops` step fails if it changed. |
-| **Ingest and discovery read public job boards** through `PoliteFetcher`; `inbox` reads Gmail with credentials that live outside `.env`. | `sources`, `ingest`, `discover`, `score` and `radar` (never `--analyze`) may run in the lane: free, read-only, rate-limited, writing only the lane's database. `inbox` cannot: its credentials are a forbidden export. |
-| **`serve` defaults to 4321 and silently moves to the next port when that is taken** - the owner's `npm run dev` may be on it, serving the owner's real reports. | A lane never binds 4321 and never uses `npm run serve` / `npm run dev` (both pass `--open`). It runs `npm run cli -- serve --port <p>` on a port `ss -Hltn "sport = :<p>"` shows free (`-H` drops the always-printed header) and asserts the server reports `<p>`; otherwise it is grading someone else's server. Mechanically, every `ticket-ops` step fails while any process whose working directory is the lane is listening (on 4321 or anywhere): a server must be stopped before its phase returns. Nothing single-slot is shared, so there is no lock. |
+| **Sweeps and discovery read public job boards** through the rate-limited transport; `mail scan` reads Gmail with credentials that live outside `.env`. | `sources`, `sweep`, `discover`, `evaluate`, `report` and `daily` (never `--assess` or `--mail`) may run in the lane: free, read-only toward the boards, rate-limited, writing only the lane's database. `mail scan` cannot: its credentials are a forbidden export. |
+| **`jr serve` defaults to 4180** - the owner's own `serve` may be on it, serving the owner's real data. | A lane never binds 4180 and never uses `npm run serve` (the default port). It runs `npm run cli -- serve --port <p>` on a port `ss -Hltn "sport = :<p>"` shows free (`-H` drops the always-printed header) and asserts the server reports `<p>`; otherwise it is grading someone else's server. Mechanically, every `ticket-ops` step fails while any process whose working directory is the lane is listening (on 4180 or anywhere): a server must be stopped before its phase returns. Nothing single-slot is shared, so there is no lock. |
 | **The gates are `npm test` and `npm run typecheck`.** `npm test` launches a real Chromium (`npx playwright install chromium`) and fails loudly without it. No lint, format or build script exists, and there is **no CI** (no `.github/`). | Ship and Verify run both; nobody invents a third. `npm run test:unit` is never a gate. Verify has no CI to read. |
-| **Gate-defining files** - `package.json` (scripts and toolchain versions), the lockfiles, `pnpm-workspace.yaml`, `.npmrc`, any `tsconfig*.json` or `vitest*.config.*`, `src/config/env.ts` and `load.ts`, and what the critic grades against: `CLAUDE.md`, `critique.md`, `check-constraints.md` (`ticket-ops gate-files`; a test derives the gates' config closure and fails if the list misses part of it). Renames count on both sides (`--no-renames`). | A diff touching one gets `L2+Double`; **each** critic is told "this diff changes the gates that grade it" and must return a `GATES:` justification (`record` refuses fewer than the depth's critic count, and `merge` re-derives the risk for the graded commit and refuses again); Ship never takes its gates-already-ran shortcut for it. |
+| **Gate-defining files** - `package.json` (scripts and toolchain versions), the lockfiles, `pnpm-workspace.yaml`, `.npmrc`, any `tsconfig*.json` or `vitest*.config.*`, `src/adapters/fs/paths.ts` and `src/ui/compose.ts`, and what the critic grades against: `CLAUDE.md`, `critique.md`, `check-constraints.md` (`ticket-ops gate-files`; a test derives the gates' config closure and fails if the list misses part of it). Renames count on both sides (`--no-renames`). | A diff touching one gets `L2+Double`; **each** critic is told "this diff changes the gates that grade it" and must return a `GATES:` justification (`record` refuses fewer than the depth's critic count, and `merge` re-derives the risk for the graded commit and refuses again); Ship never takes its gates-already-ran shortcut for it. |
 | **Both `package-lock.json` and `pnpm-lock.yaml` are tracked; pnpm installed the tree** (`node_modules/.modules.yaml`, no `.package-lock.json`; measured 2026-09-30). | Install with `pnpm install --frozen-lockfile`. On lockfile drift fix the lockfiles; never switch to `npm ci`, which installs a different tree than the gates were last green against. |
 | **Merge and branch deletion must stay visible to the permission layer.** | `gh pr merge` and `gh api -X DELETE` never run inside `ticket-ops`: `merge` / `merged` print them and the orchestrator runs each as a plain Bash call. Launch the run in a session that allows `node`, `git`, `gh` and those two. A refused command **stops the run**; never edit `.claude/settings*.json` and never self-approve. |
 | **Parallel runs are supported, with no run-wide lock.** An exclusive lock failed open in the sibling `note-reader-local` pipeline (2026-09-30: dead holder pid, heartbeat never refreshed past minute one, three runs overlapped). | Isolation is one lane and one stamped state file per run. Two runs taking one ticket is blocked in Step 0a; `heartbeat` is reported, never blocked on. Merge re-checks the base because another run may have merged meanwhile. |
@@ -51,7 +51,7 @@ that ticket was one Fix agent that critiqued, fixed and critiqued again in a con
    `handoff` note (done / next / open, under 15 lines); a fresh agent continues the same phase. A
    handoff is not a Fix round.
 3. **Batch reads**: one `grep -n` for every symbol, then one call with several `sed -n 'a,bp;c,dp'`
-   ranges. Index any file over ~1,500 lines first (`src/cli.ts` is over 2,000).
+   ranges. Index any file over ~1,000 lines first (`src/adapters/browser/playwright-filler.ts` and `src/adapters/sqlite/store.ts` are).
 4. **Bulk output to a log**: `cmd > "$LOG" 2>&1; echo "exit=$?"`, then the tail and grepped failures.
    A pipe into `tail` hides the exit code.
 5. **Docs once.** Fix rounds do not edit `docs/`, `README.md`, `CLAUDE.md`, `TODO.md` or `.claude/`;
@@ -60,7 +60,7 @@ that ticket was one Fix agent that critiqued, fixed and critiqued again in a con
    writes the state file.
 7. **Every agent runs on the default model (Opus).** Triage takes the owner's decisions for them and
    they merge into `main` unreviewed; the non-negotiables (never invent experience, never submit, the
-   three autofill refusals) are subtle enough that a cheaper reviewer is a false economy. The cheap
+   three fill refusals) are subtle enough that a cheaper reviewer is a false economy. The cheap
    phases are scripts, not cheaper agents.
 
 ## Input
@@ -170,8 +170,8 @@ pnpm install --frozen-lockfile > "$LOG" 2>&1; echo "install exit=$?"; tail -3 "$
 npm run typecheck > "$LOG" 2>&1; echo "typecheck exit=$?"; tail -3 "$LOG"
 npm test > "$LOG" 2>&1; echo "test exit=$?"; tail -5 "$LOG"
 # Prove the CLI LOADS under the generated .env, and that the paid key is not visible to it.
-npx tsx src/cli.ts --help > "$LOG" 2>&1; echo "cli-load exit=$?"
-node --import tsx --input-type=module -e "const m = await import('./src/config/env.ts'); m.loadEnvFile();
+npx tsx src/ui/cli.ts --help > "$LOG" 2>&1; echo "cli-load exit=$?"
+node --import tsx --input-type=module -e "const m = await import('./src/adapters/fs/paths.ts'); const { resolve } = await import('node:path'); m.loadEnvFile(resolve(m.resolvePaths().home, '.env'));
   if (process.env.ANTHROPIC_API_KEY) { console.log('PAID KEY VISIBLE'); process.exit(1) } console.log('no paid key')"
 ```
 
@@ -277,8 +277,8 @@ Tested in `tests/run-tickets.ops.{record,ship,guard}.test.ts`, with each guard m
   `origin/main` moved; blocks on a branch-name collision; branches `fix/job-<n>-<slug>` or
   `feature/job-<n>-<slug>` (`.claude/linear.md`). The ownership check and the transition are yours.
 - **snapshot** - before a critic or Verify: the commit, `origin/main`, and the primary - its
-  `git status` plus size and mtime of the ignored private files (`.env`, `config/personal.yaml`,
-  `config/resume.yaml`, `.browser-profile`, `data/job-radar.sqlite`, `~/.config/job-radar/`).
+  `git status` plus size and mtime of the ignored private files (`.env`, `config/candidate/evidence.yaml`,
+  `config/candidate/personal.yaml`, `.browser-profile`, `data/jr.sqlite`, v1's leftovers, `~/.config/job-radar/`).
 - **ship** - a dirty tree or a `wip:` commit -> Fix; scans **every commit** it would push and blocks
   (nothing pushed) a key-shaped `sk-ant-` value, any `.env*` file but `.env.example`, the primary's
   absolute path, or code under `src/`/`tests/`/`scripts/` naming `.config/job-radar` (docs and
@@ -299,8 +299,8 @@ Tested in `tests/run-tickets.ops.{record,ship,guard}.test.ts`, with each guard m
   `criticVerdict` is pass/concerns, `verifyVerdict` is pass, and `criticSha` = `verifiedSha` =
   `commitSha`, and re-derives the risk (gate justifications on record for this commit); then the PR:
   head not the graded commit -> block, closed -> block, **already merged at the graded head -> done**
-  (checked before the base, because any merge moves the base); then blocks an `src/apply/` diff for
-  the owner; then fetches and routes to **Fix** if `origin/main` moved since Verify (a squash onto a
+  (checked before the base, because any merge moves the base); then blocks a browser-fill diff
+  (`src/domain/browser/`, `src/adapters/browser/`, `src/app/fill.ts`) for the owner; then fetches and routes to **Fix** if `origin/main` moved since Verify (a squash onto a
   newer base is a tree nobody graded; parallel runs make this real); caps attempts at two per head.
   Prints `run: ["gh pr merge <pr> --squash --match-head-commit <sha>"]` (empty if already merged). No
   `--delete-branch` (it checks out the default branch locally - in a lane it fails or moves the lane).
@@ -374,20 +374,20 @@ root can land in `$PRIMARY` and commit into the owner's tree: `<lane>` = `$RUN_W
 > `/ship`, `/finish` or `/verify` - they stop to ask, or move the checkout. Read your ticket with
 > `node <ops>/ticket-ops.mjs --state <state> show <KEY> [field,...]`; **never write the state file and
 > never write to Linear** - your return is recorded for you. This lane's `.env` holds no API key:
-> **never set or export `ANTHROPIC_API_KEY`** or any credential, never run `analyze`, `inbox`, or
+> **never set or export `ANTHROPIC_API_KEY`**, `JR_HOME` outside the lane, or any credential, never run `assess`, `tailor`, `prepare`, `mail scan`, or
 > anything else that calls a paid model or reads mail, and never run `deploy/install-timer.sh` or
-> `systemctl`. **Never run `autofill` against an http(s) URL** - only `file://` fixtures; it types into
-> a real employer's form. Never create `config/personal.yaml`, `config/resume.yaml` or
-> `.browser-profile`; for a repro, set `JOB_RADAR_PERSONAL` / `JOB_RADAR_RESUME` per command to a
-> `config/*.example.yaml` or `tests/fixtures` file inside the lane. Never bind port 4321 and never use
-> `npm run serve` or `npm run dev` (they open a browser); to serve, pick a port `ss -Hltn "sport = :<p>"`
+> `systemctl`. **Never run `jr fill` against an http(s) URL** - only `file://` fixtures; it types into
+> a real employer's form. Never copy in the owner's `config/candidate/` files or `.browser-profile`;
+> for a repro, run `npm run cli -- init` in the lane (example config and candidate files), or set
+> `JR_HOME` per command to a scratch directory inside the lane. Never bind port 4180 and never use
+> `npm run serve` (the default port); to serve, pick a port `ss -Hltn "sport = :<p>"`
 > shows free, run `npm run cli -- serve --port <p>`, assert it reports `<p>`, and stop it before you
-> return - a server still listening from the lane stops the run. Ingest and discovery may read public job boards (they are rate-limited). The gates are
+> return - a server still listening from the lane stops the run. Sweeps and discovery may read public job boards (they are rate-limited). The gates are
 > `npm test` (the full suite; it launches Chromium) and `npm run typecheck`; there is no lint or build.
 > Budget: stop at ~150k context or ~60 tool calls - commit locally on the ticket branch (`wip:` if your
 > gates have not passed), return `result: "handoff"` with a `handoff` note (done / next / open, under
 > 15 lines). If you block after editing files, commit them the same way. Batch reads: one `grep -n` for
-> every symbol, then one call with several `sed -n` ranges; index `src/cli.ts` (2,000+ lines) with grep
+> every symbol, then one call with several `sed -n` ranges; index any 1,000+ line file with grep
 > first. Send installs and suites to a log, capture the exit code separately
 > (`cmd > "$LOG" 2>&1; echo "exit=$?"`), and read only the tail and grepped failures. **Return only one
 > fenced JSON object**: the fields your phase sets, plus `result`, `note` (a string under 3 lines) and,
@@ -395,7 +395,7 @@ root can land in `$PRIMARY` and commit into the owner's tree: `<lane>` = `$RUN_W
 
 **Triage** - "For each ticket below [keys + full text]: read the files it names (grep; do not judge by
 title) and CLAUDE.md's non-negotiables. Return a JSON object keyed by ticket: judgment (simple /
-complex / needs-decomposition), `type` (bug / feature), flags (`apply` - touches `src/apply/`, so it
+complex / needs-decomposition), `type` (bug / feature), flags (`apply` - touches the browser-fill code, so it
 cannot merge unattended; `paid` - acceptance needs a live model call; `deploy` - needs the timer
 reinstalled), dependencies and file overlap in the given order, and `clarificationAdd`: for each open
 question its text does not answer, the `question`, your recommended `answer`, and a one-line `reason`
@@ -409,8 +409,8 @@ the ticket's own acceptance criteria. Change nothing."
 **2. Build** - "On `<branch>`. Read `descriptionSnapshot`, `clarification` and `handoff`.
 1. **Plan.** Read the current code (line numbers in the ticket may be stale). Settle on an ordered
    `planNote` naming real files and functions and the CLAUDE.md rule for each area touched (resume
-   provenance, the autofill refusals, cost control, the determinism boundary, additive migrations,
-   config over code, dumb adapters). A new ambiguity: decide it as Triage would and return it in
+   verification, the fill refusals, cost control, the determinism boundary, append-only facts and
+   new-entry migrations, config over code, dumb adapters). A new ambiguity: decide it as Triage would and return it in
    `clarificationAdd`; no defensible default -> `blocked`, `blockedReason: Unanticipated by
    pre-flight: <question>`.
 2. **Reproduce.** If `type` is `bug`, reproduce before editing - a vitest test on the real function,
@@ -420,14 +420,14 @@ the ticket's own acceptance criteria. Change nothing."
 3. **Implement** exactly the acceptance criteria. Tests first, and **confirm the core cases fail
    against the unfixed code** (guard tests for correct behaviour may pass both ways); if they do not
    fail, block. Drive from the real entry point - a test that hands a helper its arguments verifies the
-   helper, not the call site. Never weaken a test. A new source gets a `tests/sources.test.ts` case
+   helper, not the call site. Never weaken a test. A new source gets a `tests/adapters.sources.test.ts` case
    pinning the real payload shape. `page.evaluate` bodies hold no named functions (tsx's `keepNames`
    breaks them and the suite cannot catch it).
 4. **Gates**: `npm test` and `npm run typecheck`, each to a log. Then run what changed, within the
-   preamble's limits, and say what you skipped: `src/sources/` or ingest -> `npm run cli -- sources`;
-   `src/pipeline/` -> `npm run cli -- score`; `src/report/` -> `npm run radar`, then `serve` as the
-   preamble says; `src/resume/` -> `resume match` against the example resume; `src/config/` -> any
-   command. A doc the ticket itself requires is written now.
+   preamble's limits, and say what you skipped: `src/adapters/ats/` or sweep -> `npm run cli -- sources`;
+   `src/domain/catalog/` or `evaluation/` -> `npm run cli -- evaluate` then `top`; briefing or `src/ui/`
+   -> `npm run cli -- report`, then `serve` as the preamble says; `src/domain/materials/` ->
+   `evidence match` and `render` against the example evidence (free); `src/domain/config/` -> `check`. A doc the ticket itself requires is written now.
 5. **Commit first, then gate**: one conventional commit (`fix(scope): ...`, `Resolves <KEY>` footer;
    squash any `wip:`), then `npm test` and `npm run typecheck` again on that clean, committed tree, and
    return `gatedSha` = `git rev-parse HEAD` only if both passed there. Return `planNote`, `reproduction`, `reproConfirmed`, `implementationSummary` (3-6
@@ -447,9 +447,9 @@ in `<ops>/checklist/check-constraints.md` to that range, against the rules in `<
 - frozen copies from the run's base, not the ticket's (a ticket may edit them); **never read or write
 `.claude/last-critique.md`**, and write no file at all - the lane is checked afterwards. Classify as
 BLOCK any finding where experience or a resume fact could be invented, a model writes prose into a
-document or column, autofill could submit, tick, attest or answer a demographic question, money can be
-spent outside the four cost mechanisms, `PoliteFetcher` is weakened, a migration is destructive on the
-hot path, a test does not verify what it claims, or a CLAUDE.md rule is broken; otherwise CONCERNS or
+document or column unverified, `jr fill` could submit, tick, attest, answer a demographic question or
+default an unknown, money can be spent outside the gateway (unaddressed, unreserved or unreceipted), the
+transport floor is weakened, a fact table is updated or an applied migration edited, a test does not verify what it claims, or a CLAUDE.md rule is broken; otherwise CONCERNS or
 PASS. Return, in at most 40 lines, a first line exactly `VERDICT: pass`, `VERDICT: concerns` or
 `VERDICT: block`, then the findings (file:line, failure scenario), most severe first."
 
@@ -512,7 +512,7 @@ the status stays where it is), Step 0d, next ticket.
 - A critic or Verify finding that needs an owner decision, named
 - A branch-name collision; a Linear read or write that fails; a status that reads back wrong twice
 - A merge that fails twice for a reason other than a conflict, a moved base or a moved head
-- An `src/apply/` diff at merge (PR left open for the live autofill run), or a `--manual-merge` run
+- A browser-fill diff at merge (PR left open for the live `jr fill` run), or a `--manual-merge` run
 - The ticket is held by another live run, or by someone else
 
 ## Step 8: Remove the lane, once, if nothing would be lost
@@ -551,8 +551,8 @@ half-finished work to make cleanup pass. `$SCRATCH` and `$OPS_DIR` stay as the r
 One message, after Step 8:
 
 - Table: ticket, PR, merge commit, critic verdict, Verify result, fix rounds, one line on what changed.
-- Blocked tickets with reason, branch and PR - owner-gate (`src/apply/`) PRs first, with "run
-  `npm run cli -- autofill <job-id>` against a live posting, confirm it stopped at submit, then merge".
+- Blocked tickets with reason, branch and PR - owner-gate (browser-fill) PRs first, with "run
+  `npm run cli -- fill <id> --headless` against a live posting, confirm it stopped at submit, then merge".
 - Pipeline decisions taken for the owner; critic CONCERNS left as known leftovers.
 - PRs merged **outside** the run, and any follow-up PR that created.
 - The lane: removed, or kept with the reason (a Fix-cap halt gives the `--resume` stamp).

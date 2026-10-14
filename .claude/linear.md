@@ -118,11 +118,11 @@ directory, and never run gnhf against a worktree these commands created.
 This repo has **no CI and no lint script**. The gates are local and both must pass:
 
 ```bash
-npm test          # vitest run — 408 tests
+npm test          # vitest run, including the real-Chromium refusal harness (~50 s)
 npm run typecheck # tsc --noEmit
 ```
 
-`npm run dev` starts the report server with rebuild-on-edit, for work on `src/report/`.
+`npm run serve` starts the local web UI (127.0.0.1), for work on `src/ui/`.
 
 Per `CLAUDE.md`, passing tests alone is not sufficient to claim something works — the
 command that changed must actually be run. `/verify` enforces that.

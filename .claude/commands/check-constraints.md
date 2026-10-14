@@ -26,34 +26,34 @@ with the code.
 $!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); echo "range: $B..working-tree"; git diff --name-only "$B" 2>/dev/null | head -50; echo "---BRANCH COMMITS---"; git log origin/main..HEAD --oneline 2>/dev/null | head -20
 ```
 
-### Model calls outside the analysis and resume boundaries
+### Model calls outside the gateway
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=0 2>/dev/null | grep -E "^\+.*(@anthropic-ai/sdk|new Anthropic\(|messages\.create)" | head -20
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=0 2>/dev/null -- src/ | grep -E "^\+.*(@anthropic-ai/sdk|new Anthropic\(|messages\.create|modelClient\(\)\.)" | head -20
 ```
 
 ### Model output heading for a rendered document
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null | grep -nE "^\+.*(renderResume|writeFile|toMarkdown|toDocx).*(completion|response|content\[0\]|message\.)" | head -10
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null | grep -nE "^\+.*(renderResume|renderPack|writeFile|toMarkdown).*(completion|response|content\[0\]|message\.)" | head -10
 ```
 
-### Provenance enforcement weakened
+### Verifier weakened
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/resume/render.ts src/resume/provenance.ts | grep -E "^[-+].*(enforceProvenance|checkRewrite|checkSelection|buildVocabulary|reverted|verified)" | head -25
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/domain/materials/ | grep -E "^[-+].*(verifySegment|verifyHeading|HEADING_WORDS|OPENERS|INTENT_FRAME|EXPERIENCE_CLAIM|QUALIFIERS|SCOPE_PATTERNS|PAST_ACHIEVEMENT|reverted|verified|MATERIAL_RULES_VERSION|context)" | head -30
 ```
 
 ### Three-state match collapsed
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/resume/requirements.ts | grep -E "^[-+].*(partial|QUALIFIERS|inEvidence|inRequirement)" | head -25
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/domain/candidate/requirements.ts | grep -E "^[-+].*(partial|QUALIFIERS|covered|gap)" | head -25
 ```
 
-### Autofill refusals touched
+### Fill refusals touched
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/apply/ | grep -E "^[-+].*(NEVER_FILL|isNeverFill|isSubmitControl|chooseOption|threshold|checkbox|check\(\)|click\(|submit)" | head -30
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/domain/browser/ src/adapters/browser/ src/app/fill.ts | grep -E "^[-+].*(NEVER_FILL|isNeverFill|isSubmitControl|chooseOption|radioGroups|matchPreparedAnswer|threshold|checkbox|check\(\)|click\(|submit|approved)" | head -30
 ```
 
 ### Unset personal value given a default
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/apply/ src/config/personal.ts | grep -E "^\+.*(\?\?|\|\||default).*(work_eligibility|sponsorship|personal\.)" | head -15
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/domain/browser/ src/adapters/browser/ src/domain/candidate/personal.ts | grep -E "^\+.*(\?\?|\|\||default).*(work_eligibility|sponsorship|personal\.|desired_salary)" | head -15
 ```
 
 ### Anti-bot evasion
@@ -63,22 +63,22 @@ $!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" -
 
 ### Rate limiting weakened
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/lib/http.ts src/sources/ | grep -E "^[-+].*(delay|Delay|sleep|throttle|rate|concurren)" | head -20
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/adapters/http/ src/adapters/ats/ src/domain/config/schema.ts | grep -E "^[-+].*(delay|Delay|sleep|throttle|rate|concurren|500|Retry-After)" | head -20
 ```
 
 ### Cost controls touched
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/analysis/ src/db/repo.ts | grep -E "^[-+].*(cache_control|ephemeral|analysis_threshold|cacheKey|hash|truncat|budget|max_tokens|upsert)" | head -25
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/app/gateway.ts src/app/assess.ts src/app/assessment-requests.ts src/domain/budget/ src/domain/llm/ src/domain/evaluation/selection.ts src/adapters/anthropic/ | grep -E "^[-+].*(cache_control|ephemeral|addressOf|requestKey|reserve|worstCase|runCeiling|budget|max_output_tokens|description_char_budget|min_fit|deterministicNote)" | head -25
 ```
 
 ### Structured output bypassed
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null | grep -E "^[-+].*(AnalysisSchema|safeParse|JSON\.parse)" | head -20
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null | grep -E "^[-+].*(validateStructured|toStructuredOutputSchema|safeParse|JSON\.parse)" | head -20
 ```
 
 ### Remote OK attribution
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/report/ | grep -iE "^[-+].*(remote ?ok|remoteok)" | head -10
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null -- src/app/briefing.ts src/ui/reports/ src/adapters/ats/remoteok.ts | grep -iE "^[-+].*(remote ?ok|remoteok|attribution)" | head -10
 ```
 
 ### Auto-send surface
@@ -88,7 +88,7 @@ $!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" -
 
 ### Personal data staged or committed
 ```
-$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff --name-only "$B" 2>/dev/null | grep -E "(config/personal\.yaml|config/resume\.yaml|^resumes/|^applications/|^data/|^reports/|\.env$)" | head -10; echo "---UNTRACKED---"; git status --porcelain --untracked-files=all 2>/dev/null | grep -E "(config/personal\.yaml|config/resume\.yaml|^\?\? (resumes|applications|data|reports)/|\.env$)" | head -10
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff --name-only "$B" 2>/dev/null | grep -E "(config/candidate/(evidence|personal)\.yaml|config/personal\.yaml|config/resume\.yaml|^resumes/|^applications/|^artifacts/|^legacy-v1/|^data/|^reports/|\.env$)" | head -10; echo "---UNTRACKED---"; git status --porcelain --untracked-files=all 2>/dev/null | grep -E "(config/candidate/(evidence|personal)\.yaml|config/personal\.yaml|config/resume\.yaml|^\?\? (resumes|applications|artifacts|legacy-v1|data|reports)/|\.env$)" | head -10
 ```
 
 ### Current branch
@@ -105,24 +105,24 @@ non-negotiables in `CLAUDE.md`.
 
 | # | Constraint | What a violation looks like | Severity |
 |---|---|---|---|
-| 1 | **Never invent experience** | Any prompt, generated resume text, outreach draft, or analysis output asserting an employer, metric, technology, or credential not in `config/resume.yaml`. Any claim to have inspected a company's website, traffic, or codebase. | BLOCK |
-| 2 | **Resume prose comes from master data** | A model's output string written into a rendered document. Tailoring returns bullet ids and replacement strings; `src/resume/render.ts` assembles from master. | BLOCK |
-| 3 | **Provenance repairs, never trusts** | `enforceProvenance` (`src/resume/render.ts:34`) no longer drops unknown, `verified: false`, or wrong-role citations, or no longer reverts a rewrite (including the headline/summary) that introduces a technology or a number. Loosening a check so a reverted rewrite passes is itself the violation. | BLOCK |
-| 4 | **`resume match` keeps three states** | `partial` collapsed into pass/fail, or a `QUALIFIERS` entry (`src/resume/requirements.ts:131`) satisfied by the skill match rather than evidenced independently. Using a library is not contributing to it. | BLOCK |
+| 1 | **Never invent experience** | Any prompt, config prose or code describing the candidate; generated text asserting an employer, metric, technology, or credential not in `config/candidate/evidence.yaml`. Any claim to have inspected a company's website, traffic, or codebase. | BLOCK |
+| 2 | **Outbound text is verified** | Model text reaching a resume, cover letter, form answer or outreach draft without `verifySegment`/`verifyHeading` (`src/domain/materials/verify.ts`), or a headline/summary written rather than chosen from the candidate's variants. | BLOCK |
+| 3 | **The verifier repairs, never trusts** | Unknown, `verified: false` or wrong-owner citations no longer dropped; a failing rewrite no longer reverted; a failing pack sentence used; a rule loosened so a refused sentence passes. Fixing a FALSE refusal is allowed only with a test that pins the real overreach on the same input as still refused, and a `MATERIAL_RULES_VERSION` bump. Target context (company, title, department) licensing anything but names is a violation. | BLOCK |
+| 4 | **Requirement matching keeps three states** | `partial` collapsed into pass/fail, or a qualifier satisfied by the skill match rather than evidenced independently (`src/domain/candidate/requirements.ts`). Using a library is not contributing to it. | BLOCK |
 | 5 | **Never auto-send** | Any code path that transmits an application, email, or message without a human action. | BLOCK |
-| 6 | **`autofill` fills and stops** | A submit click, a ticked checkbox, an answer to a demographic or attestation field, or a lowered `chooseOption` threshold that guesses instead of refusing. `chooseOption` reserves 1.0 for exact string equality on purpose. | BLOCK |
-| 7 | **Unset means unknown** | An unset `personal.yaml` value given a default. `work_eligibility` is nullable specifically so it is never answered on the candidate's behalf. | BLOCK |
+| 6 | **`jr fill` fills and stops** | A submit click, a ticked checkbox, an answer to a demographic or attestation field, a radio checked without the group-wide tie refusal, or a lowered `chooseOption` threshold that guesses instead of refusing. `chooseOption` reserves 1.0 for exact string equality on purpose. Pack text used before `jr approve`. | BLOCK |
+| 7 | **Unset means unknown** | An unset `personal.yaml` value given a default, or filled from a drafted pack answer. A saved override answering a demographic/attestation question it does not itself name. | BLOCK |
 | 8 | **Public documented endpoints only** | Auth, CAPTCHA, rate-limit, robots, anti-bot, or paywall circumvention. Stealth plugins, automation-flag masking, fingerprint spoofing, CAPTCHA solving. | BLOCK |
-| 9 | **Rate limiting is load-bearing** | `PoliteFetcher` delays removed or configurable to zero. | BLOCK |
-| 10 | **Remote OK attribution** | `src/report/daily.ts` no longer emits the followed link naming Remote OK as source. The permitted alternative is disabling the source, not dropping the credit. | BLOCK |
-| 11 | **Determinism boundary** | A model call in `src/pipeline/`, `src/lib/`, `src/db/`, `src/sources/`, or `src/report/`. Dedupe, salary/date parsing, location and seniority classification, schema validation, hard filters, and scoring arithmetic are deterministic. | BLOCK |
-| 12 | **Adapters stay dumb** | Classification logic in `src/sources/*.ts`. All judgement happens once in `src/pipeline/normalize.ts`. | WARNING |
-| 13 | **One failing source never aborts a run** | An adapter that does not catch its own errors or does not record them on `ctx.stats`. There is a test for this. | BLOCK |
-| 14 | **Cost controls intact** | Any of the four weakened: deterministic prefilters gating eligibility on `filter_passed` with rank-ordered selection, the content-addressed cache, `cache_control: ephemeral` on the stable prefix, the truncated description budget. Or `repo.upsert` no longer invalidating cached analysis and score when a description changes. Note `analysis_threshold` was retired in JOB-32 — reintroducing an absolute fit gate as a spend control is itself the regression. | BLOCK |
-| 15 | **Structured output validated** | Model output reaching the database without both a JSON Schema and Zod re-validation via `AnalysisSchema` (`src/model/job.ts:74`). Malformed output stored rather than rejected. | BLOCK |
-| 16 | **Config over code** | A tuning change that requires editing TypeScript. Weights, filters, lanes, thresholds, and exclusions are data in `config/career-profile.yaml`. | WARNING |
-| 17 | **Config coherence checks kept** | Cross-field validation removed: lane weights summing to 1, ordered compensation bands, signals referencing real lanes. A typo silently disabling a filter is worse than a crash. | BLOCK |
-| 18 | **No personal data committed** | `config/personal.yaml`, `config/resume.yaml`, `resumes/*`, `applications/`, `data/`, `reports/`, or `.env` staged. | BLOCK |
+| 9 | **Rate limiting is load-bearing** | The 500 ms per-host floor (`src/adapters/http/polite-transport.ts` and the config schema) removed or configurable lower; `Retry-After` ignored. | BLOCK |
+| 10 | **Remote OK attribution** | The briefing (`src/app/briefing.ts`, `src/ui/reports/render.ts`) no longer emits the followed link naming Remote OK as source while the source is enabled. The permitted alternative is disabling the source. | BLOCK |
+| 11 | **Determinism boundary** | A model call anywhere but through `src/app/gateway.ts`; a model used for dedupe, parsing, eligibility, scoring, calibration, ranking, selection, routing, verification or mail classification. | BLOCK |
+| 12 | **Adapters stay dumb** | Classification logic in `src/adapters/ats/*.ts`. Judgement happens once in `src/domain/catalog/normalize.ts`. | WARNING |
+| 13 | **One failing board never aborts a sweep** | An adapter error that escapes `sweep`. There is a test for this. | BLOCK |
+| 14 | **Cost controls intact** | The request address no longer the hash of exact prompt/model/effort; volatile content (relative dates, calibrated scores, URLs) in a prompt; reservation after the call instead of before; a receipt missing for any outcome; spend reported from anything but the ledger; selection gated on an absolute fit score instead of rank (ADR-0001); prompt caching or the description budget removed. | BLOCK |
+| 15 | **Structured output validated** | Model output stored without Zod validation (`validateStructured`), or a JSON Schema hand-written instead of generated (`toStructuredOutputSchema`). Malformed output stored rather than rejected and receipted. | BLOCK |
+| 16 | **Config over code** | A tuning change that requires editing TypeScript. Strategy, preferences, policy, operations and sources are data under `config/`. | WARNING |
+| 17 | **Config coherence checks kept** | Strictness (unknown key = error) or cross-file coherence removed (`coherenceProblems`, `src/domain/config/schema.ts`). A typo silently disabling a filter is worse than a crash. | BLOCK |
+| 18 | **No personal data committed** | `config/candidate/evidence.yaml`, `config/candidate/personal.yaml`, v1's `config/resume.yaml`/`config/personal.yaml`, `resumes/*`, `applications/`, `artifacts/`, `legacy-v1/`, `data/`, `reports/`, or `.env` staged. | BLOCK |
 | 19 | **Not committing to main** | Feature work committed directly to `main`. Docs-only changes are exempt. | WARNING |
 | 20 | **pnpm build approvals intact** | `pnpm-workspace.yaml` no longer sets `allowBuilds: true` for **better-sqlite3** and **esbuild**. Without them `pnpm install` succeeds and every command then fails with `Could not locate the bindings file`. | BLOCK |
 
@@ -135,10 +135,10 @@ Each block above targets specific constraints. A grep hit is a candidate, not a 
 For every hit, read a window around it. Determine whether it is a real violation or a false
 positive. Common false positives:
 
-- `messages.create` inside `src/analysis/` or `src/resume/` — those are the sanctioned model
-  boundaries (`analyzer.ts`, `prepare.ts`, `tailor.ts`, `import.ts`)
-- A `submit` string in `src/apply/fields.ts` — `isSubmitControl` exists to *detect and avoid*
-  submit controls
+- `messages.create` inside `src/adapters/anthropic/client.ts`: the one adapter behind the
+  gateway's `ModelClient` port
+- A `submit` string in `src/domain/browser/fields.ts`: `isSubmitControl` exists to *detect and
+  avoid* submit controls
 - `Remote OK` appearing in a comment — check whether the emitted string survived
 - The word `default` in an unrelated switch statement
 
@@ -171,12 +171,13 @@ untouched ones to a single line: "Constraints 5, 8–10, 16–20 not touched by 
   - Fix: <remediation>
 
   For constraint #3 specifically, the remediation is always to restore the check, never to
-  loosen it so a reverted rewrite passes. Reverting to master wording is always available,
-  so overreach can only produce a worse resume, never a false one.
+  loosen it so a refused sentence passes. Reverting to the candidate's own wording is always
+  available, so overreach can only produce worse material, never false material.
 
 ### Unknown
-- **#14** — `analyze` was not run against this diff, so the cache behavior is unverified.
-  Run `npm run cli -- analyze` and confirm unchanged jobs were skipped.
+- **#14** — `jr assess` was not run against this diff, so the cache behavior is unverified.
+  Run `npm run cli -- assess --dry-run`, then a small `assess`, and confirm unchanged
+  postings came from cache.
 
 ### All Clear
 No constraint violations detected in the current changes.

@@ -81,17 +81,18 @@ matching command. This is the step that distinguishes a green test suite from wo
 
 | Changed area | Command | What counts as pass |
 |---|---|---|
-| `src/sources/`, `src/pipeline/ingest.ts` | `npm run cli -- sources` | Every configured board returns HTTP 200 with a non-empty list; no source aborted the run |
-| `src/pipeline/` | `npm run cli -- score` | Completes; the funnel counts move in the expected direction |
-| `src/report/` | `npm run radar` then `npm run cli -- open` | Briefing renders; Remote OK attribution present when a Remote OK posting is in the slate |
-| `src/analysis/` | `npm run cli -- analyze` | Completes; **check the cache actually prevented re-analysis** of unchanged jobs |
-| `src/resume/` | `npm run cli -- resume lint`, then `resume match <job-id>` | `match` returns three states, not two; no fabricated content |
-| `src/apply/` | `npm run cli -- autofill <job-id>` | Form filled, **submit never clicked**, checkboxes untouched, unconfident dropdowns left blank with options reported |
-| `src/config/` | any command | Config loads; a bad key is an error, not a silent no-op |
-| `src/db/` | `npm run cli -- stats` | Schema migration clean, no data loss |
+| `src/adapters/ats/`, `src/adapters/http/`, `src/app/sweep.ts` | `npm run cli -- sources`, then `sweep --source <provider>` | Every configured board returns HTTP 200 with a non-empty list; no board aborted the sweep |
+| `src/domain/catalog/`, `src/domain/evaluation/`, `src/app/evaluate.ts` | `npm run cli -- evaluate`, then `top` | Completes; eligible/priority counts and the calibration line move in the expected direction |
+| `src/app/briefing.ts`, `src/ui/reports/`, `src/ui/web/` | `npm run cli -- report`, `serve` | Briefing renders; Remote OK attribution present when that source is enabled; web UI answers on 127.0.0.1 only |
+| `src/app/gateway.ts`, `src/app/assess*.ts`, `src/domain/llm/`, `src/domain/budget/` | `npm run cli -- assess --dry-run`, then a small `assess --limit 2 --max-spend 0.5` | Completes; **unchanged postings come from cache**; `spend` matches the run's reported total |
+| `src/domain/materials/`, `src/domain/candidate/`, `src/app/materials.ts` | `npm run cli -- evidence lint`, `evidence match <id>`, then `render <id>` (free) | `match` returns three states, not two; `repairs.md` and `pack-review.md` show nothing fabricated survived |
+| `src/domain/browser/`, `src/adapters/browser/`, `src/app/fill.ts` | `npm test`, then `npm run cli -- fill <id> --headless` on a real posting | Form filled, **submit never clicked**, checkboxes untouched, demographics and attestations refused, unconfident dropdowns blank with options reported |
+| `src/domain/config/`, `src/adapters/fs/config-loader.ts` | `npm run cli -- check` | Config loads; a bad key is an error, not a silent no-op |
+| `src/adapters/sqlite/` | `npm run cli -- stats` against a copy of a real database | Migration clean, no data loss |
+| `src/app/mail.ts`, `src/adapters/mail/` | `npm run cli -- mail scan --dry-run` | Pagination complete; nothing written on a dry run |
 
 Record the exact command and its outcome. If the affected area cannot be exercised without
-real personal data (`config/personal.yaml`, `config/resume.yaml`) and those files are
+real personal data (`config/candidate/evidence.yaml`, `config/candidate/personal.yaml`) and those files are
 absent, say so plainly rather than reporting the step as passed.
 
 ## Step 6: Manual test plan

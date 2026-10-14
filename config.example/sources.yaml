@@ -1,0 +1,469 @@
+sources:
+  greenhouse:
+    enabled: true
+    boards:
+      - token: similarweb
+        company: Similarweb
+      - token: contentful
+        company: Contentful
+      - token: storyblok
+        company: Storyblok
+      - token: ghost
+        company: Ghost
+      - token: netlify
+        company: Netlify
+      - token: webflow
+        company: Webflow
+      - token: squarespace
+        company: Squarespace
+      - token: vercel
+        company: Vercel
+      - token: vtex
+        company: VTEX
+      - token: commercetools
+        company: commercetools
+      - token: klaviyo
+        company: Klaviyo
+      - token: attentive
+        company: Attentive
+      - token: customerio
+        company: Customer.io
+      - token: iterable
+        company: Iterable
+      - token: coursera
+        company: Coursera
+      - token: udemy
+        company: Udemy
+      - token: masterclass
+        company: MasterClass
+      - token: duolingo
+        company: Duolingo
+      - token: faire
+        company: Faire
+      - token: stockx
+        company: StockX
+      - token: grailed
+        company: Grailed
+      - token: mercari
+        company: Mercari
+      - token: instawork
+        company: Instawork
+      - token: slice
+        company: Slice
+      - token: upwork
+        company: Upwork
+      - token: orchard
+        company: Orchard
+      - token: roofstock
+        company: Roofstock
+      - token: homelight
+        company: HomeLight
+      - token: pacaso
+        company: Pacaso
+      - token: smartrent
+        company: SmartRent
+      - token: tulip
+        company: Tulip
+      - token: augury
+        company: Augury
+      - token: samsara
+        company: Samsara
+      - token: physicsx
+        company: PhysicsX
+      - token: life360
+        company: Life360
+      - token: algolia
+        company: Algolia
+      - token: launchdarkly
+        company: LaunchDarkly
+      - token: mixpanel
+        company: Mixpanel
+      - token: amplitude
+        company: Amplitude
+      - token: hightouch
+        company: Hightouch
+      - token: planetscale
+        company: PlanetScale
+      - token: airtable
+        company: Airtable
+      - token: warp
+        company: Warp
+      - token: galileo
+        company: Galileo
+      - token: descope
+        company: Descope
+      - token: cloudflare
+        company: Cloudflare
+      - token: gitlab
+        company: GitLab
+      - token: reddit
+        company: Reddit
+      - token: discord
+        company: Discord
+      - token: dropbox
+        company: Dropbox
+      - token: instacart
+        company: Instacart
+      - token: pinterest
+        company: Pinterest
+      - token: twilio
+        company: Twilio
+      - token: affirm
+        company: Affirm
+      - token: coinbase
+        company: Coinbase
+      - token: fivetran
+        company: Fivetran
+      - token: cockroachlabs
+        company: Cockroach Labs
+      - token: clickhouse
+        company: ClickHouse
+      - token: grafanalabs
+        company: Grafana Labs
+      - token: honeycomb
+        company: Honeycomb
+      - token: axiom
+        company: Axiom
+      - token: contentstack
+        company: Contentstack
+      - token: pendo
+        company: Pendo
+      - token: homeward
+        company: Homeward
+      - token: ownwell
+        company: Ownwell
+      - token: formlabs
+        company: Formlabs
+      - token: anthropic
+        company: Anthropic
+      - token: typeface
+        company: Typeface
+      - token: assemblyai
+        company: AssemblyAI
+      - token: togetherai
+        company: Together AI
+      - token: scaleai
+        company: Scale AI
+      - token: imbue
+        company: Imbue
+      - token: cresta
+        company: Cresta
+      - token: comet
+        company: Comet
+      - token: make
+        company: Make
+      - token: workato
+        company: Workato
+      - token: celigo
+        company: Celigo
+      - token: selffinancial
+        company: Self Financial
+      - token: aceable
+        company: Aceable
+      - token: osano
+        company: Osano
+      - token: speechmatics
+        company: Speechmatics
+      - token: otter
+        company: Otter.ai
+      - token: humeai
+        company: Hume AI
+      - token: beam
+        company: Beam
+      - token: labelbox
+        company: Labelbox
+      - token: starburst
+        company: Starburst
+      - token: dremio
+        company: Dremio
+      - token: singlestore
+        company: SingleStore
+      - token: yugabyte
+        company: Yugabyte
+      - token: imply
+        company: Imply
+      - token: sigmacomputing
+        company: Sigma Computing
+      - token: encore
+        company: Encore
+      - token: stackblitz
+        company: StackBlitz
+      - token: datadog
+        company: Datadog
+      - token: newrelic
+        company: New Relic
+      - token: duda
+        company: Duda
+      - token: apolloio
+        company: Apollo.io
+      - token: salesloft
+        company: Salesloft
+      - token: keystone
+        company: Keystone
+      - token: parloa
+        company: Parloa
+      - token: intercom
+        company: Intercom
+  lever:
+    enabled: true
+    boards:
+      - token: brightedge
+        company: BrightEdge
+      - token: prismic
+        company: Prismic
+      - token: latch
+        company: Latch
+      - token: vestiairecollective
+        company: Vestiaire Collective
+      - token: chownow
+        company: ChowNow
+      - token: olo
+        company: Olo
+      - token: neon
+        company: Neon
+      - token: anyscale
+        company: Anyscale
+      - token: brilliant
+        company: Brilliant
+      - token: ro
+        company: Ro
+      - token: tala
+        company: Tala
+      - token: metabase
+        company: Metabase
+      - token: contentsquare
+        company: Contentsquare
+      - token: quantummetric
+        company: Quantum Metric
+      - token: cherre
+        company: Cherre
+      - token: entrata
+        company: Entrata
+      - token: everlywell
+        company: Everlywell
+      - token: sesame
+        company: Sesame
+      - token: tinybird
+        company: Tinybird
+      - token: porter
+        company: Porter
+      - token: logrocket
+        company: LogRocket
+      - token: outreach
+        company: Outreach
+      - token: netomi
+        company: Netomi
+  ashby:
+    enabled: true
+    boards:
+      - token: sanity
+        company: Sanity
+      - token: conductor
+        company: Conductor
+      - token: substack
+        company: Substack
+      - token: patreon
+        company: Patreon
+      - token: thinkific
+        company: Thinkific
+      - token: poshmark
+        company: Poshmark
+      - token: backmarket
+        company: Back Market
+      - token: curated
+        company: Curated
+      - token: langchain
+        company: LangChain
+      - token: llamaindex
+        company: LlamaIndex
+      - token: baseten
+        company: Baseten
+      - token: modal
+        company: Modal
+      - token: fireworks
+        company: Fireworks AI
+      - token: browserbase
+        company: Browserbase
+      - token: e2b
+        company: E2B
+      - token: braintrust
+        company: Braintrust
+      - token: pinecone
+        company: Pinecone
+      - token: weaviate
+        company: Weaviate
+      - token: cursor
+        company: Cursor
+      - token: sierra
+        company: Sierra
+      - token: openai
+        company: OpenAI
+      - token: supabase
+        company: Supabase
+      - token: render
+        company: Render
+      - token: railway
+        company: Railway
+      - token: resend
+        company: Resend
+      - token: workos
+        company: WorkOS
+      - token: stytch
+        company: Stytch
+      - token: temporal
+        company: Temporal
+      - token: sentry
+        company: Sentry
+      - token: linear
+        company: Linear
+      - token: vanta
+        company: Vanta
+      - token: replit
+        company: Replit
+      - token: posthog
+        company: PostHog
+      - token: notion
+        company: Notion
+      - token: clickup
+        company: ClickUp
+      - token: ramp
+        company: Ramp
+      - token: shapr3d
+        company: Shapr3D
+      - token: airbyte
+        company: Airbyte
+      - token: hex
+        company: Hex
+      - token: prefect
+        company: Prefect
+      - token: astronomer
+        company: Astronomer
+      - token: materialize
+        company: Materialize
+      - token: confluent
+        company: Confluent
+      - token: checkly
+        company: Checkly
+      - token: sitecore
+        company: Sitecore
+      - token: fullstory
+        company: FullStory
+      - token: litmus
+        company: Litmus
+      - token: hivemq
+        company: HiveMQ
+      - token: perplexity
+        company: Perplexity
+      - token: harvey
+        company: Harvey
+      - token: writer
+        company: Writer
+      - token: runway
+        company: Runway
+      - token: elevenlabs
+        company: ElevenLabs
+      - token: synthesia
+        company: Synthesia
+      - token: deepgram
+        company: Deepgram
+      - token: cohere
+        company: Cohere
+      - token: decagon
+        company: Decagon
+      - token: abridge
+        company: Abridge
+      - token: langfuse
+        company: Langfuse
+      - token: zapier
+        company: Zapier
+      - token: merge
+        company: Merge
+      - token: paragon
+        company: Paragon
+      - token: nango
+        company: Nango
+      - token: n8n
+        company: n8n
+      - token: inngest
+        company: Inngest
+      - token: vapi
+        company: Vapi
+      - token: livekit
+        company: LiveKit
+      - token: bland
+        company: Bland
+      - token: cartesia
+        company: Cartesia
+      - token: rime
+        company: Rime
+      - token: gladia
+        company: Gladia
+      - token: granola
+        company: Granola
+      - token: phonic
+        company: Phonic
+      - token: suno
+        company: Suno
+      - token: runpod
+        company: RunPod
+      - token: influxdata
+        company: InfluxData
+      - token: datafold
+        company: Datafold
+      - token: atlan
+        company: Atlan
+      - token: omni
+        company: Omni
+      - token: signoz
+        company: SigNoz
+      - token: doppler
+        company: Doppler
+      - token: infisical
+        company: Infisical
+      - token: demandbase
+        company: Demandbase
+      - token: mutiny
+        company: Mutiny
+      - token: hockeystack
+        company: HockeyStack
+      - token: commonroom
+        company: Common Room
+      - token: gorgias
+        company: Gorgias
+      - token: kustomer
+        company: Kustomer
+      - token: dust
+        company: Dust
+      - token: credal
+        company: Credal
+      - token: relevanceai
+        company: Relevance AI
+      - token: mem0
+        company: Mem0
+      - token: letta
+        company: Letta
+  remoteok:
+    enabled: false
+watchlist:
+  - company: Payload
+    why: Payload CMS core team - the exact stack, and they are small
+  - company: Ahrefs
+    why: SEO platform; engineering IS the SEO work. No public ATS found.
+  - company: Semrush
+    why: Same. Check their careers page directly.
+  - company: Botify
+    why: Enterprise technical SEO platform - unusually on-lane
+  - company: Screaming Frog
+    why: Crawler tooling; tiny team, direct outreach only
+  - company: Matterport
+    why: 3D/spatial + proptech, direct prior experience
+  - company: Shopify
+    why: Marketplace + technical SEO at scale
+  - company: Framer
+    why: Design/web platform, no public ATS endpoint found
+  - company: Statsig
+    why: Experimentation platform - matches the 200+ experiments story
+  - company: Clerk
+    why: Dev platform, Next.js-native
+  - company: Belong
+    why: Proptech / smart building. Lever board 404'd on 2026-08-13; discover found nothing on Greenhouse/Lever/Ashby. Workable and SmartRecruiters not checked.

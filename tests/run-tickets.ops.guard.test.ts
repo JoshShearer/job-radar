@@ -115,9 +115,11 @@ describe("gate files", () => {
       closure.add(f);
       for (const next of localImports(f)) if (!closure.has(next)) queue.push(next);
     }
-    // The env loader decides which .env loads; where it resolves that path from is gate too.
-    closure.add("src/config/env.ts");
-    for (const f of localImports("src/config/env.ts")) closure.add(f);
+    // The env loader decides which .env loads; where it resolves that path from is gate too,
+    // and so is the composition root that calls it.
+    closure.add("src/adapters/fs/paths.ts");
+    for (const f of localImports("src/adapters/fs/paths.ts")) closure.add(f);
+    closure.add("src/ui/compose.ts");
     const tsconfig = readFileSync(resolve(REPO, "tsconfig.json"), "utf8");
     expect(tsconfig).not.toMatch(/"extends"/); // a base config would join the closure
     for (const f of closure) expect(files).toContain(f);

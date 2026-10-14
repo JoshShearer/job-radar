@@ -1,0 +1,45 @@
+budgets:
+  per_run_usd: 1.5
+  per_day_usd: 4.5
+  per_month_usd: 45
+models:
+  triage:
+    model: claude-opus-5
+    effort: medium
+    max_output_tokens: 4000
+  assessment:
+    model: claude-opus-5
+    effort: medium
+    max_output_tokens: 16000
+  tailor:
+    model: claude-opus-5
+    effort: high
+    max_output_tokens: 16000
+  pack:
+    model: claude-sonnet-5
+    effort: high
+    max_output_tokens: 16000
+  import:
+    model: claude-opus-5
+    effort: high
+    max_output_tokens: 16000
+mail:
+  gmail_query: |-
+    (from:greenhouse.io OR from:hire.lever.co OR from:ashbyhq.com OR
+     from:myworkdayjobs.com OR from:smartrecruiters.com OR from:workable.com OR
+     label:job-applications)
+  eml_dir: null
+  page_size: 100
+  max_messages_per_scan: 2000
+  initial_lookback_days: 60
+  overlap_days: 2
+  ghost_after_days: 30
+  coverage_max_age_days: 3
+sweep:
+  stale_after_days: 2
+http:
+  delay_ms: 1200
+  timeout_ms: 20000
+  max_retries: 2
+  max_retry_after_ms: 120000
+  user_agent: job-radar/0.1 (personal job search; +https://github.com/JoshShearer)

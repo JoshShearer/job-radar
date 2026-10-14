@@ -24,11 +24,11 @@ verify each against the package's own changelog before applying, rather than tru
 
 | Package | Why a major bump is risky here |
 |---|---|
-| `zod` | `AnalysisSchema` (`src/model/job.ts`) and the config validator (`src/config/schema.ts`) are both zod. A major changes the structured-output guarantee and the cross-field coherence checks at once — the two mechanisms `CLAUDE.md` calls load-bearing. Upgrade alone, never batched. |
+| `zod` | Every model output schema (`src/domain/evaluation/assessment.ts`, `src/domain/materials/plan.ts`), the JSON Schema generated from them (`z.toJSONSchema` in `src/domain/llm/structured.ts`), and the strict config validator (`src/domain/config/schema.ts`) are all zod. A major changes the structured-output guarantee and the coherence checks at once. Upgrade alone, never batched. |
 | `better-sqlite3` | Native binding compiled against the local Node ABI. A major usually needs a rebuild, and under pnpm needs `allowBuilds` (already set in `pnpm-workspace.yaml`). A broken install fails at startup with `Could not locate the bindings file`, not at typecheck. |
-| `@anthropic-ai/sdk` | Pre-1.0 — every minor can break. It carries the `cache_control: ephemeral` prompt-caching call in `src/analysis/analyzer.ts` and `src/analysis/prepare.ts`. A silently-dropped cache parameter shows up as a cost regression, not a test failure. |
-| `commander` | Owns the entire CLI surface in `src/cli.ts`. Option-parsing changes surface as commands that accept flags but ignore them. |
-| `playwright` | `autofill` drives a real browser. A version bump needs matching browser binaries (`npx playwright install`), and selector-engine changes affect `src/apply/`. |
+| `@anthropic-ai/sdk` | Pre-1.0 — every minor can break. Only `src/adapters/anthropic/client.ts` uses it, including the `cache_control: ephemeral` prompt-caching block and structured output. A silently-dropped cache parameter shows up as a cost regression, not a test failure. |
+| `commander` | Owns the entire CLI surface in `src/ui/cli.ts`. Option-parsing changes surface as commands that accept flags but ignore them. |
+| `playwright` | `jr fill` and PDF rendering drive a real browser. A version bump needs matching browser binaries (`npx playwright install chromium`), and selector-engine changes affect `src/adapters/browser/`. |
 | `typescript` | `npm run typecheck` is half the gate. A major that changes resolution rules can turn the gate red across the whole tree. |
 | `vitest` | The other half of the gate. Config-format changes in a major break `vitest.config.ts`. |
 | `@types/node` | Must stay compatible with `engines.node >= 20`. |
@@ -127,9 +127,9 @@ Run this after every single package.
 npm run cli -- sources
 ```
 
-> **Do not run the sweep after every package.** It requests ~105 third-party boards. A
+> **Do not run the sweep after every package.** It requests ~217 third-party boards. A
 > ten-package session would hit every one of those companies ten times in a few minutes,
-> purely to check a lockfile. Rate limiting in `PoliteFetcher` is load-bearing precisely
+> purely to check a lockfile. The transport's rate limiting is load-bearing precisely
 > because this project does not get to treat other people's endpoints as free. Run the
 > sweep once, after the last package, to confirm the HTTP path end to end.
 
@@ -139,7 +139,7 @@ A green suite proves nothing about a flag that parses and is then ignored:
 | Package | Direct check |
 |---|---|
 | `commander` | `cli -- top --limit 2` shows 2 rows, `-l 5` shows 5, bare `top` falls back to the declared default. Option parsing breaking silently is the whole risk. |
-| `zod` | Parse a config with an optional section **omitted** and assert the defaults that come back. zod 4 stopped parsing `.default()` values, so a partial default object drops fields while still typechecking. Check `http.delay_ms` specifically — that is the rate limit. |
+| `zod` | Parse a config with an optional section **omitted** and assert the defaults that come back. zod 4 stopped parsing `.default()` values, so a partial default object drops fields while still typechecking. Check `operations.http.delay_ms` specifically — that is the rate limit. Also diff `toStructuredOutputSchema` output for the dossier schema before and after. |
 | `better-sqlite3` | Open the real database, not just `:memory:`. A native ABI mismatch surfaces on load, not at typecheck. |
 | `@anthropic-ai/sdk` | A negative type test: assign a bogus `cache_control` mode and confirm tsc rejects it. That proves the field is still strictly typed, so a rename would have failed the gate. |
 
@@ -147,11 +147,13 @@ If `playwright` moved:
 
 ```bash
 npx playwright install
-npm run cli -- autofill <job-id>   # confirm it still stops at submit
+npm test                                  # includes the real-Chromium refusal harness
+npm run cli -- fill <id> --headless       # confirm it still stops at submit
 ```
 
-If `@anthropic-ai/sdk` moved, run one small `analyze` and confirm the response still reports
-cache reads — a dropped `cache_control` parameter is invisible to the type checker.
+If `@anthropic-ai/sdk` moved, run one small `jr assess --limit 2` and confirm the second call
+reports cache reads in `jr spend` / the ledger — a dropped `cache_control` parameter is
+invisible to the type checker.
 
 ## Step 8: Commit
 
@@ -190,7 +192,7 @@ Conflicts → tell the user, leave the stash intact.
 ## Held back
 | Package | Old | Available | Reason |
 |---------|-----|-----------|--------|
-| zod | 3.25.76 | 4.1.0 | Major — touches AnalysisSchema and config validation. Upgrade alone.
+| zod | 3.25.76 | 4.1.0 | Major — touches every model output schema and config validation. Upgrade alone.
 
 ## Gates
 npm test          316 passed        (after every package)

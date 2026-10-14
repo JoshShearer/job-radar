@@ -48,17 +48,16 @@ These are the things a fresh session gets wrong most often here:
 - **Which gates were actually run**, with output — `npm test`, `npm run typecheck`, and the
   command that was exercised. "Tests pass" without the command having been run is
   precisely the claim `CLAUDE.md` forbids.
-- **Whether the analyze stage was invoked**, and roughly how many jobs it hit. It is the
-  only thing that costs money.
-- **Any cached analysis that was invalidated** by a description change, since
-  `repo.upsert` clears the cached analysis and score.
-- **Personal data state** — whether `config/personal.yaml` and `config/resume.yaml` are
-  present in this workspace, since their absence makes the resume and apply commands fail
-  in a way that looks like a bug but is not.
+- **Whether a paid command ran** (`assess`, `tailor`, `prepare`, `evidence import`,
+  `benchmark-triage`), and what `jr spend` says it cost. They are the only things that cost money.
+- **Any assessment that went stale** because its posting changed materially: the next
+  `jr assess` re-buys it (the request address changed), and `jr evaluate` reports the count.
+- **Personal data state** — whether `config/candidate/evidence.yaml` and
+  `config/candidate/personal.yaml` are present in this workspace, since their absence makes
+  tailor, prepare and fill refuse in a way that looks like a bug but is not.
 - **The Linear issue** this work belongs to, and its current status.
-- **Config changes**, since `config/career-profile.yaml` is validated with cross-field
-  coherence checks — lane weights summing to 1, ordered compensation bands, signals
-  referencing real lanes.
+- **Config changes**, since every file under `config/` is strict and checked for cross-file
+  coherence on load — lane weights, ordered compensation bands, signals referencing real lanes.
 
 ## Where it goes
 

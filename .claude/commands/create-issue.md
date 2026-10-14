@@ -71,12 +71,13 @@ If the work touches any of these, add a `## Constraints` section naming the rule
 
 | Area | Rule the issue must respect |
 |---|---|
-| `src/resume/` | Resume text is a selection from `config/resume.yaml`; provenance is enforced, never loosened |
-| `src/apply/` | Fills and stops. Never submits, never ticks a checkbox, never answers demographics or attestations |
-| `src/analysis/` | Costs money — the four cost-control mechanisms stay intact |
-| `src/sources/` | Public documented endpoints only; adapters do no classification |
-| `src/pipeline/` | Deterministic. No model calls for comparison, parsing, or arithmetic |
-| `src/report/` | Remote OK attribution is a condition of use |
+| `src/domain/materials/`, `src/domain/candidate/` | Material is a selection from `config/candidate/evidence.yaml`; every outbound sentence is verified, never loosened |
+| `src/domain/browser/`, `src/adapters/browser/` | Fills and stops. Never submits, never ticks a checkbox, never answers demographics or attestations, never defaults an unknown |
+| `src/app/gateway.ts`, `src/app/assess*.ts`, `src/domain/llm/` | Costs money — every call through the gateway: addressed, reserved, receipted; no volatile prompt content |
+| `src/adapters/ats/`, `src/adapters/http/` | Public documented endpoints only; adapters do no classification; the 500 ms floor stays |
+| `src/domain/catalog/`, `src/domain/evaluation/` | Deterministic. No model calls for comparison, parsing, or arithmetic |
+| `src/adapters/sqlite/` | Facts are append-only; schema changes are new `MIGRATIONS` entries |
+| `src/app/briefing.ts`, `src/ui/reports/` | Remote OK attribution is a condition of use |
 
 ## Step 6: Confirm before creating
 
