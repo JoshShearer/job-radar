@@ -69,7 +69,11 @@ Search strategy (`config/search/strategy.yaml`), preferences (`config/candidate/
 
 ## Toolchain
 
-Works with npm or pnpm. With pnpm, `pnpm-workspace.yaml` must keep `allowBuilds` true for **better-sqlite3** and **esbuild**; without it `pnpm install` succeeds and every command then fails with `Could not locate the bindings file`.
+Works with npm or pnpm (npm ignores `pnpm-workspace.yaml`). With pnpm, its `allowBuilds` is load-bearing in both directions, and `tests/toolchain.test.ts` pins it:
+
+- **esbuild: true.** Its postinstall links the platform binary that tsx and vitest use.
+- **better-sqlite3: false.** It ships prebuilt bindings for linux, linuxmusl, darwin and win32 on x64 and arm64 and loads them first. Allowing the build makes pnpm run `node-gyp rebuild`; pnpm does not bundle node-gyp, so without a global one the install fails (`node-gyp: not found`, `ELIFECYCLE`) before linking `node_modules/.bin`, and `npm test` / `npm run typecheck` then report `tsc: not found`. A global node-gyp hides this, and so does pnpm's side-effects cache in a store that once built it; reproduce with node-gyp off `PATH` and `--config.side-effects-cache=false`.
+- **No prebuild for your platform?** Set better-sqlite3 to true and install node-gyp (`pnpm add -g node-gyp`) and a C++ toolchain (make, g++, python3). Without a binding every command fails at startup with `Could not locate the bindings file`.
 
 ## Verification
 

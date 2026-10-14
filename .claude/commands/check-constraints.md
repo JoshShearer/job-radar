@@ -124,7 +124,7 @@ non-negotiables in `CLAUDE.md`.
 | 17 | **Config coherence checks kept** | Strictness (unknown key = error) or cross-file coherence removed (`coherenceProblems`, `src/domain/config/schema.ts`). A typo silently disabling a filter is worse than a crash. | BLOCK |
 | 18 | **No personal data committed** | `config/candidate/evidence.yaml`, `config/candidate/personal.yaml`, v1's `config/resume.yaml`/`config/personal.yaml`, `resumes/*`, `applications/`, `artifacts/`, `legacy-v1/`, `data/`, `reports/`, or `.env` staged. | BLOCK |
 | 19 | **Not committing to main** | Feature work committed directly to `main`. Docs-only changes are exempt. | WARNING |
-| 20 | **pnpm build approvals intact** | `pnpm-workspace.yaml` no longer sets `allowBuilds: true` for **better-sqlite3** and **esbuild**. Without them `pnpm install` succeeds and every command then fails with `Could not locate the bindings file`. | BLOCK |
+| 20 | **pnpm build policy intact** | `pnpm-workspace.yaml` no longer sets `allowBuilds` **esbuild: true** and **better-sqlite3: false** (or `tests/toolchain.test.ts`, which pins it, weakened). Blocking esbuild breaks tsx and vitest; allowing better-sqlite3 makes pnpm run `node-gyp rebuild`, which fails the install on any machine without a global node-gyp even though the shipped prebuild is all it needs (JOB-69). | BLOCK |
 
 ### Step 1: Analyze the injected context
 
