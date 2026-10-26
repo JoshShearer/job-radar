@@ -88,6 +88,42 @@ describe("classifyLabel on real Greenhouse labels", () => {
     expect(classifyLabel(VERCEL_LABELS.workAuth)).toBe("work_authorization");
   });
 
+  // JOB-72. Found live on Cresta (Greenhouse 5448328008): this matched
+  // `sponsorship` first and was answered "No" from requires_sponsorship: false,
+  // telling the employer a US-authorized candidate is not authorized. A
+  // question that asks about authorization and sponsorship together flips
+  // polarity with its wording, so it is the candidate's to answer.
+  it("does not answer authorization and sponsorship asked together", () => {
+    const combined = [
+      "Are you legally authorized to work in the United States without current or future visa sponsorship?",
+      "Are you eligible to work in the US without requiring sponsorship?",
+      "Will you require sponsorship to be authorized to work in the United States?",
+      // No authorization word, same polarity flip: each was answered "No".
+      "Are you able to work in the United States without visa sponsorship?",
+      "Can you legally work in the US without requiring sponsorship?",
+      "Are you legally permitted to work in the US without sponsorship?",
+      "Do you currently have the ability to work in the U.S. without sponsorship?",
+    ];
+    for (const label of combined) {
+      const intent = classifyLabel(label);
+      expect(intent).toBe("work_eligibility_combined");
+      const d = decide(label, intent, ctx);
+      expect(d.action).toBe("skip");
+      expect(d.action === "skip" && d.consequential).toBe(true);
+    }
+  });
+
+  it("still answers the ordinary sponsorship and authorization questions", () => {
+    // Honeycomb's wording, answered correctly on the same live run.
+    const sponsorOnly =
+      "Will you now or in the future require sponsorship for employment visa status (e.g., H-1B visa status)?";
+    expect(classifyLabel(sponsorOnly)).toBe("sponsorship");
+    expect(decide(sponsorOnly, "sponsorship", ctx)).toMatchObject({ action: "select", desired: "No" });
+    expect(
+      classifyLabel("Are you legally authorized to work in the country in which this role is located?"),
+    ).toBe("work_authorization");
+  });
+
   it("reads a country question phrased as a residence question", () => {
     expect(classifyLabel(VERCEL_LABELS.basedIn)).toBe("country");
   });

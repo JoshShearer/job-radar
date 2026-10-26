@@ -31,6 +31,7 @@ export type FieldIntent =
   | "cover_letter"
   | "work_authorization"
   | "sponsorship"
+  | "work_eligibility_combined"
   | "salary_expectation"
   | "notice_period"
   | "referral_source"
@@ -93,6 +94,18 @@ const RULES: ReadonlyArray<readonly [FieldIntent, RegExp]> = [
   ["github", /git ?hub/],
   ["twitter", /\b(twitter|x profile)\b/],
   ["website", /\b(website|portfolio|personal site|blog|url)\b/],
+  // Authorization and sponsorship asked together, before either alone. "Are you
+  // authorized to work in the US without sponsorship?" wants Yes from a
+  // candidate who needs no sponsorship; "Will you require sponsorship to be
+  // authorized?" wants No. Polarity follows the wording, so neither stated
+  // fact answers it. Found live on Cresta, where it matched `sponsorship` and
+  // would have said the candidate is not authorized to work (JOB-72).
+  // "Without ... sponsorship" flips polarity with no authorization word at all
+  // ("Are you able to work in the US without sponsorship?"), so it counts too.
+  [
+    "work_eligibility_combined",
+    /\bsponsor.*\b(authori[sz]\w*|eligib\w*|right to work|work permit)\b|\b(authori[sz]\w*|eligib\w*|right to work|work permit|without)\b.*\bsponsor/,
+  ],
   ["sponsorship", /\bsponsor/],
   [
     "work_authorization",
@@ -299,6 +312,12 @@ export function decide(rawLabel: string, intent: FieldIntent, ctx: DecisionConte
             desired: p.work_eligibility.requires_sponsorship ? "Yes" : "No",
             why: "personal.yaml work_eligibility",
           };
+    case "work_eligibility_combined":
+      return {
+        action: "skip",
+        why: "asks about work authorization and sponsorship together; the right Yes/No depends on its wording - answer it yourself",
+        consequential: true,
+      };
     case "work_authorization":
       return p.work_eligibility.authorized_to_work_us === null
         ? {
