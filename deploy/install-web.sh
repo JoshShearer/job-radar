@@ -46,7 +46,7 @@ systemctl --user enable jr-web.service
 systemctl --user restart jr-web.service
 
 for _ in $(seq 1 40); do
-  curl -fsS -o /dev/null "http://127.0.0.1:${local_port}/assets/app.css" && break
+  curl -fs -o /dev/null "http://127.0.0.1:${local_port}/assets/app.css" && break
   sleep 0.5
 done
 curl -fsS -o /dev/null "http://127.0.0.1:${local_port}/" || { echo "ERROR: the web UI did not come up; see: journalctl --user -u jr-web -n 50" >&2; exit 1; }
