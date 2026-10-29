@@ -2,7 +2,7 @@
 # Install the Job Radar web UI as a user service and publish it to your tailnet
 # (never the public internet) with `tailscale serve`. Idempotent.
 #
-#   bash deploy/install-web.sh [https-port]      (default 8443)
+#   bash deploy/install-web.sh [https-port]      (default 8444)
 #
 # The server binds 127.0.0.1 only. `tailscale serve` terminates HTTPS with the
 # machine's tailnet certificate and forwards to it, adding the viewer's tailnet
@@ -10,7 +10,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
-https_port="${1:-8443}"
+https_port="${1:-8444}"
 unit_dir="$HOME/.config/systemd/user"
 
 node_bin="$(command -v node || true)"
@@ -50,6 +50,15 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 curl -fsS -o /dev/null "http://127.0.0.1:${local_port}/" || { echo "ERROR: the web UI did not come up; see: journalctl --user -u jr-web -n 50" >&2; exit 1; }
+
+# Never take over a port another app already serves: `tailscale serve` silently
+# replaces whatever is there. Re-running against our own proxy is fine.
+existing="$(tailscale serve status --json | "$node_bin" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const w=(JSON.parse(s||"{}").Web)||{};const h=w[process.argv[1]];const p=h&&h.Handlers&&h.Handlers["/"];console.log(p?(p.Proxy||"something other than a proxy"):"")})' "${dns}:${https_port}")"
+if [ -n "$existing" ] && [ "$existing" != "http://127.0.0.1:${local_port}" ]; then
+  echo "ERROR: https port ${https_port} already serves ${existing}. Pick a free port: bash deploy/install-web.sh <port>" >&2
+  echo "       (tailscale serve status lists the ports in use)" >&2
+  exit 1
+fi
 
 # Tailnet only. Never `tailscale funnel`: that would put it on the public internet
 # (the server refuses Funnel requests anyway, but do not rely on one layer).

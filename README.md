@@ -180,7 +180,7 @@ web:
   allowed_logins: ["you@example.com"]
 ```
 
-then run `bash deploy/install-web.sh` (HTTPS port 8443 by default). The script installs a `jr-web` user service and runs `tailscale serve --bg --https=8443 http://127.0.0.1:4180`. Every request through the proxy must carry an allowed login in the `Tailscale-User-Login` header, which `tailscale serve` sets from the viewer's identity and clients cannot forge. A public Funnel request carries no login, so it is refused even if Funnel is switched on by mistake. Requests made directly on the machine need a loopback `Host`. Config is read when the server starts, so restart it after an edit: `systemctl --user restart jr-web`.
+then run `bash deploy/install-web.sh` (HTTPS port 8444 by default; it refuses a port another app already serves). The script installs a `jr-web` user service and runs `tailscale serve --bg --https=8444 http://127.0.0.1:4180`. Every request through the proxy must carry an allowed login in the `Tailscale-User-Login` header, which `tailscale serve` sets from the viewer's identity and clients cannot forge. A public Funnel request carries no login, so it is refused even if Funnel is switched on by mistake. Requests made directly on the machine need a loopback `Host`. Config is read when the server starts, so restart it after an edit: `systemctl --user restart jr-web`.
 
 ## Legal and ethical constraints
 
