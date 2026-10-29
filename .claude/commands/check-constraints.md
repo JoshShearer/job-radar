@@ -31,6 +31,11 @@ $!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); echo "range: $B
 $!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=0 2>/dev/null -- src/ | grep -E "^\+.*(@anthropic-ai/sdk|new Anthropic\(|messages\.create|modelClient\(\)\.)" | head -20
 ```
 
+### Processes spawned outside the claude-cli adapter (a `claude -p` call is a paid call)
+```
+$!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=0 2>/dev/null -- src/ ':!src/adapters/claude-cli/' | grep -E "^\+.*(child_process|spawn\(|execFile|execSync|claude -p|new ClaudeCliClient|JR_ALLOW_MODEL)" | head -20
+```
+
 ### Model output heading for a rendered document
 ```
 $!B=$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD); git diff "$B" --unified=3 2>/dev/null | grep -nE "^\+.*(renderResume|renderPack|writeFile|toMarkdown).*(completion|response|content\[0\]|message\.)" | head -10
@@ -137,6 +142,8 @@ positive. Common false positives:
 
 - `messages.create` inside `src/adapters/anthropic/client.ts`: the one adapter behind the
   gateway's `ModelClient` port
+- `spawn(` / `child_process` inside `src/adapters/claude-cli/client.ts`, and `new ClaudeCliClient` /
+  `JR_ALLOW_MODEL` in `src/ui/compose.ts`: the second `ModelClient` adapter and its fence (ADR-0004)
 - A `submit` string in `src/domain/browser/fields.ts`: `isSubmitControl` exists to *detect and
   avoid* submit controls
 - `Remote OK` appearing in a comment — check whether the emitted string survived

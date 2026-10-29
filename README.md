@@ -9,7 +9,7 @@ Version 2 is a ground-up rebuild. `docs/ARCHITECTURE_AUDIT_2026-10-13.md` explai
 ```bash
 npm install
 npx playwright install chromium      # form filling, PDFs, and the refusal tests
-cp .env.example .env                 # ANTHROPIC_API_KEY, optional Gmail read-only credentials
+cp .env.example .env                 # optional: ANTHROPIC_API_KEY (provider api), Gmail read-only credentials
 npm run cli -- init                  # creates config/ from config.example/ (never overwrites)
 npm run cli -- check                 # validates every config file and the evidence ledger
 npm run cli -- sweep                 # fetch the configured boards
@@ -66,7 +66,7 @@ Dependency direction is enforced by `tests/architecture.test.ts`. Domain imports
 | `candidate/evidence.yaml` | you | **every claim about you**, with ids, skills and `verified` |
 | `candidate/personal.yaml` | you | form-filling facts; `null` means unknown, never a default |
 | `policy/evaluation.yaml` | tuning | scoring weights, priority bands, routing, selection caps, lifecycle |
-| `operations.yaml` | operations | budgets, model choices, mail, transport |
+| `operations.yaml` | operations | budgets, model provider and choices, mail, transport |
 | `sources.yaml` | your search | boards and watchlist |
 
 Every file is strict: an unknown key is an error, and cross-file coherence (lane weights, ordered bands, known lanes) is checked on load. The transport refuses a delay below 500 ms in config *and* in code.
@@ -106,6 +106,15 @@ Only `assess`, `tailor`, `prepare`, `evidence import` and `benchmark-triage` cal
 2. **Reserve before calling.** The worst case (prompt size plus the configured `max_output_tokens`) is reserved against the run, day and month budgets in one database transaction. A call that could cross a ceiling is refused *before* it is made.
 3. **Receipt for everything.** Refusals, truncations, invalid JSON, schema failures and API errors are all receipted. A call without a usage block counts at its reserved worst case, never as zero.
 4. **One schema.** The JSON Schema sent to the API is generated from the Zod schema the response is validated against.
+
+### Model provider
+
+`operations.yaml` `model.provider` chooses who answers (ADR-0004):
+
+- `claude-cli` (the `config.example/` default): `claude -p` on your claude.ai subscription. It runs with no tools, no setting sources, `--safe-mode`, `--strict-mcp-config`, no session persistence, our system prompt in a private 0600 file (never in argv, which other local users can read), the user prompt on stdin, an empty working directory (`data/claude-cli-cwd`), and `ANTHROPIC_API_KEY` removed from its environment. **It is off unless `JR_ALLOW_MODEL=1` is exported**: without it, every model command refuses and spends nothing. `jr check` says which provider is active and whether it is allowed. Dollar figures are the subscription's **list-price equivalent** (our `PRICING` table applied to the reported usage), and they count against the same budgets. Because the CLI retries internally, a call reserves `model.cli.reserve_turns` (default 4) worst-case turns, so `per_run_usd` must cover one such reserve; `check` refuses a budget that would refuse every call.
+- `api`: the paid Anthropic API with `ANTHROPIC_API_KEY`. This is what an `operations.yaml` without a `model:` key uses.
+
+The CLI adds context of its own that we cannot remove (your account email, its cwd, today's date). It is outside the request's address, so it never re-buys an answer, but the model sees it.
 
 Selection for assessment is by **rank**, spread across companies with per-company caps, and never gated on an absolute keyword score. Two-stage routing (a cheap triage verdict, then a dossier only when earned) is deterministic and configured in `policy/evaluation.yaml`.
 
@@ -166,6 +175,8 @@ JR_HOME=~/jr-restored npm run cli -- check
 ## Scheduling
 
 `deploy/` holds a user-level systemd timer for `jr backup` then `jr daily --mail`. The scheduled pass does not spend unless you add `--assess`; budgets in `operations.yaml` then bound it per run, per day and per month.
+
+`daily --assess` on the `claude-cli` provider also needs `JR_ALLOW_MODEL=1` in `~/.config/job-radar/env`, and the unit's `PATH` (`/usr/local/bin:/usr/bin:/bin`) does not include `~/.local/bin`, where `claude` usually lives: set `model.cli.binary` to its absolute path (`command -v claude`). Without that, `check` reports the binary as not found and the pass refuses before reserving anything.
 
 ## Legal and ethical constraints
 

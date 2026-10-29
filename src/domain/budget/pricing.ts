@@ -46,10 +46,19 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
  * deliberate overestimate for Latin text that still bounds CJK) plus the full output
  * ceiling. Reserved before the call so a ceiling is a ceiling, not a
  * stop-after-the-fact threshold.
+ *
+ * `turns` and `overheadInputTokens` are for a provider that may make several
+ * API calls for one request (the claude CLI retries internally) and adds input
+ * of its own to each. Omitted, the formula is the single-call one.
  */
-export function worstCaseUsd(inputBytes: number, maxOutputTokens: number, model: string): number {
-  const inputTokens = Math.ceil(inputBytes / 3);
-  return costUsd({ input: inputTokens, cacheWrite: 0, cacheRead: 0, output: maxOutputTokens }, model);
+export function worstCaseUsd(
+  inputBytes: number,
+  maxOutputTokens: number,
+  model: string,
+  multi: { turns?: number; overheadInputTokens?: number } = {},
+): number {
+  const inputTokens = Math.ceil(inputBytes / 3) + (multi.overheadInputTokens ?? 0);
+  return (multi.turns ?? 1) * costUsd({ input: inputTokens, cacheWrite: 0, cacheRead: 0, output: maxOutputTokens }, model);
 }
 
 /** Read the provider's usage block. Missing usage is reported, never invented as zero. */

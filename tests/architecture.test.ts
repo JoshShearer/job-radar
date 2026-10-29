@@ -61,6 +61,18 @@ describe("architecture", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("only the claude-cli adapter spawns a process, and model clients are built only in the composition root", () => {
+    const spawners = all
+      .filter((f) => imports(f).some((s) => s === "node:child_process" || s === "child_process"))
+      .map((f) => relative(SRC, f));
+    expect(spawners).toEqual(["adapters/claude-cli/client.ts"]);
+    const builders = all
+      .filter((f) => !["ui/compose.ts", "adapters/anthropic/client.ts", "adapters/claude-cli/client.ts"].includes(relative(SRC, f)))
+      .filter((f) => /new (?:ClaudeCliClient|AnthropicClient)\b|AnthropicClient\.fromEnv/.test(readFileSync(f, "utf8")))
+      .map((f) => relative(SRC, f));
+    expect(builders).toEqual([]);
+  });
+
   it("no candidate facts are hardcoded in prompts", () => {
     const prompts = readFileSync(join(SRC, "domain/llm/prompts.ts"), "utf8");
     expect(prompts).not.toMatch(/\$\d{3}k|ShroomSpy|LoopString|years of experience\./);

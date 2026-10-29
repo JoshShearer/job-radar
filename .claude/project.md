@@ -67,7 +67,8 @@ L1 code review: skip
 - `paid calls` (+2) - a model call outside `src/app/gateway.ts`, volatile content in a prompt
   (dates, scores, URLs: every assessment re-buys), a reservation skipped, a receipt missing, spend
   summed from successes instead of the ledger. Match: `src/app/gateway.ts`, `src/app/assess*.ts`,
-  `src/domain/llm/**`, `src/domain/budget/**`, `ModelClient`, `max_output_tokens`, `runSpend`
+  `src/domain/llm/**`, `src/domain/budget/**`, `ModelClient`, `max_output_tokens`, `runSpend`,
+  `src/adapters/claude-cli/**`, `child_process`, `JR_ALLOW_MODEL`
 - `facts and migrations` (+2) - an UPDATE path on a fact table, a derived value stored as a fact,
   an applied migration edited instead of a new `MIGRATIONS` entry, a schema change without
   `npm run gen:port`. Match: `src/adapters/sqlite/**`, `MIGRATIONS`, `void_event`, `derivation`
@@ -151,7 +152,7 @@ docs-only commits to the default branch: allowed.
 | Verify-only gates | none |
 | Target from a lane | No lock. A lane runs only the free, read-only commands (`sources`, `sweep`, `discover`, `evaluate`, `report`, `daily` without `--assess` or `--mail`, `check`, `evidence lint`, `render`) on its own database, and `serve` only on a port it proved free (`overrides/run-tickets.md`). It never spends (`assess`, `tailor`, `prepare`, `evidence import`, `benchmark-triage`), never reads mail, and runs `fill` only against the `file://` fixtures in `tests/` |
 | Target guard files | `src/domain/browser/**`, `src/adapters/browser/**`, `src/app/fill.ts` (a browser change needs a live `jr fill --headless`, which a lane cannot do: the ticket blocks for the owner) |
-| Environment fences | Files: `config/candidate/evidence.yaml`, `config/candidate/personal.yaml`, `config/candidate/*.bak`, `.browser-profile/`, `artifacts/`, `data/`. Variables: `ANTHROPIC_API_KEY`, `JR_HOME`, `GMAIL_.*` |
+| Environment fences | Files: `config/candidate/evidence.yaml`, `config/candidate/personal.yaml`, `config/candidate/*.bak`, `.browser-profile/`, `artifacts/`, `data/`. Variables: `ANTHROPIC_API_KEY`, `JR_HOME`, `GMAIL_.*`, `JR_ALLOW_MODEL` |
 | Primary changes during a run | `warn` |
 | Secret patterns | none |
 | Forbidden unattended actions | `deploy/install-timer.sh`, `systemctl --user`, `npm run serve` (the default port 4180), `jr fill` against anything but a `file://` fixture, `assess`, `tailor`, `prepare`, `evidence import`, `benchmark-triage`, `mail scan` without `--dry-run`, `git tag`, `gh release`, `npm publish` |
