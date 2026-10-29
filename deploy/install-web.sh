@@ -35,6 +35,15 @@ MSG
   exit 1
 fi
 
+# Never take over a port another app already serves: `tailscale serve` silently
+# replaces whatever is there. Re-running against our own proxy is fine.
+existing="$(tailscale serve status --json | "$node_bin" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const w=(JSON.parse(s||"{}").Web)||{};const h=w[process.argv[1]];const p=h&&h.Handlers&&h.Handlers["/"];console.log(p?(p.Proxy||"something other than a proxy"):"")})' "${dns}:${https_port}")"
+if [ -n "$existing" ] && [ "$existing" != "http://127.0.0.1:${local_port}" ]; then
+  echo "ERROR: https port ${https_port} already serves ${existing}. Pick a free port: bash deploy/install-web.sh <port>" >&2
+  echo "       (tailscale serve status lists the ports in use)" >&2
+  exit 1
+fi
+
 echo "Pinning node: $node_bin ($("$node_bin" -v)); checkout: $repo; local port $local_port"
 mkdir -p "$unit_dir" "$repo/data"
 sed "s#^WorkingDirectory=.*#WorkingDirectory=${repo}#; \
@@ -50,15 +59,6 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 curl -fsS -o /dev/null "http://127.0.0.1:${local_port}/" || { echo "ERROR: the web UI did not come up; see: journalctl --user -u jr-web -n 50" >&2; exit 1; }
-
-# Never take over a port another app already serves: `tailscale serve` silently
-# replaces whatever is there. Re-running against our own proxy is fine.
-existing="$(tailscale serve status --json | "$node_bin" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const w=(JSON.parse(s||"{}").Web)||{};const h=w[process.argv[1]];const p=h&&h.Handlers&&h.Handlers["/"];console.log(p?(p.Proxy||"something other than a proxy"):"")})' "${dns}:${https_port}")"
-if [ -n "$existing" ] && [ "$existing" != "http://127.0.0.1:${local_port}" ]; then
-  echo "ERROR: https port ${https_port} already serves ${existing}. Pick a free port: bash deploy/install-web.sh <port>" >&2
-  echo "       (tailscale serve status lists the ports in use)" >&2
-  exit 1
-fi
 
 # Tailnet only. Never `tailscale funnel`: that would put it on the public internet
 # (the server refuses Funnel requests anyway, but do not rely on one layer).
