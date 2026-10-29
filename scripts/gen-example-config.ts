@@ -16,6 +16,11 @@ if (!process.argv[2]) {
 const oldRoot = resolve(process.argv[2]);
 const out = resolve(import.meta.dirname, "..", "config.example");
 const c = convertLegacyConfig(resolve(oldRoot, "config/career-profile.yaml"), resolve(oldRoot, "config/sources.yaml"));
+// v1 installs billed the API (the converter's default); a new install starts on
+// the subscription. per_run_usd must cover one claude-cli worst case (4 turns of
+// 16,000 opus output tokens is about $1.68), or every dossier is refused.
+c.operations.model = { ...c.operations.model, provider: "claude-cli" };
+c.operations.budgets.per_run_usd = Math.max(c.operations.budgets.per_run_usd, 2.5);
 for (const [key, rel] of Object.entries(CONFIG_FILES)) {
   const file = resolve(out, rel);
   mkdirSync(dirname(file), { recursive: true });

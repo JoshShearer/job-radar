@@ -89,7 +89,7 @@ export async function benchmarkTriage(ctx: AppContext, runId: number, opts: Benc
       "Re-run with --yes to make the calls.",
     ]);
   }
-  if (!ctx.modelClient()) return refused(result, ["ANTHROPIC_API_KEY is not set. Nothing was spent."]);
+  if (!ctx.modelClient()) return refused(result, [`${ctx.modelProvider().reason ?? "No model provider is configured."} Nothing was spent.`]);
 
   for (const c of sample) {
     try {

@@ -73,6 +73,17 @@ npm run cli -- serve                   # the local web UI
 
 v1's application documents stay in `applications/`; v2 writes new ones under `artifacts/`. When you are satisfied, `legacy-v1/` and `data/job-radar.sqlite` can be deleted. Until then, the tag `v1-final` and those files are a complete way back.
 
+## Model provider (JOB-73)
+
+`config.example/operations.yaml` now selects `model: { provider: claude-cli }`, which runs model calls through `claude -p` on the claude.ai subscription. An existing `config/operations.yaml` has no `model:` key and so stays on `api` (`ANTHROPIC_API_KEY`), exactly as before; `jr init` never overwrites it. To opt in:
+
+1. Add `model: { provider: claude-cli }` to `config/operations.yaml`, and for the timer `model.cli.binary: /absolute/path/to/claude` (its `PATH` lacks `~/.local/bin`).
+2. Raise `budgets.per_run_usd` to at least one claude-cli worst case (`npm run cli -- check` reports it; 2.5 covers 4 turns of 16,000 opus output tokens).
+3. Export `JR_ALLOW_MODEL=1` where model commands should spend (your shell, and `~/.config/job-radar/env` for `daily --assess`).
+4. `npm run cli -- check` shows `model: claude-cli, allowed`. `jr spend` labels these calls "subscription, list-price equivalent".
+
+The database gains `model_call.provider` (migration 2, applied on the next open; older receipts read as `api`). To go back, set `provider: api` or remove the key.
+
 ## Rolling back
 
 ```bash

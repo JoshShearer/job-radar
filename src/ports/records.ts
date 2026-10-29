@@ -2,6 +2,7 @@ import type { PostingSnapshot } from "../domain/catalog/posting.js";
 import type { ResolvedHow } from "../domain/catalog/resolve.js";
 import type { Actor, ApplicationState, PursuitState } from "../domain/pursuit/machines.js";
 import type { TokenUsage } from "../domain/budget/pricing.js";
+import type { ModelProviderName } from "./io.js";
 import type { Outcome } from "../kernel/result.js";
 import type { Priority } from "../domain/evaluation/priority.js";
 import type { PostingState } from "../domain/catalog/lifecycle.js";
@@ -91,6 +92,8 @@ export interface ModelCallReservation {
   effort: string;
   reservedUsd: number;
   at: string;
+  /** Written once at reservation. Rows from before provider tracking read as "api". */
+  provider: ModelProviderName;
 }
 
 export type CallOutcome = "success" | "refusal" | "truncated" | "invalid_json" | "schema" | "api_error";

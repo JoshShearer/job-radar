@@ -4,7 +4,7 @@ import type { AppContext } from "../../app/context.js";
 import { buildBriefing } from "../../app/briefing.js";
 import { withRun } from "../../app/run.js";
 import { applicationFold, applicationViews, isPursuitState, pursuitOf, transitionPursuit } from "../../app/pursuit.js";
-import { spendFor } from "../../app/spend.js";
+import { basisNote, spendFor } from "../../app/spend.js";
 import { briefingHtml, externalLink, funnelHtml, rankedHtml, renderPage } from "../reports/render.js";
 import { escapeHtml as esc } from "../../domain/materials/documents.js";
 import { PRIORITY_LABELS } from "../../domain/evaluation/priority.js";
@@ -137,7 +137,7 @@ ${r.detail.analystSummary ? `<p><strong>Analyst:</strong> ${esc(r.detail.analyst
 <p>${buttons}</p></div>
 <h2>Why it scored this way</h2><pre>${esc(r.detail.explanation)}</pre>
 <h2>Applications and documents</h2><ul>${apps}${gens}</ul>
-<p class="muted">Spent on this posting: $${spent.usd.toFixed(4)} (${spent.calls} calls). Tailoring, preparing, filling and submitting happen from the CLI.</p>
+<p class="muted">Spent on this posting: $${spent.usd.toFixed(4)} (${spent.calls} calls)${esc(basisNote(spent))}. Tailoring, preparing, filling and submitting happen from the CLI.</p>
 <p>${externalLink(r.detail.applicationUrl ?? r.detail.url, "Open the posting")}</p>`,
       ),
     );
