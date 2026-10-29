@@ -1,0 +1,1 @@
+../claude-workflow/core/commands/test-issue.md
