@@ -3,6 +3,12 @@ import { z } from "zod";
 import { BudgetRefusal, callModel, ModelFailure, NoModelConfigured } from "../src/app/gateway.js";
 import { spendSummary } from "../src/app/spend.js";
 import { FakeModel, makeEnv, testConfig, type ModelReply } from "./helpers/context.js";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { ClaudeCliClient } from "../src/adapters/claude-cli/client.js";
+import { toStructuredOutputSchema } from "../src/domain/llm/structured.js";
+import { costUsd, worstCaseUsd } from "../src/domain/budget/pricing.js";
 
 const schema = z.object({ answer: z.string(), score: z.number().int().min(0).max(100) }).strict();
 const req = (env: ReturnType<typeof makeEnv>, over: Record<string, unknown> = {}) => ({
@@ -113,5 +119,163 @@ describe("model gateway", () => {
     const again = await callModel(env.ctx, req(env, { salt: "force-1" }));
     expect(again.fromCache).toBe(false);
     expect(again.value.answer).toBe("v2");
+  });
+});
+
+describe("model gateway on the claude-cli provider", () => {
+  const FIX = resolve(import.meta.dirname, "fixtures/claude-cli");
+  const cliClient = (file: string, code = 0) =>
+    new ClaudeCliClient({
+      binary: "/fake/claude",
+      cwd: "/fake/cwd",
+      promptDir: mkdtempSync(join(tmpdir(), "jr-prompts-")),
+      timeoutMs: 1000,
+      maxTurns: 4,
+      baseEnv: {},
+      runner: async () => ({ code, signal: null, stdout: readFileSync(join(FIX, file), "utf8"), stderr: "", timedOut: false, overflow: false }),
+    });
+  const haiku = (max: number) => ({ choice: { model: "claude-haiku-5-5", effort: "medium", max_output_tokens: max } });
+  const bytesOf = (r: ReturnType<typeof req>) =>
+    [r.prompt.system, r.prompt.user, JSON.stringify(toStructuredOutputSchema(schema))].reduce((n, x) => n + new TextEncoder().encode(x).length, 0);
+
+  it("the api reserve is the single-call formula, unchanged", async () => {
+    const model = new FakeModel(() => ({ json: { answer: "hi", score: 5 } }));
+    const env = makeEnv({ model });
+    const r = req(env);
+    await callModel(env.ctx, r);
+    const [c] = env.store.modelCalls();
+    expect(c!.provider).toBe("api");
+    expect(c!.reservedUsd).toBeCloseTo(costUsd({ input: Math.ceil(bytesOf(r) / 3), cacheWrite: 0, cacheRead: 0, output: 2000 }, "claude-sonnet-5"), 12);
+    expect(model.calls[0]!.maxBudgetUsd).toBe(c!.reservedUsd);
+  });
+
+  it("the claude-cli reserve covers reserve_turns turns, each with the CLI's own input overhead", async () => {
+    const model = new FakeModel(() => ({ json: { answer: "hi", score: 5 } }));
+    const env = makeEnv({ model, provider: "claude-cli" });
+    const r = req(env);
+    await callModel(env.ctx, r);
+    const [c] = env.store.modelCalls();
+    const cli = env.config.operations.model.cli;
+    const one = costUsd({ input: Math.ceil(bytesOf(r) / 3) + cli.overhead_input_tokens, cacheWrite: 0, cacheRead: 0, output: 2000 }, "claude-sonnet-5");
+    expect(c!.provider).toBe("claude-cli");
+    expect(c!.reservedUsd).toBeCloseTo(cli.reserve_turns * one, 12);
+    expect(model.calls[0]!.maxBudgetUsd).toBe(c!.reservedUsd);
+  });
+
+  it("the recorded success (reconstructed fixture) settles a success receipt with its real usage, within the reserve", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = cliClient("success.reconstructed.json") as never;
+    const out = await callModel(env.ctx, req(env, haiku(2000)));
+    expect(out.value).toEqual({ answer: "hi", score: 5 });
+    const [c] = env.store.modelCalls();
+    expect(c!.outcome).toBe("success");
+    expect(c!.usageKnown).toBe(true);
+    expect(c!.usage).toEqual({ input: 2, cacheWrite: 1156, cacheRead: 0, output: 891 });
+    expect(c!.actualUsd!).toBeLessThanOrEqual(c!.reservedUsd);
+    expect(env.logs.join("\n")).not.toMatch(/WARNING/);
+  });
+
+  it("the recorded truncation (reconstructed fixture: 4 turns, 1200 tokens against a 300 cap) is a truncated receipt within the multi-turn reserve, with its turns recorded", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = cliClient("truncation.reconstructed.json", 1) as never;
+    await expect(callModel(env.ctx, req(env, haiku(300)))).rejects.toMatchObject({ outcome: "truncated" });
+    const [c] = env.store.modelCalls();
+    expect(c!.outcome).toBe("truncated");
+    expect(c!.usage.output).toBe(1200);
+    expect(c!.actualUsd!).toBeLessThanOrEqual(c!.reservedUsd);
+    expect(c!.error).toMatch(/turns=4/);
+  });
+
+  it("the same truncation on a single-call reserve would overshoot it (why reserve_turns exists)", () => {
+    const usage = { input: 8, cacheWrite: 1156, cacheRead: 3468, output: 1200 };
+    expect(costUsd(usage, "claude-haiku-5-5")).toBeGreaterThan(worstCaseUsd(100, 300, "claude-haiku-5-5"));
+  });
+
+  it("a CLI error with usage settles api_error at its reported usage; one without settles at the reserve", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = cliClient("error.synthetic.json", 1) as never;
+    await expect(callModel(env.ctx, req(env, haiku(300)))).rejects.toMatchObject({ outcome: "api_error" });
+    const [c] = env.store.modelCalls();
+    expect(c!.usageKnown).toBe(true);
+    expect(c!.usage.input).toBe(120);
+    expect(c!.error).toMatch(/turns=1/);
+
+    const env2 = makeEnv({ provider: "claude-cli", model: new FakeModel(() => ({ throws: new Error("spawn ENOENT") })) });
+    await expect(callModel(env2.ctx, req(env2))).rejects.toMatchObject({ outcome: "api_error" });
+    const [d] = env2.store.modelCalls();
+    expect(d!.usageKnown).toBe(false);
+    expect(d!.actualUsd).toBe(d!.reservedUsd);
+  });
+
+  it("the CLI's --max-turns early exit settles api_error at its reported usage, with its turns (synthetic fixture)", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = cliClient("max-turns.synthetic.json", 1) as never;
+    await expect(callModel(env.ctx, req(env, haiku(300)))).rejects.toMatchObject({ outcome: "api_error" });
+    const [c] = env.store.modelCalls();
+    expect(c!.usageKnown).toBe(true);
+    expect(c!.usage.output).toBe(1600);
+    expect(c!.error).toMatch(/--max-turns limit/);
+    expect(c!.error).toMatch(/turns=4/);
+  });
+
+  it("structured_output that the CLI's schema accepted but Zod rejects is a schema failure, never stored", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = new ClaudeCliClient({
+      binary: "/fake/claude",
+      cwd: "/fake/cwd",
+      promptDir: mkdtempSync(join(tmpdir(), "jr-prompts-")),
+      timeoutMs: 1000,
+      maxTurns: 4,
+      baseEnv: {},
+      runner: async () => {
+        const e = JSON.parse(readFileSync(join(FIX, "success.reconstructed.json"), "utf8"));
+        e.structured_output = { answer: "hi", score: 500 };
+        return { code: 0, signal: null, stdout: JSON.stringify(e), stderr: "", timedOut: false, overflow: false };
+      },
+    }) as never;
+    await expect(callModel(env.ctx, req(env, haiku(2000)))).rejects.toMatchObject({ outcome: "schema" });
+    expect(env.store.getDerivation("test:kind", env.store.modelCalls()[0]!.requestKey)).toBeNull();
+  });
+
+  it("a refusal envelope is a refusal receipt (synthetic fixture)", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = cliClient("refusal.synthetic.json") as never;
+    await expect(callModel(env.ctx, req(env, haiku(300)))).rejects.toMatchObject({ outcome: "refusal" });
+  });
+
+  it("missing structured_output is invalid_json", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = new ClaudeCliClient({
+      binary: "/fake/claude",
+      cwd: "/fake/cwd",
+      promptDir: mkdtempSync(join(tmpdir(), "jr-prompts-")),
+      timeoutMs: 1000,
+      maxTurns: 4,
+      baseEnv: {},
+      runner: async () => {
+        const e = JSON.parse(readFileSync(join(FIX, "success.reconstructed.json"), "utf8"));
+        e.structured_output = null;
+        return { code: 0, signal: null, stdout: JSON.stringify(e), stderr: "", timedOut: false, overflow: false };
+      },
+    }) as never;
+    await expect(callModel(env.ctx, req(env, haiku(2000)))).rejects.toMatchObject({ outcome: "invalid_json" });
+  });
+
+  it("with no client, the refusal names the provider's reason and nothing is reserved", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    await expect(callModel(env.ctx, req(env))).rejects.toThrow(/JR_ALLOW_MODEL/);
+    expect(env.store.modelCalls()).toHaveLength(0);
+  });
+
+  it("spend splits subscription (list-price equivalent) calls from api calls", async () => {
+    const env = makeEnv({ model: new FakeModel(() => ({ json: { answer: "hi", score: 5 } })) });
+    await callModel(env.ctx, req(env, { prompt: { system: "a", user: "1" } }));
+    const cli = makeEnv({ provider: "claude-cli", model: new FakeModel(() => ({ json: { answer: "hi", score: 5 } })) });
+    await callModel(cli.ctx, req(cli, { prompt: { system: "a", user: "2" } }));
+    expect(spendSummary(env.ctx).day).toMatchObject({ calls: 1, subscriptionCalls: 0, subscriptionUsd: 0 });
+    const s = spendSummary(cli.ctx).day;
+    expect(s.calls).toBe(1);
+    expect(s.subscriptionCalls).toBe(1);
+    expect(s.subscriptionUsd).toBeCloseTo(s.committed, 12);
   });
 });

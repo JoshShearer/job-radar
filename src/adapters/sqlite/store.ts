@@ -370,10 +370,10 @@ export class SqliteStore implements Store {
       const id = Number(
         this.db
           .prepare(
-            `INSERT INTO model_call (run_id, purpose, subject_id, request_key, model, effort, reserved_usd, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?)`,
+            `INSERT INTO model_call (run_id, purpose, subject_id, request_key, model, effort, reserved_usd, status, created_at, provider)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)`,
           )
-          .run(r.runId, r.purpose, r.subjectId, r.requestKey, r.model, r.effort, r.reservedUsd, r.at).lastInsertRowid,
+          .run(r.runId, r.purpose, r.subjectId, r.requestKey, r.model, r.effort, r.reservedUsd, r.at, r.provider).lastInsertRowid,
       );
       return { id };
     });
@@ -444,6 +444,7 @@ export class SqliteStore implements Store {
       effort: r.effort as string,
       reservedUsd: r.reserved_usd as number,
       at: r.created_at as string,
+      provider: ((r.provider as ModelCallRecord["provider"] | null) ?? "api"),
       status: r.status as "reserved" | "settled",
       outcome: (r.outcome as ModelCallRecord["outcome"]) ?? null,
       usageKnown: r.usage_known === null ? null : r.usage_known === 1,
@@ -781,12 +782,12 @@ export class SqliteStore implements Store {
     this.db
       .prepare(
         `INSERT INTO model_call (run_id, purpose, subject_id, request_key, model, effort, reserved_usd, status, outcome, usage_known,
-           input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, actual_usd, error, created_at, settled_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           input_tokens, cache_write_tokens, cache_read_tokens, output_tokens, actual_usd, error, created_at, settled_at, provider)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         c.runId, c.purpose, c.subjectId, c.requestKey, c.model, c.effort, c.reservedUsd, c.status, c.outcome, c.usageKnown === null ? null : c.usageKnown ? 1 : 0,
-        c.usage.input, c.usage.cacheWrite, c.usage.cacheRead, c.usage.output, c.actualUsd, c.error, c.at, c.settledAt,
+        c.usage.input, c.usage.cacheWrite, c.usage.cacheRead, c.usage.output, c.actualUsd, c.error, c.at, c.settledAt, c.provider,
       );
   }
 

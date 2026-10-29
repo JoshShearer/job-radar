@@ -38,10 +38,43 @@ export interface ModelRequest {
   system: string;
   user: string;
   jsonSchema: Record<string, unknown>;
+  /**
+   * The gateway's reserved worst case for this request, in USD at PRICING.
+   * A provider that can cap its own spend is told it (claude-cli passes it as
+   * --max-budget-usd, enforced in the CLI's prices, not ours); the API ignores it.
+   */
+  maxBudgetUsd: number;
 }
 
 export interface ModelClient {
   create(req: ModelRequest): Promise<unknown>;
+}
+
+/**
+ * A failed call that still reported what it consumed. `response` carries the
+ * provider's usage block (and `num_turns` when it has one), so the receipt
+ * settles at the known usage instead of the reserve.
+ */
+export class ModelCallError extends Error {
+  override name = "ModelCallError";
+  constructor(
+    message: string,
+    readonly response: unknown,
+  ) {
+    super(message);
+  }
+}
+
+export type ModelProviderName = "api" | "claude-cli";
+
+/** Which provider is configured and whether a call may be made, with the reason when not. */
+export interface ModelProviderStatus {
+  provider: ModelProviderName;
+  available: boolean;
+  /** Why no call may be made; null when one may. */
+  reason: string | null;
+  /** One line for `jr check`. */
+  detail: string;
 }
 
 export interface Email {

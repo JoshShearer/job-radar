@@ -1,0 +1,13 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "api_error_status": null,
+  "num_turns": 1,
+  "result": "",
+  "stop_reason": "refusal",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "total_cost_usd": 0.0002,
+  "usage": { "input_tokens": 300, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 12 },
+  "structured_output": null
+}

@@ -334,4 +334,13 @@ CREATE TABLE evaluation (
 );
 `,
   },
+  {
+    // Which ModelClient made each paid call, so spend can label subscription
+    // (claude-cli, list-price equivalent) apart from API dollars, including in
+    // mixed history. Written once at reservation; NULL is a receipt from before
+    // provider tracking, when only the api existed.
+    version: 2,
+    name: "model_call_provider",
+    sql: `ALTER TABLE model_call ADD COLUMN provider TEXT;`,
+  },
 ];

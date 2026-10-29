@@ -6,6 +6,7 @@ import { toStructuredOutputSchema, validateStructured } from "../domain/llm/stru
 import { checkBudget, describeRefusal } from "../domain/budget/budget.js";
 import { costUsd, readUsage, worstCaseUsd, type TokenUsage } from "../domain/budget/pricing.js";
 import type { CallOutcome } from "../ports/records.js";
+import { ModelCallError } from "../ports/io.js";
 
 /**
  * The only path to a paid model. Every call:
@@ -97,8 +98,9 @@ export async function callModel<T>(ctx: AppContext, req: GatewayRequest<T>): Pro
   }
   const key = addressOf(req);
 
+  const provider = ctx.modelProvider();
   const client = ctx.modelClient();
-  if (!client) throw new NoModelConfigured("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add a key.");
+  if (!client) throw new NoModelConfigured(provider.reason ?? "No model provider is configured.");
 
   const ops = ctx.config().operations;
   // Bytes, not characters: non-Latin text runs near one token per character,
@@ -106,7 +108,12 @@ export async function callModel<T>(ctx: AppContext, req: GatewayRequest<T>): Pro
   // bounds CJK. A settled cost above this is logged, never hidden.
   const jsonSchema = toStructuredOutputSchema(req.schema);
   const inputBytes = [req.prompt.system, req.prompt.user, JSON.stringify(jsonSchema)].reduce((n, x) => n + new TextEncoder().encode(x).length, 0);
-  const reserve = worstCaseUsd(inputBytes, req.choice.max_output_tokens, req.choice.model);
+  // The claude CLI may make several API calls for one request (it retries
+  // internally) and adds its own context to each, so its worst case is
+  // reserve_turns calls. The api provider's formula is the single-call one.
+  const cli = ops.model.cli;
+  const multi = provider.provider === "claude-cli" ? { turns: cli.reserve_turns, overheadInputTokens: cli.overhead_input_tokens } : {};
+  const reserve = worstCaseUsd(inputBytes, req.choice.max_output_tokens, req.choice.model, multi);
   const now = ctx.clock.now();
   const windows = {
     dayStart: `${now.toISOString().slice(0, 10)}T00:00:00.000Z`,
@@ -122,6 +129,7 @@ export async function callModel<T>(ctx: AppContext, req: GatewayRequest<T>): Pro
       effort: req.choice.effort,
       reservedUsd: reserve,
       at: now.toISOString(),
+      provider: provider.provider,
     },
     windows,
     (committed) => {
@@ -132,10 +140,24 @@ export async function callModel<T>(ctx: AppContext, req: GatewayRequest<T>): Pro
   if ("refused" in reservation) throw new BudgetRefusal(reservation.refused);
   const callId = reservation.id;
 
-  const settle = (outcome: CallOutcome, usage: TokenUsage, known: boolean, error: string | null) => {
+  // A provider that reports how many API calls one request took (the claude
+  // CLI's num_turns) has it written into the receipt, so an overshoot can be
+  // traced and reserve_turns re-tuned from the ledger.
+  const turnsOf = (r: unknown): number | null => {
+    const n = (r as { num_turns?: unknown } | null)?.num_turns;
+    return typeof n === "number" && Number.isFinite(n) ? n : null;
+  };
+  const settle = (outcome: CallOutcome, usage: TokenUsage, known: boolean, error: string | null, turns: number | null = null) => {
     const actualUsd = known ? costUsd(usage, req.choice.model) : reserve;
-    if (actualUsd > reserve) ctx.log(`WARNING: ${req.kind} cost $${actualUsd.toFixed(4)}, above its reserved worst case $${reserve.toFixed(4)}. The reserve estimate needs raising.`);
-    ctx.store.settleModelCall({ id: callId, outcome, usageKnown: known, usage, actualUsd, error, at: at() });
+    const over = actualUsd > reserve;
+    if (over) {
+      ctx.log(
+        `WARNING: ${req.kind} cost $${actualUsd.toFixed(4)}, above its reserved worst case $${reserve.toFixed(4)}${turns !== null ? ` over ${turns} turns` : ""}. The reserve estimate needs raising.`,
+      );
+    }
+    const note = turns !== null && (error !== null || over) ? ` [turns=${turns}${over ? ", above reserve" : ""}]` : "";
+    const recorded = error !== null ? `${error}${note}` : note ? note.trim() : null;
+    ctx.store.settleModelCall({ id: callId, outcome, usageKnown: known, usage, actualUsd, error: recorded, at: at() });
   };
 
   let response: unknown;
@@ -147,16 +169,24 @@ export async function callModel<T>(ctx: AppContext, req: GatewayRequest<T>): Pro
       system: req.prompt.system,
       user: req.prompt.user,
       jsonSchema,
+      maxBudgetUsd: reserve,
     });
   } catch (err) {
     const message = (err as Error).message ?? String(err);
-    settle("api_error", { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 }, false, message.slice(0, 500));
+    if (err instanceof ModelCallError) {
+      // The provider failed but reported what it consumed: settle at that.
+      const r = readUsage(err.response);
+      settle("api_error", r.usage, r.known, message.slice(0, 500), turnsOf(err.response));
+    } else {
+      settle("api_error", { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 }, false, message.slice(0, 500));
+    }
     throw new ModelFailure(`API error: ${message}`, "api_error", key);
   }
 
   const { usage, known } = readUsage(response);
+  const turns = turnsOf(response);
   const fail = (outcome: CallOutcome, message: string): never => {
-    settle(outcome, usage, known, message.slice(0, 500));
+    settle(outcome, usage, known, message.slice(0, 500), turns);
     throw new ModelFailure(message, outcome, key);
   };
 
@@ -177,7 +207,7 @@ export async function callModel<T>(ctx: AppContext, req: GatewayRequest<T>): Pro
   if (!v.ok) fail("schema", `Response failed schema validation: ${v.error}`);
   const value = (v as { ok: true; value: T }).value;
 
-  settle("success", usage, known, null);
+  settle("success", usage, known, null, turns);
   const created = at();
   ctx.store.putDerivation(req.kind, key, value, callId, created);
   if (req.subjectId) ctx.store.useDerivation(req.kind, req.subjectId, key, created);

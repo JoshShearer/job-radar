@@ -83,7 +83,7 @@ export async function assess(ctx: AppContext, runId: number, opts: AssessOptions
   };
   const brief = candidateBrief(ctx);
   if (!brief) return refused(summary, ["No evidence ledger. Run `jr evidence import <file>` or create config/candidate/evidence.yaml first."]);
-  if (!opts.dryRun && !ctx.modelClient()) return refused(summary, ["ANTHROPIC_API_KEY is not set. Nothing was spent."]);
+  if (!opts.dryRun && !ctx.modelClient()) return refused(summary, [`${ctx.modelProvider().reason ?? "No model provider is configured."} Nothing was spent.`]);
 
   const twoStage = opts.slate || (opts.twoStage ?? config.policy.assessment.two_stage);
   const rows = ctx.store.ranking({

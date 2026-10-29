@@ -85,6 +85,8 @@ const LANE_ENV_ALLOW = ["JOB_RADAR_MODEL", "JOB_RADAR_EFFORT", "JOB_RADAR_CONTAC
 const FORBIDDEN_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  // Lets the claude-cli provider spend the owner's subscription quota (docs/adr/0004).
+  "JR_ALLOW_MODEL",
   "JOB_RADAR_DB",
   "JR_HOME",
   "JR_DB",

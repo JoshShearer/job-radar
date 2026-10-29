@@ -56,6 +56,7 @@ describe("guard", () => {
   it("refuses an exported key or path override", () => {
     expect(ops(c, ["guard"], undefined, { ANTHROPIC_API_KEY: "x" }).code).toBe(2);
     expect(ops(c, ["guard"], undefined, { JOB_RADAR_DB: "/x" }).code).toBe(2);
+    expect(ops(c, ["guard"], undefined, { JR_ALLOW_MODEL: "1" }).code).toBe(2);
     expect(ops(c, ["guard"]).code).toBe(0);
   });
 

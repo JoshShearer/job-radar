@@ -311,6 +311,7 @@ export function importLegacy(ctx: AppContext, data: LegacyData): UseCaseResult<L
         actualUsd: r.price,
         error: null,
         settledAt: r.at,
+        provider: "api",
       });
       s.modelCalls++;
     }
@@ -343,6 +344,7 @@ export function importLegacy(ctx: AppContext, data: LegacyData): UseCaseResult<L
           actualUsd: usd,
           error: "legacy run-level estimate (lower bound)",
           settledAt: run.startedAt,
+          provider: "api",
         });
         s.modelCalls++;
       }

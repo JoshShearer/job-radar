@@ -15,7 +15,7 @@ import { approve, preparePack, tailor } from "../app/materials.js";
 import { fill } from "../app/fill.js";
 import { scanMail } from "../app/mail.js";
 import { buildBriefing } from "../app/briefing.js";
-import { spendFor, spendSummary } from "../app/spend.js";
+import { basisNote, spendFor, spendSummary, SUBSCRIPTION_LABEL } from "../app/spend.js";
 import { importEvidence, lint, matchPosting } from "../app/evidence.js";
 import { importLegacy } from "../app/legacy-import.js";
 import { candidateBrief } from "../app/assessment-requests.js";
@@ -101,9 +101,14 @@ program
       out(`evidence: ${l.claims} claims, ${l.usable} usable; ${l.issues.filter((i) => i.level === "error").length} error(s)`);
     } else out("evidence: none yet (`jr evidence import <file>`)");
     out(`personal: ${ctx().personal() ? "ok" : "missing (needed only for `fill`)"}`);
-    out(`model: ${ctx().modelClient() ? "configured" : "no ANTHROPIC_API_KEY (assess/tailor/prepare unavailable)"}`);
+    out(`model: ${ctx().modelProvider().detail}`);
     out(`mail: ${ctx().mailbox()?.name ?? "not configured"}`);
   });
+
+/** A run is one compose, so one provider: label its dollar figures when that is the subscription. */
+function runBasis(): string {
+  return ctx().modelProvider().provider === "claude-cli" ? ` (${SUBSCRIPTION_LABEL})` : "";
+}
 
 function countBoards(c: ReturnType<AppContext["config"]>): number {
   const s = c.sources.sources;
@@ -165,7 +170,7 @@ program
     );
     const v = r.value;
     for (const w of v.wouldBuy) out(`  would assess: ${w}`);
-    out(`selected ${v.selected} of ${v.eligible}; bought ${v.bought}, from cache ${v.fromCache}, dossiers ${v.dossiers}, triage-only ${v.triageOnly}, failed ${v.failed}; spent ~$${v.spentUsd.toFixed(4)}`);
+    out(`selected ${v.selected} of ${v.eligible}; bought ${v.bought}, from cache ${v.fromCache}, dossiers ${v.dossiers}, triage-only ${v.triageOnly}, failed ${v.failed}; spent ~$${v.spentUsd.toFixed(4)}${runBasis()}`);
   });
 
 program
@@ -191,7 +196,7 @@ program
     const v = r.value;
     if (!v.summary) return;
     const s = v.summary;
-    out(`Compared ${s.compared} (${v.fromCache} free from cache), ${v.failed} failed; spent ~$${v.spentUsd.toFixed(4)}.`);
+    out(`Compared ${s.compared} (${v.fromCache} free from cache), ${v.failed} failed; spent ~$${v.spentUsd.toFixed(4)}${runBasis()}.`);
     out(`Apply-vs-not agreement: ${s.agreeOnApply}/${s.compared} = ${(s.agreementRate * 100).toFixed(1)}%; mean |fit delta| ${s.meanAbsFitDelta.toFixed(1)}`);
     for (const x of s.missedApplies) out(`  missed apply: ${x.company} - ${x.title}: ${x.baselineRecommendation} -> ${x.triageRecommendation}`);
     for (const x of s.spuriousApplies) out(`  invented apply: ${x.company} - ${x.title}: ${x.baselineRecommendation} -> ${x.triageRecommendation}`);
@@ -299,7 +304,7 @@ program
     for (const g of c.store.artifacts(id)) out(`Generation ${g.kind} ${g.id}${g.approvedAt ? " (approved)" : ""}: ${g.dir}`);
     for (const ov of c.store.overrides(id)) out(`Override ${ov.gate} (${ov.detail}) at ${ov.recordedAt.slice(0, 16)}`);
     const s = spendFor(c, id);
-    if (s.calls) out(`Spent on this posting: $${s.usd.toFixed(4)} over ${s.calls} call(s)`);
+    if (s.calls) out(`Spent on this posting: $${s.usd.toFixed(4)} over ${s.calls} call(s)${basisNote(s)}`);
   });
 
 /* --------------------------------------------------------------- decisions */
@@ -421,8 +426,8 @@ program
   .action(async (q: string, o: { override: boolean; force: boolean }) => {
     const id = resolveOpportunity(ctx(), q);
     const r = report(await withRun(ctx(), "tailor", (runId) => tailor(ctx(), runId, id, o)));
-    if (r.value.dir) out(`Generation ${r.value.generationId}: ${r.value.dir}${r.value.spentUsd ? ` ($${r.value.spentUsd.toFixed(4)})` : " ($0)"}`);
-    else if (r.value.spentUsd) out(`No generation written; the failed attempt still cost $${r.value.spentUsd.toFixed(4)}.`);
+    if (r.value.dir) out(`Generation ${r.value.generationId}: ${r.value.dir}${r.value.spentUsd ? ` ($${r.value.spentUsd.toFixed(4)}${runBasis()})` : " ($0)"}`);
+    else if (r.value.spentUsd) out(`No generation written; the failed attempt still cost $${r.value.spentUsd.toFixed(4)}${runBasis()}.`);
   });
 
 program
@@ -432,7 +437,7 @@ program
     const id = resolveOpportunity(ctx(), q);
     const r = report(await withRun(ctx(), "render", (runId) => tailor(ctx(), runId, id, { noCall: true })));
     if (r.value.dir) out(`Generation ${r.value.generationId}: ${r.value.dir}`);
-    else if (r.value.spentUsd) out(`No generation written; the failed attempt still cost $${r.value.spentUsd.toFixed(4)}.`);
+    else if (r.value.spentUsd) out(`No generation written; the failed attempt still cost $${r.value.spentUsd.toFixed(4)}${runBasis()}.`);
   });
 
 program
@@ -445,7 +450,7 @@ program
     const id = resolveOpportunity(ctx(), q);
     const r = report(await withRun(ctx(), "prepare", (runId) => preparePack(ctx(), runId, id, o)));
     if (r.value.dir) out(`Generation ${r.value.generationId}: ${r.value.dir}/pack-review.md`);
-    else if (r.value.spentUsd) out(`No generation written; the failed attempt still cost $${r.value.spentUsd.toFixed(4)}.`);
+    else if (r.value.spentUsd) out(`No generation written; the failed attempt still cost $${r.value.spentUsd.toFixed(4)}${runBasis()}.`);
   });
 
 program
@@ -512,8 +517,8 @@ program
   .option("-d, --days <n>", "window", "30")
   .action((o: { days: string }) => {
     const s = spendSummary(ctx(), num(o.days, "--days") ?? 30);
-    out(`today  $${s.day.committed.toFixed(4)} of $${s.budgets.perDay.toFixed(2)} (${s.day.calls} calls, ${s.day.failed} failed, ${s.day.unknownUsage} without receipt)`);
-    out(`month  $${s.month.committed.toFixed(4)} of $${s.budgets.perMonth.toFixed(2)} (${s.month.calls} calls)`);
+    out(`today  $${s.day.committed.toFixed(4)} of $${s.budgets.perDay.toFixed(2)} (${s.day.calls} calls, ${s.day.failed} failed, ${s.day.unknownUsage} without receipt)${basisNote(s.day)}`);
+    out(`month  $${s.month.committed.toFixed(4)} of $${s.budgets.perMonth.toFixed(2)} (${s.month.calls} calls)${basisNote(s.month)}`);
     for (const p of s.byPurpose) out(`  ${p.purpose.padEnd(16)} ${String(p.calls).padStart(5)} calls  $${p.usd.toFixed(4)}`);
   });
 

@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { z } from "zod";
 import {
-  coherenceProblems,
+  coherenceProblems, operationsProblems,
   EvaluationPolicySchema,
   OperationsSchema,
   PreferencesSchema,
@@ -61,7 +61,7 @@ export function loadConfig(configDir: string, pending: Partial<Record<keyof type
     operations: load("operations", OperationsSchema),
     sources: load("sources", SourcesSchema),
   };
-  const problems = coherenceProblems(config);
+  const problems = [...coherenceProblems(config), ...operationsProblems(config.operations)];
   if (problems.length) throw new ConfigError(`Configuration is inconsistent:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
   return config;
 }

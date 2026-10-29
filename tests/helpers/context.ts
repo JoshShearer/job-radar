@@ -11,7 +11,7 @@ import { SqliteStore } from "../../src/adapters/sqlite/store.js";
 import { loadConfig } from "../../src/adapters/fs/config-loader.js";
 import { FsArtifactStore } from "../../src/adapters/fs/artifact-store.js";
 import { buildAdapters } from "../../src/adapters/ats/registry.js";
-import type { ApplicationBrowser, Email, FillInput, Mailbox, ModelClient, ModelRequest, Transport } from "../../src/ports/io.js";
+import type { ApplicationBrowser, Email, FillInput, Mailbox, ModelClient, ModelProviderName, ModelRequest, Transport } from "../../src/ports/io.js";
 
 export const EXAMPLE_CONFIG = resolve(import.meta.dirname, "..", "..", "config.example");
 
@@ -177,6 +177,9 @@ export function testConfig(tweak?: (c: Config) => void): Config {
   c.sources.sources.ashby.boards = [];
   c.sources.sources.remoteok.enabled = false;
   c.sources.watchlist = [];
+  // config.example selects claude-cli; the suite's default is the api's
+  // single-call reserve. makeEnv({ provider: "claude-cli" }) opts in.
+  c.operations.model.provider = "api";
   tweak?.(c);
   return c;
 }
@@ -191,11 +194,13 @@ export function makeEnv(opts: {
   personal?: Personal | null;
   confirms?: boolean[];
   pdfFails?: boolean;
+  provider?: ModelProviderName;
 } = {}): TestEnv {
   const clock = new FixedClock(opts.now ?? "2026-10-01T12:00:00.000Z");
   const db = openDatabase(":memory:", () => clock.now().toISOString());
   const store = new SqliteStore(db);
   const config = opts.config ?? testConfig();
+  if (opts.provider) config.operations.model.provider = opts.provider;
   const logs: string[] = [];
   const transport = new FakeTransport(opts.routes ?? {});
   const browser = new FakeBrowser();
@@ -235,6 +240,14 @@ export function makeEnv(opts: {
     transport: () => transport,
     adapters: () => buildAdapters(config.sources),
     modelClient: () => env.model,
+    modelProvider: () => {
+      const provider = config.operations.model.provider;
+      const reason =
+        provider === "api"
+          ? "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add a key."
+          : "model.provider is claude-cli and JR_ALLOW_MODEL is not 1, so no model call is allowed here. Set JR_ALLOW_MODEL=1 to spend subscription quota.";
+      return env.model ? { provider, available: true, reason: null, detail: `${provider}, configured` } : { provider, available: false, reason, detail: `${provider}, ${reason}` };
+    },
     mailbox: () => env.mailbox,
     artifacts: new FsArtifactStore(artifactsDir),
     pdf: {

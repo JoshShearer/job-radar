@@ -8,6 +8,7 @@ import type {
   ArtifactStore,
   Mailbox,
   ModelClient,
+  ModelProviderStatus,
   PdfRenderer,
   Prompter,
   SourceAdapter,
@@ -30,8 +31,10 @@ export interface AppContext {
   personal(): Personal | null;
   transport(): Transport;
   adapters(): SourceAdapter[];
-  /** Null when no API key is configured. */
+  /** Null when the configured provider may not be called (see modelProvider().reason). */
   modelClient(): ModelClient | null;
+  /** The configured model provider, whether it may be called, and why not. */
+  modelProvider(): ModelProviderStatus;
   /** Null when no mailbox is configured. */
   mailbox(): Mailbox | null;
   artifacts: ArtifactStore;

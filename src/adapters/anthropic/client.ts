@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ModelClient, ModelRequest } from "../../ports/io.js";
+import { supportsEffort } from "../../domain/llm/models.js";
 
 /**
  * The raw paid API. Owns nothing but the request shape: budgets, receipts,
@@ -15,8 +16,9 @@ export class AnthropicClient implements ModelClient {
     this.client = new Anthropic({ apiKey });
   }
 
-  static fromEnv(): AnthropicClient | null {
-    const key = process.env.ANTHROPIC_API_KEY;
+  /** `env` defaults to the process environment; an explicit empty value means no key. */
+  static fromEnv(env: NodeJS.ProcessEnv = process.env): AnthropicClient | null {
+    const key = env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
     return key ? new AnthropicClient(key) : null;
   }
 
@@ -36,7 +38,4 @@ export class AnthropicClient implements ModelClient {
   }
 }
 
-/** Haiku-class models reject the effort parameter. */
-export function supportsEffort(model: string): boolean {
-  return !/^claude-haiku/.test(model);
-}
+export { supportsEffort } from "../../domain/llm/models.js";
