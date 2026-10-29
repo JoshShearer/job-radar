@@ -87,7 +87,7 @@ jr tailor <id> [--override] [--force]     jr render <id>   jr prepare <id> [--fu
 jr fill <id> [--headless]                 jr mail scan [--dry-run] | review
 jr stats | spend | failures | sources | discover <companies...> [--add]
 jr benchmark-triage [--mode routing|verdict] [--limit n] [--yes]
-jr serve [--port 4180]                    jr backup [--keep 14] [--without-artifacts] [--out <dir>]
+jr serve [--port n] [--check]             jr backup [--keep 14] [--without-artifacts] [--out <dir>]
 jr restore <backup> --to <empty-dir>
 jr import-legacy --db <file> [--old-root <dir>]       jr interview add <app> --stage x | list
 ```
@@ -166,6 +166,21 @@ JR_HOME=~/jr-restored npm run cli -- check
 ## Scheduling
 
 `deploy/` holds a user-level systemd timer for `jr backup` then `jr daily --mail`. The scheduled pass does not spend unless you add `--assess`; budgets in `operations.yaml` then bound it per run, per day and per month.
+
+## Web UI
+
+`jr serve` runs the web UI on `127.0.0.1` (port `web.port` in `operations.yaml`, 4180 by default). It shows today's slate, the full ranking with filters, each posting's scores and history, applications, generated documents and system health. It accepts only the human's own statements, each through the same use case as the CLI: pursuit decisions, a submission you made (after an explicit "I submitted this application myself"), an outcome an employer gave you, and approval of a pack you have read. Anything that spends money, fills a form or sends anything stays on the command line. Pages carry no scripts.
+
+To reach it from your other devices, put it behind `tailscale serve` on the host. That publishes it on your tailnet only, with HTTPS. First admit the host's tailnet name and your tailnet login in `operations.yaml`:
+
+```yaml
+web:
+  port: 4180
+  allowed_hosts: ["pop-os.tailXXXX.ts.net"]
+  allowed_logins: ["you@example.com"]
+```
+
+then run `bash deploy/install-web.sh` (HTTPS port 8443 by default). The script installs a `jr-web` user service and runs `tailscale serve --bg --https=8443 http://127.0.0.1:4180`. Every request through the proxy must carry an allowed login in the `Tailscale-User-Login` header, which `tailscale serve` sets from the viewer's identity and clients cannot forge. A public Funnel request carries no login, so it is refused even if Funnel is switched on by mistake. Requests made directly on the machine need a loopback `Host`. Config is read when the server starts, so restart it after an edit: `systemctl --user restart jr-web`.
 
 ## Legal and ethical constraints
 

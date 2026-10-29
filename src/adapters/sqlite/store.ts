@@ -18,6 +18,7 @@ import type {
   PostingWrite,
   PostingWriteResult,
   PursuitEventRecord,
+  RankingCounts,
   RankingFilter,
   RankingRecord,
   RunRecord,
@@ -681,6 +682,11 @@ export class SqliteStore implements Store {
       where.push("opportunity_id = ?");
       args.push(f.opportunityId);
     }
+    if (f.opportunityIds) {
+      if (!f.opportunityIds.length) return [];
+      where.push(`opportunity_id IN (${f.opportunityIds.map(() => "?").join(",")})`);
+      args.push(...f.opportunityIds);
+    }
     if (f.eligible !== undefined) {
       where.push("eligible = ?");
       args.push(f.eligible ? 1 : 0);
@@ -706,10 +712,29 @@ export class SqliteStore implements Store {
       where.push(`priority IN (${f.priorities.map(() => "?").join(",")})`);
       args.push(...f.priorities);
     }
+    if (f.text?.trim()) {
+      // LIKE is case-insensitive for ASCII only; the escape keeps % and _ literal.
+      const like = `%${f.text.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      where.push("(company LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')");
+      args.push(like, like);
+    }
     const rows = this.db
-      .prepare(`SELECT * FROM ranking ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY roi DESC, fit DESC, opportunity_id LIMIT ?`)
-      .all(...args, f.limit ?? 1_000_000) as Array<Record<string, unknown>>;
+      .prepare(`SELECT * FROM ranking ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY roi DESC, fit DESC, opportunity_id LIMIT ? OFFSET ?`)
+      .all(...args, f.limit ?? 1_000_000, f.offset ?? 0) as Array<Record<string, unknown>>;
     return rows.map(toRanking);
+  }
+
+  rankingCounts(): RankingCounts {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS opportunities, COALESCE(SUM(eligible), 0) AS eligible,
+                COALESCE(SUM(confidence = 'analyzed'), 0) AS assessed,
+                COALESCE(SUM(posting_state = 'open'), 0) AS open,
+                COALESCE(SUM(posting_state = 'closed'), 0) AS closed
+           FROM ranking`,
+      )
+      .get() as RankingCounts;
+    return { opportunities: row.opportunities, eligible: row.eligible, assessed: row.assessed, open: row.open, closed: row.closed };
   }
 
   rankingFor(opportunityId: string): RankingRecord | null {

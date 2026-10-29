@@ -43,3 +43,10 @@ http:
   max_retries: 2
   max_retry_after_ms: 120000
   user_agent: job-radar/0.1 (personal job search; +https://github.com/JoshShearer)
+web:
+  port: 4180
+  # Hostnames `tailscale serve` (or another proxy on this machine) forwards with,
+  # e.g. "pop-os.tail1234.ts.net". The server always binds 127.0.0.1.
+  allowed_hosts: []
+  # Tailnet logins allowed through those hosts. Required when allowed_hosts is set.
+  allowed_logins: []
