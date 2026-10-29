@@ -130,6 +130,7 @@ describe("model gateway on the claude-cli provider", () => {
       cwd: "/fake/cwd",
       promptDir: mkdtempSync(join(tmpdir(), "jr-prompts-")),
       timeoutMs: 1000,
+      maxTurns: 4,
       baseEnv: {},
       runner: async () => ({ code, signal: null, stdout: readFileSync(join(FIX, file), "utf8"), stderr: "", timedOut: false, overflow: false }),
     });
@@ -161,9 +162,9 @@ describe("model gateway on the claude-cli provider", () => {
     expect(model.calls[0]!.maxBudgetUsd).toBe(c!.reservedUsd);
   });
 
-  it("an observed success settles a success receipt with its real usage, within the reserve", async () => {
+  it("the recorded success (reconstructed fixture) settles a success receipt with its real usage, within the reserve", async () => {
     const env = makeEnv({ provider: "claude-cli" });
-    env.model = cliClient("success.observed.json") as never;
+    env.model = cliClient("success.reconstructed.json") as never;
     const out = await callModel(env.ctx, req(env, haiku(2000)));
     expect(out.value).toEqual({ answer: "hi", score: 5 });
     const [c] = env.store.modelCalls();
@@ -174,9 +175,9 @@ describe("model gateway on the claude-cli provider", () => {
     expect(env.logs.join("\n")).not.toMatch(/WARNING/);
   });
 
-  it("an observed truncation (4 turns, 1200 tokens against a 300 cap) is a truncated receipt within the multi-turn reserve, with its turns recorded", async () => {
+  it("the recorded truncation (reconstructed fixture: 4 turns, 1200 tokens against a 300 cap) is a truncated receipt within the multi-turn reserve, with its turns recorded", async () => {
     const env = makeEnv({ provider: "claude-cli" });
-    env.model = cliClient("truncation.observed.json", 1) as never;
+    env.model = cliClient("truncation.reconstructed.json", 1) as never;
     await expect(callModel(env.ctx, req(env, haiku(300)))).rejects.toMatchObject({ outcome: "truncated" });
     const [c] = env.store.modelCalls();
     expect(c!.outcome).toBe("truncated");
@@ -206,6 +207,17 @@ describe("model gateway on the claude-cli provider", () => {
     expect(d!.actualUsd).toBe(d!.reservedUsd);
   });
 
+  it("the CLI's --max-turns early exit settles api_error at its reported usage, with its turns (synthetic fixture)", async () => {
+    const env = makeEnv({ provider: "claude-cli" });
+    env.model = cliClient("max-turns.synthetic.json", 1) as never;
+    await expect(callModel(env.ctx, req(env, haiku(300)))).rejects.toMatchObject({ outcome: "api_error" });
+    const [c] = env.store.modelCalls();
+    expect(c!.usageKnown).toBe(true);
+    expect(c!.usage.output).toBe(1600);
+    expect(c!.error).toMatch(/--max-turns limit/);
+    expect(c!.error).toMatch(/turns=4/);
+  });
+
   it("structured_output that the CLI's schema accepted but Zod rejects is a schema failure, never stored", async () => {
     const env = makeEnv({ provider: "claude-cli" });
     env.model = new ClaudeCliClient({
@@ -213,9 +225,10 @@ describe("model gateway on the claude-cli provider", () => {
       cwd: "/fake/cwd",
       promptDir: mkdtempSync(join(tmpdir(), "jr-prompts-")),
       timeoutMs: 1000,
+      maxTurns: 4,
       baseEnv: {},
       runner: async () => {
-        const e = JSON.parse(readFileSync(join(FIX, "success.observed.json"), "utf8"));
+        const e = JSON.parse(readFileSync(join(FIX, "success.reconstructed.json"), "utf8"));
         e.structured_output = { answer: "hi", score: 500 };
         return { code: 0, signal: null, stdout: JSON.stringify(e), stderr: "", timedOut: false, overflow: false };
       },
@@ -237,9 +250,10 @@ describe("model gateway on the claude-cli provider", () => {
       cwd: "/fake/cwd",
       promptDir: mkdtempSync(join(tmpdir(), "jr-prompts-")),
       timeoutMs: 1000,
+      maxTurns: 4,
       baseEnv: {},
       runner: async () => {
-        const e = JSON.parse(readFileSync(join(FIX, "success.observed.json"), "utf8"));
+        const e = JSON.parse(readFileSync(join(FIX, "success.reconstructed.json"), "utf8"));
         e.structured_output = null;
         return { code: 0, signal: null, stdout: JSON.stringify(e), stderr: "", timedOut: false, overflow: false };
       },

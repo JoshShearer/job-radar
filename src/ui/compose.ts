@@ -44,6 +44,14 @@ export interface ComposeOverrides {
   runner?: Runner;
 }
 
+/**
+ * Variables that make `claude` bill somewhere other than the claude.ai
+ * subscription (Bedrock, Vertex, Foundry, or a proxy). The adapter's env
+ * allowlist already keeps them from the child; refusing as well tells the
+ * owner that this shell would otherwise have billed elsewhere.
+ */
+const PROVIDER_REDIRECTS = ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_BASE_URL"];
+
 /** Why the api provider cannot be called. */
 const NO_API_KEY = "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add a key.";
 
@@ -91,6 +99,13 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
     if (env.JR_ALLOW_MODEL !== "1") {
       return no("model.provider is claude-cli and JR_ALLOW_MODEL is not 1, so no model call is allowed here. Set JR_ALLOW_MODEL=1 to spend subscription quota.");
     }
+    const redirects = PROVIDER_REDIRECTS.filter((k) => (env[k] ?? "") !== "");
+    if (redirects.length) {
+      return no(
+        `${redirects.join(", ")} ${redirects.length > 1 ? "are" : "is"} set, which points claude at a provider other than the claude.ai subscription. ` +
+          "jr never passes it to the CLI, but unset it so this shell cannot bill elsewhere, then retry.",
+      );
+    }
     const binary = resolveBinary(m.cli.binary, env.PATH ?? "");
     if (!binary) {
       return no(`model.cli.binary "${m.cli.binary}" was not found or is not executable${m.cli.binary.includes("/") ? "" : " on PATH"}. Set model.cli.binary in operations.yaml to the absolute path of claude.`);
@@ -133,7 +148,7 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
       if (!p.available) return null;
       if (p.provider === "api") return AnthropicClient.fromEnv(env);
       const cli = getConfig().operations.model.cli;
-      return new ClaudeCliClient({ binary: p.binary!, cwd: cliCwd, promptDir: cliPromptDir, timeoutMs: cli.timeout_ms, baseEnv: env, runner: o.runner ?? nodeRunner });
+      return new ClaudeCliClient({ binary: p.binary!, cwd: cliCwd, promptDir: cliPromptDir, timeoutMs: cli.timeout_ms, maxTurns: cli.reserve_turns, baseEnv: env, runner: o.runner ?? nodeRunner });
     },
     modelProvider: () => {
       const { binary: _b, apiKey: _k, ...p } = resolveProvider();

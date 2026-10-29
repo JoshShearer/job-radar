@@ -36,7 +36,7 @@ function setup(env: Record<string, string>, edit?: (ops: Record<string, any>) =>
       log: () => {},
       runner: async (i) => {
         spawns.push(i);
-        return { code: 0, signal: null, stdout: readFileSync(join(FIX, "success.observed.json"), "utf8"), stderr: "", timedOut: false, overflow: false };
+        return { code: 0, signal: null, stdout: readFileSync(join(FIX, "success.reconstructed.json"), "utf8"), stderr: "", timedOut: false, overflow: false };
       },
     },
   );
@@ -109,6 +109,37 @@ describe("model provider composition", () => {
     expect(c!.actualUsd!).toBeLessThanOrEqual(c!.reservedUsd);
     rt.close();
   });
+
+  it("the child process gets only the allowlisted env, and --max-turns equal to model.cli.reserve_turns", async () => {
+    const { rt, spawns } = setup(
+      { JR_ALLOW_MODEL: "1", HOME: "/home/probe", CLAUDECODE: "1", JOB_RADAR_CONTACT: "someone", GMAIL_CLIENT_SECRET: "fake", ANTHROPIC_MODEL: "claude-other" },
+      (o) => (o.model.cli = { binary: process.execPath, reserve_turns: 3 }),
+    );
+    await call(rt);
+    expect(spawns).toHaveLength(1);
+    const env = spawns[0]!.env;
+    for (const k of ["JR_ALLOW_MODEL", "JR_HOME", "CLAUDECODE", "JOB_RADAR_CONTACT", "GMAIL_CLIENT_SECRET", "ANTHROPIC_MODEL", "ANTHROPIC_API_KEY"]) expect(k in env, k).toBe(false);
+    expect(env.HOME).toBe("/home/probe");
+    expect(env.PATH).toBe(process.env.PATH ?? "");
+    const argv = spawns[0]!.argv;
+    expect(argv[argv.indexOf("--max-turns") + 1]).toBe("3");
+    expect(rt.ctx.store.modelCalls()[0]!.reservedUsd).toBeGreaterThan(0);
+    rt.close();
+  });
+
+  for (const v of ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_BASE_URL"]) {
+    it(`claude-cli is unavailable when ${v} is set in jr's env (the owner's shell would bill elsewhere): nothing spawned, nothing reserved`, async () => {
+      const { rt, spawns } = setup({ JR_ALLOW_MODEL: "1", [v]: v === "ANTHROPIC_BASE_URL" ? "https://example.invalid" : "1" }, (o) => (o.model.cli = { binary: process.execPath }));
+      const p = rt.ctx.modelProvider();
+      expect(p.available).toBe(false);
+      expect(p.reason).toContain(v);
+      expect(rt.ctx.modelClient()).toBeNull();
+      await expect(call(rt)).rejects.toBeInstanceOf(NoModelConfigured);
+      expect(spawns).toHaveLength(0);
+      expect(rt.ctx.store.modelCalls()).toHaveLength(0);
+      rt.close();
+    });
+  }
 
   it("the api provider is unchanged: no key, no client, the same reason", async () => {
     const { rt, spawns } = setup({}, (o) => (o.model.provider = "api"));

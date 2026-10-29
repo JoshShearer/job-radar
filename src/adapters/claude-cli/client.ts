@@ -59,6 +59,11 @@ export interface ClaudeCliOptions {
   /** A 0700 directory we own, for the per-call system prompt file. Not the cwd, which stays empty. */
   promptDir: string;
   timeoutMs: number;
+  /**
+   * `--max-turns`: model.cli.reserve_turns, the same number the gateway
+   * multiplies its reserve by, so the CLI stops where the reserve stops.
+   */
+  maxTurns: number;
   baseEnv: NodeJS.ProcessEnv | Record<string, string | undefined>;
 }
 
@@ -67,7 +72,45 @@ const MAX_ARG_BYTES = 100 * 1024;
 const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
 const MAX_STDERR_BYTES = 1024 * 1024;
 const KILL_GRACE_MS = 5000;
-const STRIPPED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+
+/**
+ * The only variables the child may inherit: what the CLI needs to find the
+ * owner's OAuth login (HOME or CLAUDE_CONFIG_DIR, where .credentials.json
+ * lives) and to run (PATH, the user, locale, terminal, temp and XDG dirs).
+ * Everything else is dropped: ANTHROPIC_* (API keys, ANTHROPIC_BASE_URL),
+ * CLAUDE_CODE_USE_BEDROCK / VERTEX / FOUNDRY (which would bill a third-party
+ * provider while the ledger says subscription), CLAUDECODE and other nested-
+ * session markers, JR_ALLOW_MODEL, JR_HOME, JOB_RADAR_* / GMAIL_* and any
+ * other .env secret, proxies and NODE_OPTIONS. An allowlist, not a denylist:
+ * a variable this list has never heard of cannot change where a call bills.
+ */
+const CHILD_ENV_KEYS = new Set([
+  "HOME",
+  "PATH",
+  "USER",
+  "LOGNAME",
+  "LANG",
+  "LANGUAGE",
+  "TERM",
+  "TMPDIR",
+  "SHELL",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_STATE_HOME",
+  "XDG_RUNTIME_DIR",
+  "CLAUDE_CONFIG_DIR",
+]);
+
+/** The child's environment: the allowlisted part of `base`, plus the output-token cap. Pure. */
+export function childEnv(base: NodeJS.ProcessEnv | Record<string, string | undefined>, maxOutputTokens: number): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) {
+    if (v !== undefined && (CHILD_ENV_KEYS.has(k) || k.startsWith("LC_"))) env[k] = v;
+  }
+  env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(maxOutputTokens);
+  return env;
+}
 
 /** The exact process to run for one request, given where its system prompt file is. Pure. */
 export function buildInvocation(req: ModelRequest, o: Omit<ClaudeCliOptions, "promptDir">, systemPromptFile: string): RunInput {
@@ -79,6 +122,7 @@ export function buildInvocation(req: ModelRequest, o: Omit<ClaudeCliOptions, "pr
     "--setting-sources", "",
     "--strict-mcp-config",
     "--no-session-persistence",
+    "--max-turns", String(o.maxTurns),
     "--model", req.model,
     ...(supportsEffort(req.model) ? ["--effort", req.effort] : []),
     "--max-budget-usd", req.maxBudgetUsd.toFixed(6),
@@ -89,15 +133,20 @@ export function buildInvocation(req: ModelRequest, o: Omit<ClaudeCliOptions, "pr
     const bytes = Buffer.byteLength(a, "utf8");
     if (bytes > MAX_ARG_BYTES) throw new Error(`claude CLI argument too large (${bytes} bytes, limit ${MAX_ARG_BYTES}); nothing was run`);
   }
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(o.baseEnv)) if (v !== undefined && !STRIPPED_ENV.includes(k)) env[k] = v;
-  env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(req.maxOutputTokens);
+  const env = childEnv(o.baseEnv, req.maxOutputTokens);
   // The user prompt goes on stdin: it can exceed one argv element, and a
   // leading dash in it can never be parsed as a flag.
   return { binary: o.binary, argv, env, cwd: o.cwd, stdin: req.user, timeoutMs: o.timeoutMs };
 }
 
 const TRUNCATED = /exceeded the \d+ output token maximum/;
+/**
+ * The CLI's `--max-turns` early exit. Its JSON envelope has not been observed:
+ * the binary's SDK schema names subtype `error_max_turns` with
+ * `errors: ["Reached maximum number of turns (N)"]`, and its text elsewhere
+ * says "reached its --max-turns limit", so any of those marks it.
+ */
+const MAX_TURNS = /max[-_ ]turns|maximum number of turns/i;
 
 /**
  * The CLI's result envelope as the API's response shape. Throws a plain Error
@@ -120,10 +169,20 @@ export function mapEnvelope(run: RunResult): unknown {
   const result = typeof env.result === "string" ? env.result : "";
   if (env.stop_reason === "refusal") return { stop_reason: "refusal", content: [], ...base };
   const failed = env.is_error === true || run.code !== 0 || (env.api_error_status !== null && env.api_error_status !== undefined);
+  const errors = Array.isArray(env.errors) ? env.errors.filter((e): e is string => typeof e === "string") : [];
+  const text = [result, ...errors].join("\n");
+  if (env.subtype === "error_max_turns" || (failed && MAX_TURNS.test(text))) {
+    // Checked before truncation: a run that spent its turns on truncation
+    // retries stopped because of the turn limit, and is an error at its usage.
+    throw new ModelCallError(
+      `claude CLI stopped at its --max-turns limit (exit ${run.code}, turns ${String(env.num_turns ?? "?")}): ${text.slice(0, 300)}`,
+      base,
+    );
+  }
   if (failed) {
-    if (TRUNCATED.test(result)) return { stop_reason: "max_tokens", content: [], ...base };
+    if (TRUNCATED.test(text)) return { stop_reason: "max_tokens", content: [], ...base };
     const why = String(env.terminal_reason ?? env.subtype ?? "error");
-    throw new ModelCallError(`claude CLI error (exit ${run.code}, ${why}, turns ${String(env.num_turns ?? "?")}): ${result.slice(0, 300)}`, base);
+    throw new ModelCallError(`claude CLI error (exit ${run.code}, ${why}, turns ${String(env.num_turns ?? "?")}): ${text.slice(0, 300)}`, base);
   }
   // No structured_output: no text block, so the gateway receipts invalid_json.
   // The prose `result` is deliberately not passed through (ADR-0004).

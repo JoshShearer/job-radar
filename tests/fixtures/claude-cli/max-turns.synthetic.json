@@ -1,0 +1,14 @@
+{
+  "type": "result",
+  "subtype": "error_max_turns",
+  "is_error": true,
+  "duration_ms": 4000,
+  "duration_api_ms": 3900,
+  "num_turns": 4,
+  "stop_reason": null,
+  "errors": ["Reached maximum number of turns (4)"],
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "total_cost_usd": 0.002,
+  "usage": { "input_tokens": 8, "cache_creation_input_tokens": 1200, "cache_read_input_tokens": 3600, "output_tokens": 1600 },
+  "structured_output": null
+}

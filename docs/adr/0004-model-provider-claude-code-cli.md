@@ -30,9 +30,9 @@ month ceilings while spending nothing). `/run-tickets` strips and refuses `JR_AL
 blanks it, so neither a lane nor `npm test` can spend quota. Tests never spawn the real `claude`.
 
 **The invocation.** `claude -p --output-format json --safe-mode --tools "" --setting-sources ""
---strict-mcp-config --no-session-persistence --model <m> [--effort <e>, not on Haiku]
---max-budget-usd <reserve> --json-schema <schema> --system-prompt-file <file>`, the user prompt on
-stdin, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed from the child env,
+--strict-mcp-config --no-session-persistence --max-turns <reserve_turns> --model <m> [--effort <e>,
+not on Haiku] --max-budget-usd <reserve> --json-schema <schema> --system-prompt-file <file>`, the
+user prompt on stdin, and a child env built from an allowlist (below) plus
 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` set to `max_output_tokens`. The cwd is stable rather than fresh
 per call because the CLI tells the model its cwd, and a random path would change every prompt.
 
@@ -46,6 +46,25 @@ per call because the CLI tells the model its cwd, and a random path would change
   text (`--system-prompt[-file]`), not as its own entry; it is unconfirmed until the owner's first
   real call. `--json-schema` has no file form, so the schema stays in argv: it is a non-secret
   structural description generated from our Zod schemas, never candidate or posting text.
+- **The child env is an allowlist** (`childEnv` in the adapter): `HOME`, `PATH`, `USER`,
+  `LOGNAME`, `LANG`, `LANGUAGE`, `LC_*`, `TERM`, `TMPDIR`, `SHELL`, the `XDG_*` base directories,
+  `CLAUDE_CONFIG_DIR` if set, and nothing else. A denylist let `CLAUDE_CODE_USE_BEDROCK` /
+  `VERTEX` / `FOUNDRY` and `ANTHROPIC_BASE_URL` reach the child, so a shell with any of them set
+  would have billed a third party or a proxy while the ledger said "subscription"; it also passed
+  `CLAUDECODE`, `JR_ALLOW_MODEL` and every `.env` secret (Gmail). Proxies (`HTTPS_PROXY`) and
+  `NODE_OPTIONS` are dropped too. Separately, `compose` refuses to build the client when
+  `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` or
+  `ANTHROPIC_BASE_URL` is set in jr's own env: the allowlist already keeps it from the child, but
+  the refusal tells the owner their shell would have billed elsewhere. **Owner check**: the
+  allowlist is what the CLI needs to find its OAuth login (`~/.claude/.credentials.json`, under
+  `HOME` or `CLAUDE_CONFIG_DIR`) as far as a free check can show: on 2026-10-29,
+  `env -i HOME="$HOME" PATH="$PATH" USER="$USER" LOGNAME="$LOGNAME" LANG="$LANG" TERM=dumb claude
+  auth status` (2.1.312) reported `loggedIn: true`, `authMethod: claude.ai`, `apiProvider:
+  firstParty`. That is `auth status`, not `-p`; the owner's first real call confirms it for
+  `-p`. If that call reports not logged in, the allowlist is missing a variable the CLI needs:
+  add that one key with a test, never fall back to passing the whole env. Whether
+  `--setting-sources ""` also keeps an `env` block in `~/.claude/settings.json` from setting a
+  redirect is unverified.
 - **`--bare` is unusable**: it reads only `ANTHROPIC_API_KEY` / `apiKeyHelper`, never OAuth.
 - **`--safe-mode`** (in `claude --help` 2.1.312: "CLAUDE.md, skills, installed plugins, hooks, MCP
   servers ... disabled ... Auth, model selection ... work normally") is what keeps the owner's
@@ -58,23 +77,32 @@ per call because the CLI tells the model its cwd, and a random path would change
 **Outcome mapping** (shape only; the gateway classifies): success -> the `structured_output` as
 the text block; "exceeded the N output token maximum" -> `max_tokens` (`truncated`);
 `stop_reason: refusal` -> `refusal` (no CLI refusal has been observed; its fixture is synthetic);
-`structured_output` missing -> no text block (`invalid_json`); any other error with an envelope ->
+`structured_output` missing -> no text block (`invalid_json`); the `--max-turns` early exit
+(subtype `error_max_turns`, or any failed envelope whose text mentions max turns) ->
+`ModelCallError` at its usage (`api_error`), checked before truncation; any other error with an envelope ->
 `ModelCallError` carrying its usage (`api_error` at that usage); no parseable envelope, timeout,
 signal, overflow or a spawn failure -> `api_error` at the reserve. The envelope's prose `result`
 is never passed through as the answer: the CLI's own `--json-schema` check is advisory, and the
 gateway's Zod validation is the only acceptance.
 
-**The reserve is empirical, not CLI-enforced.** On claude-cli the gateway reserves
-`reserve_turns` x (prompt bytes / 3 + `overhead_input_tokens` + `max_output_tokens`) at `PRICING`
-(defaults 4 and 4000; 4 is the most turns observed). Nothing makes that a hard ceiling: the
-installed CLI has no `--max-turns`, and `--max-budget-usd` is enforced in the CLI's own prices,
-which on the observed success were about 9x below ours ($0.00068 against $0.0059 at `PRICING`), so
-a cap equal to our reserve admits several times our reserve in our units. What happens when
-`--max-budget-usd` is exceeded is unobserved. An overshoot is therefore receipted at its real
-usage with the gateway's `WARNING`, and the receipt's `error` carries `turns=N` (also on every
-failure), so `reserve_turns` can be re-tuned from the ledger. Streaming the CLI's output and
-killing it after `reserve_turns` turns would make the ceiling real; it was considered and not
-built (owner decision, JOB-73).
+**The turn count is CLI-enforced; the dollar ceiling is still ours.** On claude-cli the gateway
+reserves `reserve_turns` x (prompt bytes / 3 + `overhead_input_tokens` + `max_output_tokens`) at
+`PRICING` (defaults 4 and 4000; 4 is the most turns observed), and the adapter passes the same
+`reserve_turns` as `--max-turns`, so the CLI stops where the reserve's turn multiplier stops.
+`--max-turns <turns>` is a hidden option in 2.1.312 (absent from `claude -p --help`; the binary's
+strings define it as "Maximum number of agentic turns in non-interactive mode. This will early
+exit the conversation after the specified number of turns. (only works with --print)"), and
+`claude -p --max-turns 1 --help` parses it (exit 0). **Unverified until the owner's first real
+call**: whether the CLI's internal output-token-truncation retries count as turns (if they do
+not, a truncating call can still exceed `reserve_turns` x `max_output_tokens`), and the JSON
+envelope of the max-turns exit (the binary's SDK schema names subtype `error_max_turns` with
+`errors: ["Reached maximum number of turns (N)"]`; its fixture is synthetic). Per-turn usage
+can also exceed our per-turn estimate (prompt bytes / 3 + overhead). `--max-budget-usd` is
+enforced in the CLI's own prices, which on the observed success were about 9x below ours
+($0.00068 against $0.0059 at `PRICING`), so a cap equal to our reserve admits several times our
+reserve in our units; what happens when it is exceeded is unobserved. An overshoot is therefore
+still receipted at its real usage with the gateway's `WARNING`, and the receipt's `error` carries
+`turns=N` (also on every failure), so `reserve_turns` can be re-tuned from the ledger.
 
 **Accounting.** claude-cli dollars are our `PRICING` applied to the usage the CLI reports: a
 **list-price equivalent** of subscription quota, not money spent. They count against the same

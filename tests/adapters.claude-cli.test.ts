@@ -34,7 +34,7 @@ const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   ...over,
 });
 
-const opts = { binary: "/opt/claude/bin/claude", cwd: "/home/x/data/claude-cli-cwd", timeoutMs: 1000 };
+const opts = { binary: "/opt/claude/bin/claude", cwd: "/home/x/data/claude-cli-cwd", timeoutMs: 1000, maxTurns: 4 };
 const SYS = "/home/x/data/claude-cli-prompts/system-1.txt";
 const ran = (stdout: string, code: number | null = 0, more: Partial<RunResult> = {}): RunResult => ({
   code,
@@ -58,6 +58,7 @@ describe("claude-cli invocation", () => {
       "--setting-sources", "",
       "--strict-mcp-config",
       "--no-session-persistence",
+      "--max-turns", "4",
       "--model", "claude-sonnet-5",
       "--effort", "high",
       "--max-budget-usd", "0.250000",
@@ -92,6 +93,57 @@ describe("claude-cli invocation", () => {
     expect(inv.env.HOME).toBe("/home/x");
   });
 
+  it("passes --max-turns from the configured reserve_turns, so the reserve's turn multiplier is a CLI limit", () => {
+    const inv = buildInvocation(req(), { ...opts, maxTurns: 7, baseEnv: {} }, SYS);
+    const at = inv.argv.indexOf("--max-turns");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(inv.argv[at + 1]).toBe("7");
+  });
+
+  it("builds the child env from an ALLOWLIST: provider redirects, nested-session markers, our own switches and secrets never reach the CLI", () => {
+    const probe: Record<string, string> = {
+      HOME: "/home/x",
+      PATH: "/usr/bin:/bin",
+      USER: "x",
+      LOGNAME: "x",
+      LANG: "en_US.UTF-8",
+      LC_ALL: "en_US.UTF-8",
+      TERM: "xterm",
+      TMPDIR: "/tmp",
+      XDG_CONFIG_HOME: "/home/x/.config",
+      XDG_RUNTIME_DIR: "/run/user/1000",
+      CLAUDE_CONFIG_DIR: "/home/x/.claude-alt",
+      // Everything below must be dropped.
+      ANTHROPIC_API_KEY: FAKE_ANTHROPIC_API_KEY,
+      ANTHROPIC_AUTH_TOKEN: FAKE_ANTHROPIC_AUTH_TOKEN,
+      ANTHROPIC_BASE_URL: "https://example.invalid",
+      ANTHROPIC_MODEL: "claude-other",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+      CLAUDECODE: "1",
+      CLAUDE_CODE_ENTRYPOINT: "cli",
+      JR_ALLOW_MODEL: "1",
+      JR_HOME: "/home/x/jr",
+      JOB_RADAR_CONTACT: "someone",
+      GMAIL_CLIENT_SECRET: "fake",
+      AWS_PROFILE: "prod",
+      HTTPS_PROXY: "http://proxy.invalid:3128",
+      NODE_OPTIONS: "--require /tmp/x.js",
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: "99",
+    };
+    const inv = buildInvocation(req(), { ...opts, baseEnv: probe }, SYS);
+    expect(Object.keys(inv.env).sort()).toEqual(
+      ["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_CONFIG_DIR", "HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "TERM", "TMPDIR", "USER", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"].sort(),
+    );
+    expect(inv.env.HOME).toBe("/home/x");
+    expect(inv.env.PATH).toBe("/usr/bin:/bin");
+    expect(inv.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("2000");
+    for (const k of ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDECODE", "JR_ALLOW_MODEL", "GMAIL_CLIENT_SECRET", "JOB_RADAR_CONTACT"]) {
+      expect(k in inv.env, k).toBe(false);
+    }
+  });
+
   it("refuses an argv element over the kernel's per-argument limit rather than spawning", () => {
     // A long system prompt is fine: it is in a file, not argv.
     expect(() => buildInvocation(req({ system: "x".repeat(200 * 1024) }), { ...opts, baseEnv: {} }, SYS)).not.toThrow();
@@ -102,7 +154,7 @@ describe("claude-cli invocation", () => {
 
 describe("claude-cli envelope mapping (shape only; the gateway classifies)", () => {
   it("success: structured_output becomes the text block, usage passes through, turns are carried", () => {
-    const r = mapEnvelope(ran(fixture("success.observed.json"))) as Record<string, unknown>;
+    const r = mapEnvelope(ran(fixture("success.reconstructed.json"))) as Record<string, unknown>;
     expect(r.stop_reason).toBe("end_turn");
     expect(r.content).toEqual([{ type: "text", text: JSON.stringify({ answer: "hi", score: 5 }) }]);
     expect(r.usage).toMatchObject({ input_tokens: 2, cache_creation_input_tokens: 1156, cache_read_input_tokens: 0, output_tokens: 891 });
@@ -110,7 +162,7 @@ describe("claude-cli envelope mapping (shape only; the gateway classifies)", () 
   });
 
   it("the output-token-maximum error (exit 1) maps to max_tokens with its usage", () => {
-    const r = mapEnvelope(ran(fixture("truncation.observed.json"), 1)) as Record<string, unknown>;
+    const r = mapEnvelope(ran(fixture("truncation.reconstructed.json"), 1)) as Record<string, unknown>;
     expect(r.stop_reason).toBe("max_tokens");
     expect((r.usage as { output_tokens: number }).output_tokens).toBe(1200);
     expect(r.num_turns).toBe(4);
@@ -122,7 +174,7 @@ describe("claude-cli envelope mapping (shape only; the gateway classifies)", () 
   });
 
   it("missing structured_output gives no text block (the gateway receipts invalid_json), even when result has prose", () => {
-    const env = { ...JSON.parse(fixture("success.observed.json")), structured_output: null, result: '{"answer":"hi","score":5}' };
+    const env = { ...JSON.parse(fixture("success.reconstructed.json")), structured_output: null, result: '{"answer":"hi","score":5}' };
     const r = mapEnvelope(ran(JSON.stringify(env))) as { content: unknown[] };
     expect(r.content).toEqual([]);
   });
@@ -141,8 +193,28 @@ describe("claude-cli envelope mapping (shape only; the gateway classifies)", () 
     expect((e.response as { usage: { input_tokens: number } }).usage.input_tokens).toBe(120);
   });
 
+  it("the CLI's --max-turns early exit is api_error at its reported usage, named as the turn limit (synthetic fixture)", () => {
+    for (const env of [
+      JSON.parse(fixture("max-turns.synthetic.json")),
+      // The same exit if the CLI reports it in result text rather than errors[]/subtype.
+      { ...JSON.parse(fixture("max-turns.synthetic.json")), subtype: "error_during_execution", errors: undefined, result: "the run reached its --max-turns limit" },
+    ]) {
+      let caught: unknown;
+      try {
+        mapEnvelope(ran(JSON.stringify(env), 1));
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(ModelCallError);
+      const e = caught as ModelCallError;
+      expect(e.message).toMatch(/--max-turns limit/);
+      expect((e.response as { usage: { output_tokens: number } }).usage.output_tokens).toBe(1600);
+      expect((e.response as { num_turns: number }).num_turns).toBe(4);
+    }
+  });
+
   it("a non-zero exit with a success-shaped envelope is still an error", () => {
-    expect(() => mapEnvelope(ran(fixture("success.observed.json"), 2))).toThrow(ModelCallError);
+    expect(() => mapEnvelope(ran(fixture("success.reconstructed.json"), 2))).toThrow(ModelCallError);
   });
 
   it("unparseable stdout, a timeout, a signal and an overflow throw a plain Error (settled at the reserve)", () => {
@@ -156,9 +228,9 @@ describe("claude-cli envelope mapping (shape only; the gateway classifies)", () 
     };
     expect(plain(ran("not json", 1))).toBe(true);
     expect(plain(ran("", 0))).toBe(true);
-    expect(plain(ran(fixture("success.observed.json"), null, { timedOut: true, signal: "SIGTERM" }))).toBe(true);
-    expect(plain(ran(fixture("success.observed.json"), null, { signal: "SIGKILL" }))).toBe(true);
-    expect(plain(ran(fixture("success.observed.json"), 0, { overflow: true }))).toBe(true);
+    expect(plain(ran(fixture("success.reconstructed.json"), null, { timedOut: true, signal: "SIGTERM" }))).toBe(true);
+    expect(plain(ran(fixture("success.reconstructed.json"), null, { signal: "SIGKILL" }))).toBe(true);
+    expect(plain(ran(fixture("success.reconstructed.json"), 0, { overflow: true }))).toBe(true);
   });
 });
 
@@ -172,7 +244,7 @@ describe("ClaudeCliClient", () => {
 
   it("passes the system prompt in a 0600 file it removes after success, error, timeout and a spawn failure", async () => {
     const outcomes: Array<[string, () => Promise<RunResult>]> = [
-      ["success", async () => ran(fixture("success.observed.json"))],
+      ["success", async () => ran(fixture("success.reconstructed.json"))],
       ["cli error", async () => ran(fixture("error.synthetic.json"), 1)],
       ["timeout", async () => ran("", null, { timedOut: true, signal: "SIGTERM" })],
       ["spawn failure", async () => Promise.reject(new Error("spawn /x ENOENT"))],
@@ -215,7 +287,7 @@ describe("ClaudeCliClient", () => {
       baseEnv: { ANTHROPIC_API_KEY: FAKE_ANTHROPIC_API_KEY, PATH: "/usr/bin" },
       runner: async (i) => {
         seen.push(i);
-        return ran(fixture("success.observed.json"));
+        return ran(fixture("success.reconstructed.json"));
       },
     });
     const r = (await client.create(req())) as { stop_reason: string };
