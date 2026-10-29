@@ -46,3 +46,4 @@ config/personal.yaml.*.bak
 .worktree-meta.json
 .planning/
 .claude/pipeline-state*.json
+.claude/last-plan-critique.md

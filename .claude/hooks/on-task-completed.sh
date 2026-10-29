@@ -1,0 +1,1 @@
+../claude-workflow/core/hooks/on-task-completed.sh
