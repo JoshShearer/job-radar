@@ -10,7 +10,7 @@ import type { ResolutionIndex } from "../domain/catalog/resolve.js";
 import type { BoardCoverage } from "../domain/catalog/lifecycle.js";
 import type { Committed } from "../domain/budget/budget.js";
 import type { Outcome } from "../kernel/result.js";
-import type { AliasRecord, ApplicationEventRecord, ApplicationRecord, ArtifactRecord, InterviewRecord, MailMessageRecord, MailScanRecord, ModelCallRecord, ModelCallReservation, ModelCallSettlement, PostingWrite, PostingWriteResult, PursuitEventRecord, RankingFilter, RankingRecord, RunRecord, SweepRecord, VoidRecord } from "./records.js";
+import type { AliasRecord, ApplicationEventRecord, ApplicationRecord, ArtifactRecord, InterviewRecord, MailMessageRecord, MailScanRecord, ModelCallRecord, ModelCallReservation, ModelCallSettlement, PostingWrite, PostingWriteResult, PursuitEventRecord, RankingCounts, RankingFilter, RankingRecord, RunRecord, SweepRecord, VoidRecord } from "./records.js";
 
 export interface Store {
     close(): void;
@@ -142,6 +142,7 @@ export interface Store {
         summary: unknown;
     }): void;
     ranking(f?: RankingFilter): RankingRecord[];
+    rankingCounts(): RankingCounts;
     rankingFor(opportunityId: string): RankingRecord | null;
     lastEvaluation(): {
         at: string;

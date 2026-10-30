@@ -261,6 +261,8 @@ export interface InterviewRecord {
 
 export interface RankingFilter {
   opportunityId?: string;
+  /** Only these opportunities. An empty list matches nothing. */
+  opportunityIds?: readonly string[];
   eligible?: boolean;
   /** false excludes evergreen postings. */
   includeEvergreen?: boolean;
@@ -269,5 +271,17 @@ export interface RankingFilter {
   priorities?: readonly string[];
   lane?: string;
   minFit?: number;
+  /** Case-insensitive substring of the company or the title. */
+  text?: string;
   limit?: number;
+  offset?: number;
+}
+
+/** Counts over the whole ranking, without reading any row's detail. */
+export interface RankingCounts {
+  opportunities: number;
+  eligible: number;
+  assessed: number;
+  open: number;
+  closed: number;
 }

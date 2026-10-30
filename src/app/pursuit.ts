@@ -153,7 +153,8 @@ export interface ApplicationView {
 }
 
 export function applicationViews(ctx: AppContext): ApplicationView[] {
-  const ranking = new Map(ctx.store.ranking({}).map((r) => [r.opportunityId, r]));
+  const applications = ctx.store.applications();
+  const ranking = new Map(ctx.store.ranking({ opportunityIds: [...new Set(applications.map((a) => a.opportunityId))] }).map((r) => [r.opportunityId, r]));
   const mail = ctx.store.mailMessages({ resolutions: ["applied", "matched", "refused"], limit: 100_000 });
   const lastMail = new Map<string, string>();
   for (const m of mail) {
@@ -161,7 +162,7 @@ export function applicationViews(ctx: AppContext): ApplicationView[] {
     const prior = lastMail.get(m.applicationId);
     if (!prior || m.receivedAt > prior) lastMail.set(m.applicationId, m.receivedAt);
   }
-  return ctx.store.applications().map((a) => {
+  return applications.map((a) => {
     const f = applicationFold(ctx, a.id);
     const r = ranking.get(a.opportunityId);
     const since = f.since ?? a.submittedAt;
