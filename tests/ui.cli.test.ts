@@ -14,7 +14,7 @@ import { legacyDb } from "./helpers/legacy.js";
  */
 const ROOT = resolve(import.meta.dirname, "..");
 const home = mkdtempSync(join(tmpdir(), "jr-cli-"));
-const env = { ...process.env, JR_HOME: home, ANTHROPIC_API_KEY: "", JOB_RADAR_GMAIL_CLIENT_ID: "" };
+const env = { ...process.env, JR_HOME: home, ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "", JR_ALLOW_MODEL: "", JOB_RADAR_GMAIL_CLIENT_ID: "" };
 
 function jr(...args: string[]): { out: string; code: number } {
   try {
@@ -34,15 +34,28 @@ beforeAll(() => {
   const ops = parse(readFileSync(opsFile, "utf8"));
   ops.mail.eml_dir = resolve(ROOT, "tests/fixtures/eml");
   ops.mail.initial_lookback_days = 400;
+  // Never the real claude: a test must not be able to spend subscription quota.
+  ops.model.cli = { ...(ops.model.cli ?? {}), binary: "/nonexistent/claude" };
   writeFileSync(opsFile, stringify(ops));
 });
+
+function setProvider(provider: "api" | "claude-cli"): void {
+  const opsFile = join(home, "config/operations.yaml");
+  const ops = parse(readFileSync(opsFile, "utf8"));
+  ops.model.provider = provider;
+  writeFileSync(opsFile, stringify(ops));
+}
 
 describe("jr, end to end through the real entry point", () => {
   it("check reports what is and is not configured", () => {
     const r = jr("check");
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/config ok/);
-    expect(r.out).toMatch(/no ANTHROPIC_API_KEY/);
+    expect(r.out).toMatch(/model: claude-cli, not allowed/);
+    expect(r.out).toMatch(/JR_ALLOW_MODEL/);
+    setProvider("api");
+    expect(jr("check").out).toMatch(/no ANTHROPIC_API_KEY/);
+    setProvider("claude-cli");
   });
 
   it("imports a legacy database and evaluates it", () => {
@@ -52,7 +65,16 @@ describe("jr, end to end through the real entry point", () => {
     expect(jr("evaluate").out).toMatch(/6 postings/);
   });
 
+  it("refuses to spend on claude-cli without JR_ALLOW_MODEL=1, and spends nothing", () => {
+    const r = jr("assess", "--limit", "1");
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/JR_ALLOW_MODEL/);
+    expect(r.out).toMatch(/Nothing was spent/);
+    expect(jr("spend").out).toMatch(/today {2}\$0\.0000 .*\(0 calls/);
+  });
+
   it("refuses to spend without a key, and records the refusal", () => {
+    setProvider("api");
     const r = jr("assess", "--limit", "1");
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/ANTHROPIC_API_KEY is not set/);

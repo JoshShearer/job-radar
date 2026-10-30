@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { PoliteTransport } from "../adapters/http/polite-transport.js";
 import { buildAdapters } from "../adapters/ats/registry.js";
 import { AnthropicClient } from "../adapters/anthropic/client.js";
+import { checkCwd, ClaudeCliClient, nodeRunner, resolveBinary, type Runner } from "../adapters/claude-cli/client.js";
 import { GmailMailbox } from "../adapters/mail/gmail.js";
 import { EmlMailbox } from "../adapters/mail/eml.js";
 import { FsArtifactStore } from "../adapters/fs/artifact-store.js";
@@ -21,7 +22,7 @@ import { PlaywrightApplicationBrowser } from "../adapters/browser/playwright-fil
 import { appendAnswers, saveEvidence, writeFileAtomic } from "../adapters/fs/yaml-writers.js";
 import { loadEnvFile, resolvePaths, type Paths } from "../adapters/fs/paths.js";
 import { terminalPrompter } from "./prompter.js";
-import type { ApplicationBrowser, Mailbox, ModelClient, Prompter, Transport } from "../ports/io.js";
+import type { ApplicationBrowser, Mailbox, ModelClient, ModelProviderStatus, Prompter, Transport } from "../ports/io.js";
 
 export interface Runtime {
   ctx: AppContext;
@@ -39,7 +40,20 @@ export interface ComposeOverrides {
   prompter?: Prompter;
   log?: (line: string) => void;
   pdf?: AppContext["pdf"];
+  /** Spawns the claude CLI; tests inject a fake so the real binary never runs. */
+  runner?: Runner;
 }
+
+/**
+ * Variables that make `claude` bill somewhere other than the claude.ai
+ * subscription (Bedrock, Vertex, Foundry, or a proxy). The adapter's env
+ * allowlist already keeps them from the child; refusing as well tells the
+ * owner that this shell would otherwise have billed elsewhere.
+ */
+const PROVIDER_REDIRECTS = ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_BASE_URL"];
+
+/** Why the api provider cannot be called. */
+const NO_API_KEY = "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add a key.";
 
 /** The composition root: the one place real adapters are wired to the app. */
 export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverrides = {}): Runtime {
@@ -51,6 +65,62 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
   let config: Config | null = null;
   let evidence: Evidence | null = null;
   const getConfig = () => (config ??= loadConfig(paths.config));
+  const cliCwd = resolve(paths.home, "data", "claude-cli-cwd");
+  const cliPromptDir = resolve(paths.home, "data", "claude-cli-prompts");
+
+  /**
+   * Provider policy, decided here and nowhere else. claude-cli spends the
+   * owner's subscription quota, so it exists only when JR_ALLOW_MODEL=1 (a
+   * /run-tickets lane never sets it), and only with an executable binary and
+   * a clean working directory: a missing binary must refuse BEFORE the
+   * gateway reserves, or every attempt would leave a worst-case receipt.
+   */
+  const resolveProvider = (): ModelProviderStatus & { binary: string | null; apiKey: string | null } => {
+    const m = getConfig().operations.model;
+    if (m.provider === "api") {
+      const apiKey = (env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY) || null;
+      return {
+        provider: "api",
+        available: apiKey !== null,
+        reason: apiKey ? null : NO_API_KEY,
+        detail: apiKey ? "api, configured" : "api, no ANTHROPIC_API_KEY (assess/tailor/prepare unavailable)",
+        binary: null,
+        apiKey,
+      };
+    }
+    const no = (reason: string, binary: string | null = null) => ({
+      provider: "claude-cli" as const,
+      available: false,
+      reason,
+      detail: `claude-cli, not allowed: ${reason}`,
+      binary,
+      apiKey: null,
+    });
+    if (env.JR_ALLOW_MODEL !== "1") {
+      return no("model.provider is claude-cli and JR_ALLOW_MODEL is not 1, so no model call is allowed here. Set JR_ALLOW_MODEL=1 to spend subscription quota.");
+    }
+    const redirects = PROVIDER_REDIRECTS.filter((k) => (env[k] ?? "") !== "");
+    if (redirects.length) {
+      return no(
+        `${redirects.join(", ")} ${redirects.length > 1 ? "are" : "is"} set, which points claude at a provider other than the claude.ai subscription. ` +
+          "jr never passes it to the CLI, but unset it so this shell cannot bill elsewhere, then retry.",
+      );
+    }
+    const binary = resolveBinary(m.cli.binary, env.PATH ?? "");
+    if (!binary) {
+      return no(`model.cli.binary "${m.cli.binary}" was not found or is not executable${m.cli.binary.includes("/") ? "" : " on PATH"}. Set model.cli.binary in operations.yaml to the absolute path of claude.`);
+    }
+    const cwdProblem = checkCwd(cliCwd) ?? checkCwd(cliPromptDir, false);
+    if (cwdProblem) return no(`the claude CLI's working directory is unusable: ${cwdProblem}`, binary);
+    return {
+      provider: "claude-cli",
+      available: true,
+      reason: null,
+      detail: `claude-cli, allowed (JR_ALLOW_MODEL=1, ${binary}); dollar figures are subscription, list-price equivalent`,
+      binary,
+      apiKey: null,
+    };
+  };
 
   const ctx: AppContext = {
     clock,
@@ -72,7 +142,22 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
       });
     },
     adapters: () => buildAdapters(getConfig().sources),
-    modelClient: () => (o.modelClient !== undefined ? o.modelClient : AnthropicClient.fromEnv()),
+    modelClient: () => {
+      if (o.modelClient !== undefined) return o.modelClient;
+      const p = resolveProvider();
+      if (!p.available) return null;
+      if (p.provider === "api") return AnthropicClient.fromEnv(env);
+      const cli = getConfig().operations.model.cli;
+      return new ClaudeCliClient({ binary: p.binary!, cwd: cliCwd, promptDir: cliPromptDir, timeoutMs: cli.timeout_ms, maxTurns: cli.reserve_turns, baseEnv: env, runner: o.runner ?? nodeRunner });
+    },
+    modelProvider: () => {
+      const { binary: _b, apiKey: _k, ...p } = resolveProvider();
+      if (o.modelClient === undefined) return p;
+      // An injected client (tests) stands in for the provider's own.
+      return o.modelClient
+        ? { ...p, available: true, reason: null }
+        : { ...p, available: false, reason: p.reason ?? "No model client is configured." };
+    },
     mailbox: () => {
       if (o.mailbox !== undefined) return o.mailbox;
       const mail = getConfig().operations.mail;

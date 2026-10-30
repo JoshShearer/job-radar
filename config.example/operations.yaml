@@ -1,7 +1,9 @@
 budgets:
-  per_run_usd: 1.5
+  per_run_usd: 2.5
   per_day_usd: 4.5
   per_month_usd: 45
+model:
+  provider: claude-cli
 models:
   triage:
     model: claude-opus-5

@@ -2,7 +2,7 @@ import type { AppContext } from "../../app/context.js";
 import type { Briefing } from "../../app/briefing.js";
 import type { ArtifactRecord, RankingFilter, RankingRecord } from "../../ports/records.js";
 import { applicationFold, applicationViews, pursuitOf } from "../../app/pursuit.js";
-import { spendFor, spendSummary } from "../../app/spend.js";
+import { basisNote, spendFor, spendSummary } from "../../app/spend.js";
 import { mailCoverageSpan } from "../../app/mail.js";
 import { APPLICATION_STATES, nextAction, PURSUIT_STATES, type ApplicationState } from "../../domain/pursuit/machines.js";
 import { PRIORITIES, type Priority } from "../../domain/evaluation/priority.js";
@@ -129,7 +129,7 @@ export function todayPage(p: PageContext, b: Briefing): string {
   }
 
   P.push(
-    `<p class="section-note">${b.counts.opportunities.toLocaleString("en-US")} postings tracked, ${b.counts.eligible.toLocaleString("en-US")} eligible, ${b.counts.assessed} assessed by the analyst. Today's model spend is $${b.spend.day.committed.toFixed(2)} of $${b.spend.budgets.perDay.toFixed(2)}.</p>`,
+    `<p class="section-note">${b.counts.opportunities.toLocaleString("en-US")} postings tracked, ${b.counts.eligible.toLocaleString("en-US")} eligible, ${b.counts.assessed} assessed by the analyst. Today's model spend is $${b.spend.day.committed.toFixed(2)} of $${b.spend.budgets.perDay.toFixed(2)}${esc(basisNote(b.spend.day))}.</p>`,
   );
   return P.join("\n");
 }
@@ -335,7 +335,7 @@ ${pursuit.steps.length ? `<ol class="history">${pursuit.steps.map((s) => `<li${s
     );
   }
   S.push(
-    `<section class="panel"><h2>From the command line</h2><p>Tailoring, preparing, filling and anything that spends money run from the CLI on the host: <code>jr tailor ${esc(id)}</code>, <code>jr prepare ${esc(id)}</code>, <code>jr fill ${esc(id)}</code>.</p><p class="muted">Spent on this posting so far: $${spent.usd.toFixed(4)} over ${spent.calls} ${spent.calls === 1 ? "call" : "calls"}.</p>${
+    `<section class="panel"><h2>From the command line</h2><p>Tailoring, preparing, filling and anything that spends money run from the CLI on the host: <code>jr tailor ${esc(id)}</code>, <code>jr prepare ${esc(id)}</code>, <code>jr fill ${esc(id)}</code>.</p><p class="muted">Spent on this posting so far: $${spent.usd.toFixed(4)} over ${spent.calls} ${spent.calls === 1 ? "call" : "calls"}${esc(basisNote(spent))}.</p>${
       overrides.length ? `<ul>${overrides.map((o) => `<li>Override ${esc(o.gate)} (${esc(o.detail ?? "")}), ${esc(shortDate(o.recordedAt))}</li>`).join("")}</ul>` : ""
     }</section>`,
   );
@@ -494,11 +494,11 @@ export function systemPage(p: PageContext, b: Briefing): string {
   if (b.calibration) P.push(`<p class="section-note">${esc(b.calibration)}</p>`);
 
   P.push(`<h2 class="section-title">Model spend</h2><p class="section-note">From the ledger of paid calls. A call with no receipt counts at its reserved worst case.</p>`);
-  const budget = (label: string, used: number, cap: number) => {
+  const budget = (label: string, used: number, cap: number, note: string) => {
     const pct = cap > 0 ? (used / cap) * 100 : 0;
-    return `<span>${label}</span>${bar(pct, pct >= 80 ? "over" : "used")}<span>$${used.toFixed(2)} of $${cap.toFixed(2)}</span>`;
+    return `<span>${label}</span>${bar(pct, pct >= 80 ? "over" : "used")}<span>$${used.toFixed(2)} of $${cap.toFixed(2)}${esc(note)}</span>`;
   };
-  P.push(`<div class="budget">${budget("Today", s.day.committed, s.budgets.perDay)}${budget("This month", s.month.committed, s.budgets.perMonth)}</div>`);
+  P.push(`<div class="budget">${budget("Today", s.day.committed, s.budgets.perDay, basisNote(s.day))}${budget("This month", s.month.committed, s.budgets.perMonth, basisNote(s.month))}</div>`);
   if (s.byPurpose.length) {
     P.push(
       `<div class="table-wrap narrow"><table><tr><th>Purpose (30 days)</th><th class="num">Calls</th><th class="num">USD</th></tr>${s.byPurpose

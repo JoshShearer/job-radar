@@ -289,6 +289,22 @@ describe("web UI on loopback", () => {
     expect(r.body).toContain("Model spend");
     expect(r.body).toContain("web:pursue");
   });
+
+  it("labels spend on the claude-cli provider as subscription, list-price equivalent", async () => {
+    const label = "subscription, list-price equivalent";
+    expect((await call("GET", `/o/${id}`)).body).not.toContain(label);
+    const at = env.clock.now().toISOString();
+    const reserved = env.store.reserveModelCall(
+      { runId: null, purpose: "assess", subjectId: id, requestKey: "web-label-test", model: "claude-haiku-5-5", effort: "low", reservedUsd: 0.01, at, provider: "claude-cli" },
+      { dayStart: at.slice(0, 10), monthStart: at.slice(0, 7) },
+      () => null,
+    );
+    if (!("id" in reserved)) throw new Error(reserved.refused);
+    env.store.settleModelCall({ id: reserved.id, outcome: "success", usageKnown: true, usage: { input: 100, cacheWrite: 0, cacheRead: 0, output: 50 }, actualUsd: 0.002, error: null, at });
+    expect((await call("GET", `/o/${id}`)).body).toContain(`(${label})`);
+    expect((await call("GET", "/system")).body).toContain(`(${label})`);
+    expect((await call("GET", "/")).body).toContain(`(${label})`);
+  });
 });
 
 /* ----------------------------------------------------- generations (packs) */

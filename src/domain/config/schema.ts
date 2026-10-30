@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { worstCaseUsd } from "../budget/pricing.js";
 
 /**
  * Configuration, split by OWNER and CHANGE RATE rather than kept in one file:
@@ -224,6 +225,34 @@ export const OperationsSchema = z
       })
       .strict()
       .prefault({}),
+    /**
+     * Which ModelClient the gateway calls. `api` is the paid Anthropic API
+     * (ANTHROPIC_API_KEY); `claude-cli` runs `claude -p` on the claude.ai
+     * subscription and is fenced behind JR_ALLOW_MODEL=1. Absent means `api`,
+     * so an existing install never switches billing on a pull.
+     */
+    model: z
+      .object({
+        provider: z.enum(["api", "claude-cli"]).default("api"),
+        cli: z
+          .object({
+            /** A bare name is looked up on PATH; anything with a slash must be absolute. */
+            binary: term.default("claude"),
+            timeout_ms: z.number().int().positive().default(600_000),
+            /**
+             * The CLI retries internally (observed: 4 turns, 4x the output cap,
+             * on one truncation), so its worst case is this many calls.
+             * Empirical, not CLI-enforced: see docs/adr/0004.
+             */
+            reserve_turns: z.number().int().min(1).max(10).default(4),
+            /** Input the CLI adds per turn that our prompt does not carry (its own context). */
+            overhead_input_tokens: z.number().int().nonnegative().default(4000),
+          })
+          .strict()
+          .prefault({}),
+      })
+      .strict()
+      .prefault({}),
     http: z
       .object({
         delay_ms: z
@@ -290,6 +319,29 @@ export interface Config {
   policy: EvaluationPolicy;
   operations: Operations;
   sources: Sources;
+}
+
+/**
+ * operations.yaml checks a per-field schema cannot express: a model provider
+ * that would refuse every call is a configuration error, not a quiet run.
+ */
+export function operationsProblems(ops: Operations): string[] {
+  const out: string[] = [];
+  const cli = ops.model.cli;
+  if (cli.binary.includes("/") && !cli.binary.startsWith("/")) {
+    out.push(`model.cli.binary: "${cli.binary}" contains a slash but is not absolute; it would resolve against the CLI's empty working directory`);
+  }
+  if (ops.model.provider === "claude-cli") {
+    for (const [name, m] of Object.entries(ops.models)) {
+      const floor = worstCaseUsd(0, m.max_output_tokens, m.model, { turns: cli.reserve_turns, overheadInputTokens: cli.overhead_input_tokens });
+      if (floor > ops.budgets.per_run_usd) {
+        out.push(
+          `budgets.per_run_usd ${ops.budgets.per_run_usd} is below one claude-cli worst case for models.${name} ($${floor.toFixed(2)} = ${cli.reserve_turns} turns of ${m.max_output_tokens} output tokens on ${m.model}), so every such call would be refused`,
+        );
+      }
+    }
+  }
+  return out;
 }
 
 /**

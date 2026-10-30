@@ -11,7 +11,13 @@ export interface SpendWindow {
   calls: number;
   unknownUsage: number;
   failed: number;
+  /** Of the above, calls on the claude-cli provider: subscription quota, priced at list-price equivalent. */
+  subscriptionCalls: number;
+  subscriptionUsd: number;
 }
+
+/** How a claude-cli dollar figure is labelled wherever it is shown. */
+export const SUBSCRIPTION_LABEL = "subscription, list-price equivalent";
 
 export interface SpendSummary {
   day: SpendWindow;
@@ -30,6 +36,8 @@ function window(calls: readonly ModelCallRecord[]): SpendWindow {
     calls: calls.length,
     unknownUsage: calls.filter((c) => c.status !== "settled" || !c.usageKnown).length,
     failed: calls.filter((c) => c.outcome && c.outcome !== "success").length,
+    subscriptionCalls: calls.filter((c) => c.provider === "claude-cli").length,
+    subscriptionUsd: calls.filter((c) => c.provider === "claude-cli").reduce((s, c) => s + amount(c), 0),
   };
 }
 
@@ -61,7 +69,13 @@ export function spendSummary(ctx: AppContext, days = 30): SpendSummary {
 }
 
 /** Total spent on one opportunity, across every purpose. */
-export function spendFor(ctx: AppContext, opportunityId: string): { usd: number; calls: number } {
+export function spendFor(ctx: AppContext, opportunityId: string): { usd: number; calls: number; subscriptionCalls: number } {
   const calls = ctx.store.modelCalls({ subjectId: opportunityId });
-  return { usd: calls.reduce((s, c) => s + amount(c), 0), calls: calls.length };
+  return { usd: calls.reduce((s, c) => s + amount(c), 0), calls: calls.length, subscriptionCalls: calls.filter((c) => c.provider === "claude-cli").length };
+}
+
+/** " (subscription, list-price equivalent)" when every call counted is on claude-cli; a share when some are. */
+export function basisNote(w: { calls: number; subscriptionCalls: number }): string {
+  if (w.subscriptionCalls === 0) return "";
+  return w.subscriptionCalls === w.calls ? ` (${SUBSCRIPTION_LABEL})` : ` (${w.subscriptionCalls} of ${w.calls} calls: ${SUBSCRIPTION_LABEL})`;
 }
