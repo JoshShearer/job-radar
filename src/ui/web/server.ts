@@ -34,6 +34,7 @@ const ASSETS: Record<string, string> = {
   "archivo-latin.woff2": "font/woff2",
   "archivo-latin-ext.woff2": "font/woff2",
   "ARCHIVO-OFL.txt": "text/plain; charset=utf-8",
+  "icon.svg": "image/svg+xml",
 };
 const PAGE_CSP = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 /** Generated HTML documents are shown sandboxed: no script, no same-origin access, no network. */
@@ -51,9 +52,11 @@ export async function startServer(ctx: AppContext, opts: { port?: number } = {})
   const policy = { allowedHosts: web.allowed_hosts, allowedLogins: web.allowed_logins };
   const csrf = randomBytes(18).toString("hex");
   const assets = new Map(Object.keys(ASSETS).map((name) => [name, readFileSync(resolve(ASSET_DIR, name))]));
-  const cssUrl = `/assets/app.css?v=${createHash("sha256").update(assets.get("app.css")!).digest("hex").slice(0, 10)}`;
+  const versioned = (name: string) => `/assets/${name}?v=${createHash("sha256").update(assets.get(name)!).digest("hex").slice(0, 10)}`;
+  const cssUrl = versioned("app.css");
+  const iconUrl = versioned("icon.svg");
   const flashes = new Map<string, Flash>();
-  const state: ServerState = { ctx, csrf, cssUrl, assets, flashes, policy };
+  const state: ServerState = { ctx, csrf, cssUrl, iconUrl, assets, flashes, policy };
 
   const server = createServer((req, res) => {
     handle(state, req, res).catch((err: unknown) => {
@@ -82,6 +85,7 @@ interface ServerState {
   ctx: AppContext;
   csrf: string;
   cssUrl: string;
+  iconUrl: string;
   assets: Map<string, Buffer>;
   flashes: Map<string, Flash>;
   policy: { allowedHosts: readonly string[]; allowedLogins: readonly string[] };
@@ -216,6 +220,7 @@ function shell(s: ServerState, access: Admission & { ok: true }, b: Briefing, ti
     section,
     csrf: s.csrf,
     css: s.cssUrl,
+    icon: s.iconUrl,
     viewer: access.via === "tailnet" ? { via: "tailnet", login: access.login, name: access.name } : { via: "loopback" },
     rail: {
       warnings: b.health.filter((h) => h.level === "warn").length,

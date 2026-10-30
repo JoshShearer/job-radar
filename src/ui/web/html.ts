@@ -17,6 +17,8 @@ export interface Shell {
   csrf: string;
   /** Versioned stylesheet URL. */
   css: string;
+  /** Versioned tab icon URL. */
+  icon: string;
   /** Who is looking: a tailnet user, or someone on this machine. */
   viewer: { via: "loopback" } | { via: "tailnet"; login: string; name: string | null };
   /** Counts shown in the rail. */
@@ -75,6 +77,7 @@ export function page(s: Shell, body: string): string {
 <title>${esc(s.title)} | Job Radar</title>
 <link rel="preload" href="/assets/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="${esc(s.css)}">
+<link rel="icon" href="${esc(s.icon)}" type="image/svg+xml">
 </head><body>
 <a class="skip" href="#main">Skip to content</a>
 <div class="frame">

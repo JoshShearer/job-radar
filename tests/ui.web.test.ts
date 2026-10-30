@@ -119,6 +119,12 @@ describe("web UI on loopback", () => {
     const font = await call("GET", "/assets/archivo-latin.woff2");
     expect(font.status).toBe(200);
     expect(font.headers["content-type"]).toBe("font/woff2");
+    const iconUrl = /<link rel="icon" href="(\/assets\/icon\.svg\?v=[a-f0-9]{10})" type="image\/svg\+xml">/.exec(page)![1]!;
+    const icon = await call("GET", iconUrl);
+    expect(icon.status).toBe(200);
+    expect(icon.headers["content-type"]).toBe("image/svg+xml");
+    expect(icon.headers["cache-control"]).toContain("immutable");
+    expect(icon.body).toContain("<svg");
     for (const bad of ["/assets/nope.css", "/assets/../server.ts", "/assets/%2e%2e%2fserver.ts", "/assets/server.ts"]) {
       expect((await call("GET", bad)).status, bad).toBe(404);
     }
