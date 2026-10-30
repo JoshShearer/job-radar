@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ArtifactStore } from "../../ports/io.js";
 
 /**
@@ -36,12 +36,23 @@ export class FsArtifactStore implements ArtifactStore {
   }
 
   path(dir: string, file: string): string {
-    return join(dir, file);
+    return join(this.locate(dir), file);
   }
 
   read(dir: string, file: string): string | null {
-    const p = join(dir, file);
+    const p = this.path(dir, file);
     return existsSync(p) ? readFileSync(p, "utf8") : null;
+  }
+
+  /**
+   * The recorded directory is absolute, and the record is append-only. When
+   * the home moves to another machine or path, the generation is still at
+   * <root>/<opportunity>/<generation>, so look there before giving up.
+   */
+  private locate(dir: string): string {
+    if (existsSync(dir)) return dir;
+    const moved = join(this.root, basename(dirname(dir)), basename(dir));
+    return existsSync(moved) ? moved : dir;
   }
 }
 

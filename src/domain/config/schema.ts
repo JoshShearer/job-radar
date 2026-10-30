@@ -267,6 +267,29 @@ export const OperationsSchema = z
       })
       .strict()
       .prefault({}),
+    web: z
+      .object({
+        port: z.number().int().min(1).max(65535).default(4180),
+        /**
+         * Hostnames a reverse proxy on this machine (`tailscale serve`) may
+         * forward with. The server still binds 127.0.0.1; loopback names are
+         * always allowed and need no entry here.
+         */
+        allowed_hosts: z.array(z.string().regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/, "a lowercase hostname, no port or scheme")).default([]),
+        /**
+         * Tailnet logins (the proxy's Tailscale-User-Login header) allowed
+         * through a proxied host. A proxied request without one of these is
+         * refused, so a public Funnel, which carries no identity, cannot reach
+         * the UI even if it is switched on by mistake.
+         */
+        allowed_logins: z.array(term).default([]),
+      })
+      .strict()
+      .prefault({})
+      .refine((w) => w.allowed_hosts.length === 0 || w.allowed_logins.length > 0, {
+        message: "allowed_logins must name at least one tailnet login when allowed_hosts is set",
+        path: ["allowed_logins"],
+      }),
   })
   .strict();
 export type Operations = z.infer<typeof OperationsSchema>;

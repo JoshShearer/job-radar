@@ -1,0 +1,24 @@
+[Unit]
+Description=Job Radar web UI (bound to 127.0.0.1; other devices reach it through tailscale serve)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/Dev/job-radar
+# Rewritten by install-web.sh to the node your shell uses (user units do not see nvm).
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/job-radar/env
+# The port and the tailnet hosts and logins it admits come from config/operations.yaml `web:`.
+ExecStart=/usr/bin/env npm run --silent serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The database (and its WAL) is the only thing it writes: pursuit, outcome and approval events.
+ReadWritePaths=%h/Documents/Dev/job-radar/data
+
+[Install]
+WantedBy=default.target

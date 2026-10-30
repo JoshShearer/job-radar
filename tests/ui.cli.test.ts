@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -153,3 +153,36 @@ describe("jr, end to end through the real entry point", () => {
 });
 
 void cpSync;
+
+describe("jr serve, through the real entry point", () => {
+  it("--check prints the configured port and allowed hosts, then exits", () => {
+    const r = jr("serve", "--check");
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe("4180");
+  });
+
+  it("serves pages and the stylesheet under tsx, and stops cleanly on SIGTERM", async () => {
+    const port = 20_000 + Math.floor(Math.random() * 20_000);
+    const child = spawn(process.execPath, ["--import", "tsx", join(ROOT, "src/ui/cli.ts"), "serve", "--port", String(port)], { env, cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", (c: Buffer) => (output += c.toString()));
+    child.stderr.on("data", (c: Buffer) => (output += c.toString()));
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!output.includes("Job Radar at") && Date.now() < deadline) await new Promise((ok) => setTimeout(ok, 100));
+      expect(output).toContain(`Job Radar at http://127.0.0.1:${port}/`);
+      for (const path of ["/", "/ranked", "/apps", "/system"]) {
+        const res = await fetch(`http://127.0.0.1:${port}${path}`);
+        expect(res.status, path).toBe(200);
+        expect(await res.text(), path).toContain("Job Radar");
+      }
+      const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+      const css = /href="(\/assets\/app\.css\?v=[a-f0-9]+)"/.exec(html)![1]!;
+      expect((await fetch(`http://127.0.0.1:${port}${css}`)).headers.get("content-type")).toContain("text/css");
+    } finally {
+      const exited = new Promise<number | null>((ok) => child.once("exit", (code) => ok(code)));
+      child.kill("SIGTERM");
+      expect(await exited).toBe(0);
+    }
+  }, 30_000);
+});

@@ -33,8 +33,8 @@ export interface Briefing {
 export function buildBriefing(ctx: AppContext): Briefing {
   const config = ctx.config();
   const now = ctx.clock.now();
-  const all = ctx.store.ranking({});
-  const eligible = all.filter((r) => r.eligible);
+  // Counts come from the database: reading every row's detail costs seconds on a real index.
+  const counts = ctx.store.rankingCounts();
   const health: HealthItem[] = [];
 
   // --- observation health: silence must never pass for a quiet market -----
@@ -83,20 +83,23 @@ export function buildBriefing(ctx: AppContext): Briefing {
   };
   const taken: Record<Priority, number> = { A: 0, B: 0, C: 0, D: 0 };
   const slate: RankingRecord[] = [];
-  for (const r of eligible) {
+  const candidates = ctx.store.ranking({
+    eligible: true,
+    pursuitStates: ["new", "reviewed"],
+    postingStates: ["open", "unknown"],
+    includeEvergreen: false,
+    minFit: config.policy.scoring.report_threshold,
+  });
+  for (const r of candidates) {
     if (slate.length >= config.policy.report.max_total) break;
-    if (r.pursuitState !== "new" && r.pursuitState !== "reviewed") continue;
-    if (r.postingState === "closed" || r.postingState === "missing") continue;
-    if (r.evergreen || r.fit < config.policy.scoring.report_threshold) continue;
     if (taken[r.priority] >= caps[r.priority]) continue;
     taken[r.priority]++;
     slate.push(r);
   }
 
-  const pursuits = pursuitStates(ctx);
-  const byId = new Map(all.map((r) => [r.opportunityId, r]));
-  const pursuing = [...pursuits]
-    .filter(([, p]) => p.state === "shortlisted" || p.state === "preparing")
+  const active = [...pursuitStates(ctx)].filter(([, p]) => p.state === "shortlisted" || p.state === "preparing");
+  const byId = new Map(ctx.store.ranking({ opportunityIds: active.map(([id]) => id) }).map((r) => [r.opportunityId, r]));
+  const pursuing = active
     .map(([id, p]) => {
       const row = byId.get(id);
       const days = p.since ? Math.floor(daysBetween(p.since, now) ?? 0) : 0;
@@ -123,17 +126,11 @@ export function buildBriefing(ctx: AppContext): Briefing {
     else if (v.kind === "unobserved") silence.push({ app: a, kind: v.kind, days: v.days, why: v.why });
   }
 
-  const funnel = buildFunnel({ discovered: all.length, eligible: eligible.length, furthest: apps.map((a) => a.furthest) });
+  const funnel = buildFunnel({ discovered: counts.opportunities, eligible: counts.eligible, furthest: apps.map((a) => a.furthest) });
 
   return {
     generatedAt: now.toISOString(),
-    counts: {
-      opportunities: all.length,
-      eligible: eligible.length,
-      assessed: all.filter((r) => r.confidence === "analyzed").length,
-      open: all.filter((r) => r.postingState === "open").length,
-      closed: all.filter((r) => r.postingState === "closed").length,
-    },
+    counts,
     health,
     slate,
     pursuing,

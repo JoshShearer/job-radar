@@ -566,11 +566,28 @@ program
 
 program
   .command("serve")
-  .description("Local web UI on 127.0.0.1 only")
-  .option("-p, --port <n>", "port", "4180")
-  .action(async (o: { port: string }) => {
-    const s = await startServer(ctx(), { port: num(o.port, "--port") ?? 4180 });
-    out(`Job Radar at ${s.url} (127.0.0.1 only). Ctrl+C to stop.`);
+  .description("Web UI, bound to 127.0.0.1; other devices reach it through `tailscale serve` (operations.yaml web:)")
+  .option("-p, --port <n>", "port (default operations.yaml web.port)")
+  .option("--check", "print the configured port and allowed hosts (space-separated, hosts comma-joined) and exit", false)
+  .action(async (o: { port?: string; check: boolean }) => {
+    const port = num(o.port, "--port");
+    if (o.check) {
+      const web = ctx().config().operations.web;
+      out(`${port ?? web.port} ${web.allowed_hosts.join(",")}`);
+      return;
+    }
+    const s = await startServer(ctx(), port === undefined ? {} : { port });
+    const web = ctx().config().operations.web;
+    out(`Job Radar at ${s.url} (bound to 127.0.0.1).`);
+    if (web.allowed_hosts.length) out(`Through a proxy on this machine as ${web.allowed_hosts.join(", ")}, for ${web.allowed_logins.join(", ")}.`);
+    const stop = () => {
+      void s.close().then(() => {
+        runtime?.close();
+        process.exit(0);
+      });
+    };
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
   });
 
 program
@@ -683,5 +700,5 @@ program
   })
   .finally(() => {
     // `serve` keeps the process (and the database) open until Ctrl+C.
-    if (runtime && program.args[0] !== "serve") runtime.close();
+    if (runtime && (program.args[0] !== "serve" || program.args.includes("--check"))) runtime.close();
   });
