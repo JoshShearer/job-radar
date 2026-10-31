@@ -144,6 +144,16 @@ export interface Store {
     ranking(f?: RankingFilter): RankingRecord[];
     /** How many rows `ranking(f)` would return without `limit` and `offset`. */
     rankingCount(f?: RankingFilter): number;
+    /**
+     * One page of `ranking(f)` and the total it is a page of, read in one
+     * transaction so an evaluate replacing the table between the two reads
+     * cannot make the total disagree with the rows (WAL gives the transaction
+     * a single snapshot).
+     */
+    rankingPage(f?: RankingFilter): {
+        rows: RankingRecord[];
+        total: number;
+    };
     rankingCounts(): RankingCounts;
     rankingFor(opportunityId: string): RankingRecord | null;
     lastEvaluation(): {

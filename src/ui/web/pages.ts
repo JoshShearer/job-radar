@@ -252,8 +252,7 @@ export function rankedPage(p: PageContext, query: RankedQuery): string {
     limit: PAGE_SIZE + 1,
     offset: (query.page - 1) * PAGE_SIZE,
   };
-  const fetched = ctx.store.ranking(filter);
-  const total = ctx.store.rankingCount(filter);
+  const { rows: fetched, total } = ctx.store.rankingPage(filter);
   const rows = fetched.slice(0, PAGE_SIZE);
   const hasNext = fetched.length > PAGE_SIZE;
   const now = ctx.clock.now();
@@ -278,6 +277,20 @@ ${isDefaultSort(query) ? "" : `<input type="hidden" name="sort" value="${esc(que
 <div><button class="primary">Filter</button></div>
 <a class="reset" href="/ranked">Clear filters</a>
 </form>`);
+  const link = (page: number) => {
+    const u = new URL(p.here, "http://x");
+    u.searchParams.set("page", String(page));
+    u.searchParams.delete("f");
+    return `${u.pathname}${u.search}`;
+  };
+  if (!rows.length && total > 0) {
+    // The filters match; this page number is past the end of them.
+    const pages = Math.ceil(total / PAGE_SIZE);
+    P.push(
+      `<p class="section-note">Page ${query.page} is past the end: ${total.toLocaleString("en-US")} ${total === 1 ? "posting matches" : "postings match"} these filters, on ${pages} ${pages === 1 ? "page" : "pages"}. <a href="${esc(link(1))}">Go to the first page</a>${pages > 1 ? ` or <a href="${esc(link(pages))}">the last page</a>` : ""}.</p>`,
+    );
+    return P.join("\n");
+  }
   if (!rows.length) {
     P.push(`<p class="section-note">No postings match these filters. Widen the decision or posting filter, or clear them.</p>`);
     return P.join("\n");
@@ -302,7 +315,7 @@ ${isDefaultSort(query) ? "" : `<input type="hidden" name="sort" value="${esc(que
     return `<th${cls ? ` class="${cls}"` : ""}${aria}><a class="sort" href="${esc(`${u.pathname}${u.search}`)}" title="Sort ${esc(SORTS[key][dir])}">${esc(label)}${arrow}</a></th>`;
   };
   P.push(
-    `<div class="table-wrap"><table><tr><th><span class="visually-hidden">Priority</span></th>${th("title", "Posting")}${th("fit", "Fit", "num")}${th("roi", "ROI", "num")}${th("basis", "Basis")}${th("posting", "Posting")}${th("decision", "Decision")}${th("posted", "Posted")}<th><span class="visually-hidden">Actions</span></th></tr>`,
+    `<div class="table-wrap"><table><tr><th><span class="visually-hidden">Priority</span></th>${th("title", "Posting")}${th("fit", "Fit", "num")}${th("roi", "ROI", "num")}${th("basis", "Basis")}${th("posting", "State")}${th("decision", "Decision")}${th("posted", "Posted")}<th><span class="visually-hidden">Actions</span></th></tr>`,
   );
   for (const r of rows) {
     const quick =
@@ -314,11 +327,6 @@ ${isDefaultSort(query) ? "" : `<input type="hidden" name="sort" value="${esc(que
     );
   }
   P.push(`</table></div>`);
-  const link = (page: number) => {
-    const u = new URL(p.here, "http://x");
-    u.searchParams.set("page", String(page));
-    return `${u.pathname}${u.search}`;
-  };
   P.push(
     `<nav class="pager" aria-label="Pages">${query.page > 1 ? `<a href="${esc(link(query.page - 1))}">Previous ${PAGE_SIZE}</a>` : ""}${hasNext ? `<a href="${esc(link(query.page + 1))}">Next ${PAGE_SIZE}</a>` : ""}</nav>`,
   );
