@@ -281,7 +281,8 @@ describe("web UI on loopback", () => {
     const none = await call("GET", "/ranked?q=no-such-company-anywhere");
     expect(none.body).toContain("No postings match these filters");
     expect((await call("GET", "/ranked?page=-4&p=Z&pursuit=bogus&posting=bogus")).status).toBe(200);
-    expect((await call("GET", "/ranked?page=99")).body).toContain("No postings match");
+    // Past the end of matching postings is not "nothing matches" (JOB-75).
+    expect((await call("GET", "/ranked?pursuit=all&posting=all&q=no-such-company-anywhere&page=99")).body).toContain("No postings match");
   });
 
   it("shows the total that matches the filters, not just the page range", async () => {
@@ -317,6 +318,28 @@ describe("web UI on loopback", () => {
     // Reversing the default column back to descending drops the params.
     const roiAsc = (await call("GET", `${base}&sort=roi&dir=asc`)).body;
     expect(roiAsc).toMatch(/aria-sort="ascending"><a class="sort" href="\/ranked\?pursuit=all&amp;posting=all&amp;ineligible=1&amp;evergreen=1"/);
+  });
+
+  it("past the last page says how many match and links back, keeping the sort and filters", async () => {
+    const base = "/ranked?pursuit=all&posting=all&ineligible=1&evergreen=1&sort=fit&dir=asc";
+    const n = env.store.ranking({}).length;
+    const r = await call("GET", `${base}&page=99`);
+    expect(r.status).toBe(200);
+    expect(r.body).not.toContain("No postings match");
+    expect(r.body).toContain(`Page 99 is past the end: ${n} postings match these filters, on 1 page.`);
+    const back = /<a href="([^"]+)">Go to the first page<\/a>/.exec(r.body)![1]!.replace(/&amp;/g, "&");
+    expect(back).toBe("/ranked?pursuit=all&posting=all&ineligible=1&evergreen=1&sort=fit&dir=asc&page=1");
+    expect(r.body).not.toContain("the last page");
+    expect((await call("GET", back)).body).toContain(`Showing 1 to ${n} of ${n}, lowest fit first.`);
+    // Nothing matching at all keeps the old message.
+    expect((await call("GET", "/ranked?q=no-such-company-anywhere&page=99")).body).toContain("No postings match these filters");
+  });
+
+  it("gives every sort header a distinct name", async () => {
+    const r = await call("GET", "/ranked?pursuit=all&posting=all&ineligible=1&evergreen=1");
+    const names = [...r.body.matchAll(/<a class="sort" href="[^"]*" title="[^"]*">([^<]+)/g)].map((m) => m[1]);
+    expect(names).toEqual(["Posting", "Fit", "ROI", "Basis", "State", "Decision", "Posted"]);
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it("an unknown sort or direction falls back to the default order", async () => {

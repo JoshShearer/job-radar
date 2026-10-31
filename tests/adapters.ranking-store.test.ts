@@ -9,6 +9,9 @@ import { FsArtifactStore } from "../src/adapters/fs/artifact-store.js";
 import { GH_ACME, ghBoard, makeEnv } from "./helpers/context.js";
 import { RANKING_SORT_KEYS, type RankingRecord, type RankingSortKey } from "../src/ports/records.js";
 import { PURSUIT_STATES } from "../src/domain/pursuit/machines.js";
+import Database from "better-sqlite3";
+import { openDatabase } from "../src/adapters/sqlite/db.js";
+import { SqliteStore } from "../src/adapters/sqlite/store.js";
 
 async function seeded() {
   const env = makeEnv({
@@ -182,6 +185,52 @@ describe("ranking sort and count for the Ranked page", () => {
     }
     expect(env.store.rankingCount({ postingStates: ["open"] })).toBe(4);
     expect(makeEnv().store.rankingCount({})).toBe(0);
+  });
+});
+
+describe("a ranking page and its total come from one snapshot", () => {
+  const INSERT = `INSERT INTO ranking (opportunity_id, company, title, location, remote_status, date_posted, lane, eligible, evergreen,
+     posting_state, pursuit_state, raw_fit, raw_roi, raw_priority, fit, roi, priority, confidence, comp_band, detail_json, evaluated_at)
+     VALUES (?, 'Acme', 'Engineer', 'Remote', 'remote', NULL, 'full_stack', 1, 0, 'open', 'new', 50, 50, 'C', 50, 50, 'C', 'raw', 'unknown', '{}', '2026-10-31T00:00:00.000Z')`;
+
+  /**
+   * A file database in WAL mode, as in production, plus a second connection
+   * standing in for an evaluate in another process. The store's `ranking` is
+   * wrapped so that second connection commits a new row right after the rows
+   * are read and before the total is: the race, forced.
+   */
+  function racing() {
+    const file = join(mkdtempSync(join(tmpdir(), "jr-snap-")), "jr.sqlite");
+    const store = new SqliteStore(openDatabase(file, () => "2026-10-31T00:00:00.000Z"));
+    for (const id of ["a", "b", "c"]) store.db.prepare(INSERT).run(id);
+    const writer = new Database(file);
+    let n = 0;
+    const read = store.ranking.bind(store);
+    store.ranking = (f) => {
+      const rows = read(f);
+      writer.prepare(INSERT).run(`late-${n++}`);
+      return rows;
+    };
+    return store;
+  }
+
+  it("reads the rows and the total in one transaction, so a write between them is not seen", () => {
+    const store = racing();
+    // Without the transaction the race is real: the total counts a row the page never saw.
+    const rows = store.ranking({});
+    expect(store.rankingCount({})).toBe(rows.length + 1);
+    // rankingPage takes both from the snapshot its first read opened.
+    const page = store.rankingPage({});
+    expect(page.total).toBe(page.rows.length);
+    // The write still landed; the next page load sees it.
+    expect(store.rankingCount({})).toBe(page.total + 1);
+  });
+
+  it("matches ranking and rankingCount when nothing races, and an empty id list is empty", async () => {
+    const env = await seeded();
+    const f = { postingStates: ["open"], limit: 1, offset: 1 };
+    expect(env.store.rankingPage(f)).toEqual({ rows: env.store.ranking(f), total: env.store.rankingCount(f) });
+    expect(env.store.rankingPage({ opportunityIds: [] })).toEqual({ rows: [], total: 0 });
   });
 });
 

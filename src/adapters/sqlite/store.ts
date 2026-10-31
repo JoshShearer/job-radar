@@ -695,6 +695,15 @@ export class SqliteStore implements Store {
     return (this.db.prepare(`SELECT COUNT(*) AS n FROM ranking ${w.sql}`).get(...w.args) as { n: number }).n;
   }
 
+  /**
+   * One page of `ranking(f)` and the total it is a page of, read in one
+   * transaction so an evaluate replacing the table between the two reads
+   * cannot make the total disagree with the rows (WAL gives the transaction
+   * a single snapshot).
+   */
+  rankingPage(f: RankingFilter = {}): { rows: RankingRecord[]; total: number } {
+    return this.db.transaction(() => ({ rows: this.ranking(f), total: this.rankingCount(f) }))();
+  }
 
   rankingCounts(): RankingCounts {
     const row = this.db
