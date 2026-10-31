@@ -142,6 +142,8 @@ export interface Store {
         summary: unknown;
     }): void;
     ranking(f?: RankingFilter): RankingRecord[];
+    /** How many rows `ranking(f)` would return without `limit` and `offset`. */
+    rankingCount(f?: RankingFilter): number;
     rankingCounts(): RankingCounts;
     rankingFor(opportunityId: string): RankingRecord | null;
     lastEvaluation(): {

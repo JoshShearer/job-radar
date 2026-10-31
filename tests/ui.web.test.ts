@@ -284,6 +284,56 @@ describe("web UI on loopback", () => {
     expect((await call("GET", "/ranked?page=99")).body).toContain("No postings match");
   });
 
+  it("shows the total that matches the filters, not just the page range", async () => {
+    const every = "/ranked?pursuit=all&posting=all&ineligible=1&evergreen=1";
+    const n = env.store.ranking({}).length;
+    expect((await call("GET", every)).body).toContain(`Showing 1 to ${n} of ${n}, best return on effort first.`);
+    const one = await call("GET", "/ranked?pursuit=all&posting=all&q=frontend");
+    expect(one.body).toContain("Showing 1 to 1 of 1,");
+  });
+
+  it("sorts by a column header, reverses on a second click, and keeps the filters", async () => {
+    const base = "/ranked?pursuit=all&posting=all&ineligible=1&evergreen=1";
+    const titles = (html: string) => [...html.matchAll(/class="row-link" href="[^"]+">([^<]+)<\/a>/g)].map((m) => m[1]!);
+    const byTitle = env.store.ranking({ sort: { key: "title", dir: "asc" } }).map((r) => r.title);
+
+    const def = (await call("GET", `${base}&page=1`)).body;
+    // ROI is the active column; clicking it reverses, and no header link keeps the page.
+    expect(def).toMatch(/<th class="num" aria-sort="descending"><a class="sort" href="[^"]*sort=roi&amp;dir=asc"/);
+    expect(def).toContain("sort=fit&amp;dir=desc");
+    expect(def).toContain("sort=title&amp;dir=asc");
+    expect(def).not.toMatch(/class="sort" href="[^"]*page=/);
+    expect(def).not.toContain('name="sort"');
+
+    const asc = (await call("GET", `${base}&sort=title&dir=asc`)).body;
+    expect(titles(asc)).toEqual(byTitle.map((t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")));
+    expect(asc).toContain("by title, A to Z.");
+    expect(asc).toMatch(/<th aria-sort="ascending"><a class="sort" href="[^"]*pursuit=all[^"]*sort=title&amp;dir=desc"/);
+    // The filter form carries the sort, so changing a filter keeps it.
+    expect(asc).toContain('<input type="hidden" name="sort" value="title"><input type="hidden" name="dir" value="asc">');
+
+    const desc = (await call("GET", `${base}&sort=title&dir=desc`)).body;
+    expect(titles(desc)).toEqual([...titles(asc)].reverse());
+    // Reversing the default column back to descending drops the params.
+    const roiAsc = (await call("GET", `${base}&sort=roi&dir=asc`)).body;
+    expect(roiAsc).toMatch(/aria-sort="ascending"><a class="sort" href="\/ranked\?pursuit=all&amp;posting=all&amp;ineligible=1&amp;evergreen=1"/);
+  });
+
+  it("an unknown sort or direction falls back to the default order", async () => {
+    const base = "/ranked?pursuit=all&posting=all&ineligible=1&evergreen=1";
+    const strip = (html: string) => [...html.matchAll(/class="row-link" href="([^"]+)"/g)].map((m) => m[1]);
+    const def = strip((await call("GET", base)).body);
+    for (const q of ["sort=evil&dir=asc", "sort=fit;DROP%20TABLE%20ranking&dir=asc", "sort=&dir=sideways"]) {
+      const r = await call("GET", `${base}&${q}`);
+      expect(r.status, q).toBe(200);
+      expect(strip(r.body), q).toEqual(def);
+      expect(r.body, q).toContain("best return on effort first.");
+    }
+    const sideways = (await call("GET", `${base}&sort=fit&dir=sideways`)).body;
+    expect(sideways).toContain("highest fit first.");
+    expect(env.store.rankingCount({})).toBe(def.length);
+  });
+
   it("shows system health, spend and runs", async () => {
     const r = await call("GET", "/system");
     expect(r.body).toContain("Model spend");

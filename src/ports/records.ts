@@ -273,8 +273,24 @@ export interface RankingFilter {
   minFit?: number;
   /** Case-insensitive substring of the company or the title. */
   text?: string;
+  /** Omitted: best return on effort first (ROI, then fit, descending). */
+  sort?: RankingSort;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * The orders a ranking listing can be read in. Each key maps to a fixed SQL
+ * expression in the store; nothing a caller passes is interpolated.
+ * basis orders by strength (analyst > projected > keyword), posting by
+ * lifecycle (open, unknown, missing, closed), decision by pursuit order.
+ */
+export const RANKING_SORT_KEYS = ["roi", "fit", "title", "basis", "posting", "decision", "posted"] as const;
+export type RankingSortKey = (typeof RANKING_SORT_KEYS)[number];
+
+export interface RankingSort {
+  key: RankingSortKey;
+  dir: "asc" | "desc";
 }
 
 /** Counts over the whole ranking, without reading any row's detail. */
