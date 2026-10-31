@@ -1,6 +1,6 @@
 import type { AppContext } from "../../app/context.js";
 import type { Briefing } from "../../app/briefing.js";
-import type { ArtifactRecord, RankingFilter, RankingRecord } from "../../ports/records.js";
+import { RANKING_SORT_KEYS, type ArtifactRecord, type RankingFilter, type RankingRecord, type RankingSortKey } from "../../ports/records.js";
 import { applicationFold, applicationViews, pursuitOf } from "../../app/pursuit.js";
 import { basisNote, spendFor, spendSummary } from "../../app/spend.js";
 import { mailCoverageSpan } from "../../app/mail.js";
@@ -179,6 +179,8 @@ export interface RankedQuery {
   lane: string;
   evergreen: boolean;
   ineligible: boolean;
+  sort: RankingSortKey;
+  dir: "asc" | "desc";
   page: number;
 }
 
@@ -196,11 +198,31 @@ const POSTING_VIEWS: Record<string, { label: string; states: readonly string[] |
 };
 export const PAGE_SIZE = 50;
 
+/**
+ * How each sortable column reads, and which way it goes on the first click:
+ * scores and dates biggest or newest first, words and states from the top of
+ * their order. A second click on the active column reverses it.
+ */
+const SORTS: Record<RankingSortKey, { first: "asc" | "desc"; asc: string; desc: string }> = {
+  roi: { first: "desc", asc: "lowest return on effort first", desc: "best return on effort first" },
+  fit: { first: "desc", asc: "lowest fit first", desc: "highest fit first" },
+  title: { first: "asc", asc: "by title, A to Z", desc: "by title, Z to A" },
+  basis: { first: "desc", asc: "keyword basis first", desc: "analyst basis first" },
+  posting: { first: "asc", asc: "open postings first", desc: "closed postings first" },
+  decision: { first: "asc", asc: "by decision, new first", desc: "by decision, applied first" },
+  posted: { first: "desc", asc: "oldest posting first", desc: "newest posting first" },
+};
+const DEFAULT_SORT: RankingSortKey = "roi";
+
 export function parseRankedQuery(u: URL): RankedQuery {
   const ps = u.searchParams.getAll("p").filter((x): x is Priority => (PRIORITIES as readonly string[]).includes(x));
   const pursuit = u.searchParams.get("pursuit") ?? "active";
   const posting = u.searchParams.get("posting") ?? "live";
   const page = Number(u.searchParams.get("page") ?? "1");
+  const sortParam = u.searchParams.get("sort") ?? "";
+  const sort = (RANKING_SORT_KEYS as readonly string[]).includes(sortParam) ? (sortParam as RankingSortKey) : DEFAULT_SORT;
+  const dirParam = u.searchParams.get("dir");
+  const dir = sort !== sortParam ? SORTS[DEFAULT_SORT].first : dirParam === "asc" || dirParam === "desc" ? dirParam : SORTS[sort].first;
   return {
     q: (u.searchParams.get("q") ?? "").slice(0, 100),
     priorities: ps,
@@ -209,6 +231,8 @@ export function parseRankedQuery(u: URL): RankedQuery {
     lane: (u.searchParams.get("lane") ?? "").slice(0, 60),
     evergreen: u.searchParams.get("evergreen") === "1",
     ineligible: u.searchParams.get("ineligible") === "1",
+    sort,
+    dir,
     page: Number.isInteger(page) && page >= 1 && page <= 10_000 ? page : 1,
   };
 }
@@ -224,10 +248,12 @@ export function rankedPage(p: PageContext, query: RankedQuery): string {
     ...(query.priorities.length ? { priorities: query.priorities } : {}),
     ...(query.lane && lanes.includes(query.lane) ? { lane: query.lane } : {}),
     ...(query.q.trim() ? { text: query.q } : {}),
+    sort: { key: query.sort, dir: query.dir },
     limit: PAGE_SIZE + 1,
     offset: (query.page - 1) * PAGE_SIZE,
   };
   const fetched = ctx.store.ranking(filter);
+  const total = ctx.store.rankingCount(filter);
   const rows = fetched.slice(0, PAGE_SIZE);
   const hasNext = fetched.length > PAGE_SIZE;
   const now = ctx.clock.now();
@@ -248,6 +274,7 @@ export function rankedPage(p: PageContext, query: RankedQuery): string {
 <label class="check"><input type="checkbox" name="evergreen" value="1"${query.evergreen ? " checked" : ""}> Include evergreen postings</label>
 <label class="check"><input type="checkbox" name="ineligible" value="1"${query.ineligible ? " checked" : ""}> Include ineligible postings</label>
 </div>
+${isDefaultSort(query) ? "" : `<input type="hidden" name="sort" value="${esc(query.sort)}"><input type="hidden" name="dir" value="${esc(query.dir)}">`}
 <div><button class="primary">Filter</button></div>
 <a class="reset" href="/ranked">Clear filters</a>
 </form>`);
@@ -256,8 +283,27 @@ export function rankedPage(p: PageContext, query: RankedQuery): string {
     return P.join("\n");
   }
   const first = (query.page - 1) * PAGE_SIZE + 1;
-  P.push(`<p class="section-note">Showing ${first} to ${first + rows.length - 1}, best return on effort first.</p>`);
-  P.push(`<div class="table-wrap"><table><tr><th><span class="visually-hidden">Priority</span></th><th>Posting</th><th class="num">Fit</th><th class="num">ROI</th><th>Basis</th><th>Posting</th><th>Decision</th><th>Posted</th><th><span class="visually-hidden">Actions</span></th></tr>`);
+  P.push(`<p class="section-note">Showing ${first} to ${first + rows.length - 1} of ${total.toLocaleString("en-US")}, ${esc(SORTS[query.sort][query.dir])}.</p>`);
+  const th = (key: RankingSortKey, label: string, cls = "") => {
+    const active = query.sort === key;
+    const dir = active ? (query.dir === "asc" ? "desc" : "asc") : SORTS[key].first;
+    const u = new URL(p.here, "http://x");
+    u.searchParams.delete("page");
+    u.searchParams.delete("f");
+    if (key === DEFAULT_SORT && dir === SORTS[DEFAULT_SORT].first) {
+      u.searchParams.delete("sort");
+      u.searchParams.delete("dir");
+    } else {
+      u.searchParams.set("sort", key);
+      u.searchParams.set("dir", dir);
+    }
+    const arrow = active ? `<span class="sort-dir" aria-hidden="true">${query.dir === "asc" ? "\u2191" : "\u2193"}</span>` : "";
+    const aria = active ? ` aria-sort="${query.dir === "asc" ? "ascending" : "descending"}"` : "";
+    return `<th${cls ? ` class="${cls}"` : ""}${aria}><a class="sort" href="${esc(`${u.pathname}${u.search}`)}" title="Sort ${esc(SORTS[key][dir])}">${esc(label)}${arrow}</a></th>`;
+  };
+  P.push(
+    `<div class="table-wrap"><table><tr><th><span class="visually-hidden">Priority</span></th>${th("title", "Posting")}${th("fit", "Fit", "num")}${th("roi", "ROI", "num")}${th("basis", "Basis")}${th("posting", "Posting")}${th("decision", "Decision")}${th("posted", "Posted")}<th><span class="visually-hidden">Actions</span></th></tr>`,
+  );
   for (const r of rows) {
     const quick =
       r.pursuitState === "new" || r.pursuitState === "reviewed"
@@ -277,6 +323,10 @@ export function rankedPage(p: PageContext, query: RankedQuery): string {
     `<nav class="pager" aria-label="Pages">${query.page > 1 ? `<a href="${esc(link(query.page - 1))}">Previous ${PAGE_SIZE}</a>` : ""}${hasNext ? `<a href="${esc(link(query.page + 1))}">Next ${PAGE_SIZE}</a>` : ""}</nav>`,
   );
   return P.join("\n");
+}
+
+function isDefaultSort(q: RankedQuery): boolean {
+  return q.sort === DEFAULT_SORT && q.dir === SORTS[DEFAULT_SORT].first;
 }
 
 /* ------------------------------------------------------------------ posting */

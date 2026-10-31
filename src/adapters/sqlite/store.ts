@@ -21,11 +21,14 @@ import type {
   RankingCounts,
   RankingFilter,
   RankingRecord,
+  RankingSort,
+  RankingSortKey,
   RunRecord,
   SweepRecord,
   VoidRecord,
 } from "../../ports/records.js";
 import type { Store } from "../../ports/store.js";
+import { PURSUIT_STATES } from "../../domain/pursuit/machines.js";
 
 /**
  * The SQLite implementation of the store port.
@@ -677,53 +680,21 @@ export class SqliteStore implements Store {
   }
 
   ranking(f: RankingFilter = {}): RankingRecord[] {
-    const where: string[] = [];
-    const args: unknown[] = [];
-    if (f.opportunityId) {
-      where.push("opportunity_id = ?");
-      args.push(f.opportunityId);
-    }
-    if (f.opportunityIds) {
-      if (!f.opportunityIds.length) return [];
-      where.push(`opportunity_id IN (${f.opportunityIds.map(() => "?").join(",")})`);
-      args.push(...f.opportunityIds);
-    }
-    if (f.eligible !== undefined) {
-      where.push("eligible = ?");
-      args.push(f.eligible ? 1 : 0);
-    }
-    if (f.includeEvergreen === false) where.push("evergreen = 0");
-    if (f.pursuitStates?.length) {
-      where.push(`pursuit_state IN (${f.pursuitStates.map(() => "?").join(",")})`);
-      args.push(...f.pursuitStates);
-    }
-    if (f.postingStates?.length) {
-      where.push(`posting_state IN (${f.postingStates.map(() => "?").join(",")})`);
-      args.push(...f.postingStates);
-    }
-    if (f.lane) {
-      where.push("lane = ?");
-      args.push(f.lane);
-    }
-    if (f.minFit !== undefined) {
-      where.push("fit >= ?");
-      args.push(f.minFit);
-    }
-    if (f.priorities?.length) {
-      where.push(`priority IN (${f.priorities.map(() => "?").join(",")})`);
-      args.push(...f.priorities);
-    }
-    if (f.text?.trim()) {
-      // LIKE is case-insensitive for ASCII only; the escape keeps % and _ literal.
-      const like = `%${f.text.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      where.push("(company LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')");
-      args.push(like, like);
-    }
+    const w = rankingWhere(f);
+    if (!w) return [];
     const rows = this.db
-      .prepare(`SELECT * FROM ranking ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY roi DESC, fit DESC, opportunity_id LIMIT ? OFFSET ?`)
-      .all(...args, f.limit ?? 1_000_000, f.offset ?? 0) as Array<Record<string, unknown>>;
+      .prepare(`SELECT * FROM ranking ${w.sql} ORDER BY ${rankingOrder(f.sort)} LIMIT ? OFFSET ?`)
+      .all(...w.args, f.limit ?? 1_000_000, f.offset ?? 0) as Array<Record<string, unknown>>;
     return rows.map(toRanking);
   }
+
+  /** How many rows `ranking(f)` would return without `limit` and `offset`. */
+  rankingCount(f: RankingFilter = {}): number {
+    const w = rankingWhere(f);
+    if (!w) return 0;
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM ranking ${w.sql}`).get(...w.args) as { n: number }).n;
+  }
+
 
   rankingCounts(): RankingCounts {
     const row = this.db
@@ -869,6 +840,79 @@ function toAlias(r: Record<string, unknown>): AliasRecord {
     snapshotKey: (r.snapshot_key as string | null) ?? null,
     snapshotJson: (r.snapshot_json as string | null) ?? null,
   };
+}
+
+/** The WHERE clause for a filter, or null when it can match nothing. */
+function rankingWhere(f: RankingFilter): { sql: string; args: unknown[] } | null {
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (f.opportunityId) {
+    where.push("opportunity_id = ?");
+    args.push(f.opportunityId);
+  }
+  if (f.opportunityIds) {
+    if (!f.opportunityIds.length) return null;
+    where.push(`opportunity_id IN (${f.opportunityIds.map(() => "?").join(",")})`);
+    args.push(...f.opportunityIds);
+  }
+  if (f.eligible !== undefined) {
+    where.push("eligible = ?");
+    args.push(f.eligible ? 1 : 0);
+  }
+  if (f.includeEvergreen === false) where.push("evergreen = 0");
+  if (f.pursuitStates?.length) {
+    where.push(`pursuit_state IN (${f.pursuitStates.map(() => "?").join(",")})`);
+    args.push(...f.pursuitStates);
+  }
+  if (f.postingStates?.length) {
+    where.push(`posting_state IN (${f.postingStates.map(() => "?").join(",")})`);
+    args.push(...f.postingStates);
+  }
+  if (f.lane) {
+    where.push("lane = ?");
+    args.push(f.lane);
+  }
+  if (f.minFit !== undefined) {
+    where.push("fit >= ?");
+    args.push(f.minFit);
+  }
+  if (f.priorities?.length) {
+    where.push(`priority IN (${f.priorities.map(() => "?").join(",")})`);
+    args.push(...f.priorities);
+  }
+  if (f.text?.trim()) {
+    // LIKE is case-insensitive for ASCII only; the escape keeps % and _ literal.
+    const like = `%${f.text.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    where.push("(company LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')");
+    args.push(like, like);
+  }
+  return { sql: where.length ? `WHERE ${where.join(" AND ")}` : "", args };
+}
+
+/**
+ * Each sort key's SQL. This table is the allowlist: a key that is not here
+ * cannot be ordered by, and nothing from the request reaches the query.
+ */
+const RANKING_ORDER: Record<RankingSortKey, string> = {
+  roi: "roi",
+  fit: "fit",
+  title: "title COLLATE NOCASE",
+  basis: "CASE confidence WHEN 'analyzed' THEN 3 WHEN 'projected' THEN 2 WHEN 'raw' THEN 1 END",
+  posting: "CASE posting_state WHEN 'open' THEN 0 WHEN 'unknown' THEN 1 WHEN 'missing' THEN 2 WHEN 'closed' THEN 3 END",
+  decision: `CASE pursuit_state ${PURSUIT_STATES.map((s, i) => `WHEN '${s}' THEN ${i}`).join(" ")} END`,
+  posted: "date_posted",
+};
+const DEFAULT_ORDER = "roi DESC, fit DESC, opportunity_id";
+
+/**
+ * Nulls (an undated posting, an unknown state) sort last in both directions.
+ * Ties fall back to the default order and end on the primary key, so paging
+ * a listing never repeats or skips a row.
+ */
+function rankingOrder(sort: RankingSort | undefined): string {
+  const expr = sort ? RANKING_ORDER[sort.key] : undefined;
+  if (!sort || !expr || (sort.key === "roi" && sort.dir === "desc")) return DEFAULT_ORDER;
+  return `(${expr}) IS NULL, ${expr} ${sort.dir === "asc" ? "ASC" : "DESC"}, ${DEFAULT_ORDER}`;
 }
 
 function toRanking(r: Record<string, unknown>): RankingRecord {
