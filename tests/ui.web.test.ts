@@ -130,6 +130,44 @@ describe("web UI on loopback", () => {
     }
   });
 
+  it("is installable: a manifest with sized PNG icons, linked from every page, still with no script (JOB-76)", async () => {
+    const page = (await call("GET", "/ranked")).body;
+    const manifestUrl = /<link rel="manifest" href="(\/assets\/manifest\.webmanifest\?v=[a-f0-9]{10})">/.exec(page)![1]!;
+    const touchUrl = /<link rel="apple-touch-icon" href="(\/assets\/apple-touch-icon\.png\?v=[a-f0-9]{10})">/.exec(page)![1]!;
+    expect(page).toContain('<meta name="theme-color" content="#ecefed" media="(prefers-color-scheme: light)">');
+    expect(page).toContain('<meta name="theme-color" content="#11151b" media="(prefers-color-scheme: dark)">');
+    const csp = String((await call("GET", "/")).headers["content-security-policy"]);
+    expect(csp).toContain("manifest-src 'self'");
+    expect(csp).not.toContain("script-src");
+    expect(csp).not.toContain("worker-src");
+
+    const m = await call("GET", manifestUrl);
+    expect(m.status).toBe(200);
+    expect(m.headers["content-type"]).toBe("application/manifest+json");
+    const manifest = JSON.parse(m.body) as { name: string; start_url: string; scope: string; display: string; icons: Array<{ src: string; sizes: string; type: string; purpose: string }> };
+    expect(manifest).toMatchObject({ name: "Job Radar", start_url: "/", scope: "/", display: "standalone" });
+
+    // Each PNG is served, versioned, and really the size the manifest claims (IHDR width/height).
+    const png = async (url: string) => {
+      const r = await fetch(`http://127.0.0.1:${server.port}${url}`);
+      expect(r.status, url).toBe(200);
+      expect(r.headers.get("content-type"), url).toBe("image/png");
+      const b = Buffer.from(await r.arrayBuffer());
+      expect(b.subarray(1, 4).toString("latin1"), url).toBe("PNG");
+      return { w: b.readUInt32BE(16), h: b.readUInt32BE(20), colorType: b[25]! };
+    };
+    const pngs = manifest.icons.filter((i) => i.type === "image/png");
+    expect(pngs.map((i) => `${i.sizes} ${i.purpose}`).sort()).toEqual(["192x192 any", "512x512 any", "512x512 maskable"]);
+    for (const icon of pngs) {
+      expect(icon.src).toMatch(/^\/assets\/[a-z0-9-]+\.png\?v=[a-f0-9]{10}$/);
+      const { w, h } = await png(icon.src);
+      expect(`${w}x${h}`, icon.src).toBe(icon.sizes);
+    }
+    expect(manifest.icons.some((i) => i.type === "image/svg+xml" && i.sizes === "any")).toBe(true);
+    // iOS draws the touch icon on its own tile: it must be opaque (PNG colour type 2, RGB).
+    expect(await png(touchUrl)).toEqual({ w: 180, h: 180, colorType: 2 });
+  });
+
   it("answers an unknown page or posting with 404, and other methods with 405", async () => {
     expect((await call("GET", "/nope")).status).toBe(404);
     expect((await call("GET", "/o/doesnotexist")).status).toBe(404);

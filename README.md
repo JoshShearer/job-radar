@@ -180,7 +180,7 @@ JR_HOME=~/jr-restored npm run cli -- check
 
 ## Web UI
 
-`jr serve` runs the web UI on `127.0.0.1` (port `web.port` in `operations.yaml`, 4180 by default). It shows today's slate, the full ranking with filters, each posting's scores and history, applications, generated documents and system health. It accepts only the human's own statements, each through the same use case as the CLI: pursuit decisions, a submission you made (after an explicit "I submitted this application myself"), an outcome an employer gave you, and approval of a pack you have read. Anything that spends money, fills a form or sends anything stays on the command line. Pages carry no scripts.
+`jr serve` runs the web UI on `127.0.0.1` (port `web.port` in `operations.yaml`, 4180 by default). It shows today's slate, the full ranking with filters, each posting's scores and history, applications, generated documents and system health. It accepts only the human's own statements, each through the same use case as the CLI: pursuit decisions, a submission you made (after an explicit "I submitted this application myself"), an outcome an employer gave you, and approval of a pack you have read. Anything that spends money, fills a form or sends anything stays on the command line. Pages carry no scripts. Opened over the tailnet's HTTPS address it can be installed as an app (the browser's "Install" or "Add to Home Screen"); it ships a manifest and icons but no service worker, so nothing is cached and it needs the server reachable.
 
 To reach it from your other devices, put it behind `tailscale serve` on the host. That publishes it on your tailnet only, with HTTPS. First admit the host's tailnet name and your tailnet login in `operations.yaml`:
 
