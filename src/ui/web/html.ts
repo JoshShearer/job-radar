@@ -2,6 +2,9 @@ import { escapeHtml as esc } from "../../domain/materials/documents.js";
 import type { Priority } from "../../domain/evaluation/priority.js";
 import type { RankingRecord } from "../../ports/records.js";
 
+/** Light and dark page backgrounds (app.css --paper), used for the browser and installed-app chrome. */
+export const THEME = { light: "#ecefed", dark: "#11151b" } as const;
+
 /**
  * The web UI's building blocks. Every value interpolated into markup goes
  * through `esc`; the only raw HTML is what these helpers build themselves.
@@ -19,6 +22,10 @@ export interface Shell {
   css: string;
   /** Versioned tab icon URL. */
   icon: string;
+  /** Versioned web app manifest URL (installable PWA, no service worker). */
+  manifest: string;
+  /** Versioned opaque 180px icon for iOS home screens. */
+  touchIcon: string;
   /** Who is looking: a tailnet user, or someone on this machine. */
   viewer: { via: "loopback" } | { via: "tailnet"; login: string; name: string | null };
   /** Counts shown in the rail. */
@@ -78,6 +85,11 @@ export function page(s: Shell, body: string): string {
 <link rel="preload" href="/assets/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="${esc(s.css)}">
 <link rel="icon" href="${esc(s.icon)}" type="image/svg+xml">
+<link rel="manifest" href="${esc(s.manifest)}">
+<link rel="apple-touch-icon" href="${esc(s.touchIcon)}">
+<meta name="theme-color" content="${THEME.light}" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="${THEME.dark}" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-title" content="Job Radar">
 </head><body>
 <a class="skip" href="#main">Skip to content</a>
 <div class="frame">
