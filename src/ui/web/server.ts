@@ -9,7 +9,7 @@ import { isApplicationState, isPursuitState, recordOutcome, recordSubmission, tr
 import { approve } from "../../app/materials.js";
 import { UserError, type UseCaseResult } from "../../kernel/result.js";
 import { admit, sameOrigin, type Admission } from "./access.js";
-import { localDay, page, type Shell } from "./html.js";
+import { localDay, page, THEME, type Shell } from "./html.js";
 import { appsPage, generationPage, inFlightApplications, messagePage, parseRankedQuery, postingPage, rankedPage, readableFiles, submitPage, systemPage, todayPage, type PageContext } from "./pages.js";
 
 /**
@@ -35,8 +35,14 @@ const ASSETS: Record<string, string> = {
   "archivo-latin-ext.woff2": "font/woff2",
   "ARCHIVO-OFL.txt": "text/plain; charset=utf-8",
   "icon.svg": "image/svg+xml",
+  "icon-192.png": "image/png",
+  "icon-512.png": "image/png",
+  "icon-maskable-512.png": "image/png",
+  "apple-touch-icon.png": "image/png",
+  "manifest.webmanifest": "application/manifest+json",
 };
-const PAGE_CSP = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+const PAGE_CSP = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; manifest-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 /** Generated HTML documents are shown sandboxed: no script, no same-origin access, no network. */
 const DOC_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:";
 const MAX_BODY = 10_000;
@@ -51,12 +57,21 @@ export async function startServer(ctx: AppContext, opts: { port?: number } = {})
   const web = ctx.config().operations.web;
   const policy = { allowedHosts: web.allowed_hosts, allowedLogins: web.allowed_logins };
   const csrf = randomBytes(18).toString("hex");
-  const assets = new Map(Object.keys(ASSETS).map((name) => [name, readFileSync(resolve(ASSET_DIR, name))]));
+  const assets = new Map(
+    Object.keys(ASSETS)
+      .filter((name) => name !== "manifest.webmanifest")
+      .map((name) => [name, readFileSync(resolve(ASSET_DIR, name))]),
+  );
   const versioned = (name: string) => `/assets/${name}?v=${createHash("sha256").update(assets.get(name)!).digest("hex").slice(0, 10)}`;
+  // Built here, not a file, so the icon URLs it names carry their content hash
+  // like every other asset (they are served as immutable).
+  assets.set("manifest.webmanifest", Buffer.from(JSON.stringify(webManifest(versioned)), "utf8"));
   const cssUrl = versioned("app.css");
   const iconUrl = versioned("icon.svg");
+  const manifestUrl = versioned("manifest.webmanifest");
+  const touchIconUrl = versioned("apple-touch-icon.png");
   const flashes = new Map<string, Flash>();
-  const state: ServerState = { ctx, csrf, cssUrl, iconUrl, assets, flashes, policy };
+  const state: ServerState = { ctx, csrf, cssUrl, iconUrl, manifestUrl, touchIconUrl, assets, flashes, policy };
 
   const server = createServer((req, res) => {
     handle(state, req, res).catch((err: unknown) => {
@@ -81,11 +96,38 @@ export async function startServer(ctx: AppContext, opts: { port?: number } = {})
   };
 }
 
+/**
+ * The web app manifest that makes the UI installable (home screen, standalone
+ * window). There is deliberately no service worker: pages stay script-free,
+ * and nothing is cached, so an installed app never shows stale decisions.
+ */
+export function webManifest(url: (asset: string) => string): Record<string, unknown> {
+  return {
+    name: "Job Radar",
+    short_name: "Job Radar",
+    description: "Your ranked job search: today's slate, the ranking, and your applications.",
+    id: "/",
+    start_url: "/",
+    scope: "/",
+    display: "standalone",
+    background_color: THEME.light,
+    theme_color: THEME.light,
+    icons: [
+      { src: url("icon.svg"), sizes: "any", type: "image/svg+xml", purpose: "any" },
+      { src: url("icon-192.png"), sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: url("icon-512.png"), sizes: "512x512", type: "image/png", purpose: "any" },
+      { src: url("icon-maskable-512.png"), sizes: "512x512", type: "image/png", purpose: "maskable" },
+    ],
+  };
+}
+
 interface ServerState {
   ctx: AppContext;
   csrf: string;
   cssUrl: string;
   iconUrl: string;
+  manifestUrl: string;
+  touchIconUrl: string;
   assets: Map<string, Buffer>;
   flashes: Map<string, Flash>;
   policy: { allowedHosts: readonly string[]; allowedLogins: readonly string[] };
@@ -221,6 +263,8 @@ function shell(s: ServerState, access: Admission & { ok: true }, b: Briefing, ti
     csrf: s.csrf,
     css: s.cssUrl,
     icon: s.iconUrl,
+    manifest: s.manifestUrl,
+    touchIcon: s.touchIconUrl,
     viewer: access.via === "tailnet" ? { via: "tailnet", login: access.login, name: access.name } : { via: "loopback" },
     rail: {
       warnings: b.health.filter((h) => h.level === "warn").length,
