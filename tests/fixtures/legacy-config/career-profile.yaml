@@ -12,18 +12,18 @@ identity:
 compensation:
   currency: USD
   # Primary target band for base salary.
-  target_min: 160000
-  target_max: 180000
+  target_min: 120000
+  target_max: 140000
   # Below this we start down-ranking hard.
-  acceptable_min: 145000
+  acceptable_min: 110000
   # Absolute floor: a posted max below this is a hard reject.
-  reject_below_max: 135000
+  reject_below_max: 100000
   # Stretch band - roles credibly reaching here get a bonus.
-  stretch_min: 190000
-  stretch_max: 220000
+  stretch_min: 150000
+  stretch_max: 170000
   # Contract fallback, hourly.
-  contract_min_hourly: 85
-  contract_max_hourly: 110
+  contract_min_hourly: 60
+  contract_max_hourly: 80
   prefer_employment_type: full_time # full_time | contract | either
 
 location:

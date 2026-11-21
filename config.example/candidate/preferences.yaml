@@ -1,13 +1,13 @@
 compensation:
   currency: USD
-  target_min: 160000
-  target_max: 180000
-  acceptable_min: 145000
-  reject_below_max: 135000
-  stretch_min: 190000
-  stretch_max: 220000
-  contract_min_hourly: 85
-  contract_max_hourly: 110
+  target_min: 120000
+  target_max: 140000
+  acceptable_min: 110000
+  reject_below_max: 100000
+  stretch_min: 150000
+  stretch_max: 170000
+  contract_min_hourly: 60
+  contract_max_hourly: 80
   prefer_employment_type: full_time
 location:
   home_metro: Austin, TX
