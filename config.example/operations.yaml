@@ -39,7 +39,8 @@ mail:
   coverage_max_age_days: 3
 sweep:
   stale_after_days: 2
-# Timestamped .bak copies kept per file (personal.yaml, evidence.yaml); older ones are deleted after a successful write. Minimum 1.
+# Timestamped .bak copies kept per file (personal.yaml, evidence.yaml). After a successful write, older <file>.<timestamp>.bak
+# files in the same directory are deleted, whichever version of jr wrote them. Minimum 1.
 config_backups:
   keep: 10
 http:
