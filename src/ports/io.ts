@@ -107,8 +107,24 @@ export interface ArtifactStore {
     dir: string;
     files: Record<string, { sha256: string; bytes: number }>;
   };
-  path(dir: string, file: string): string;
-  read(dir: string, file: string): string | null;
+  /** With `expect` (the generation manifest's sha256 for the file) the bytes decide which copy is used. */
+  path(dir: string, file: string, expect?: ArtifactExpectation): string;
+  read(dir: string, file: string, expect?: ArtifactExpectation): string | null;
+  resolve(dir: string, file: string, expect?: ArtifactExpectation): ArtifactResolution;
+}
+
+export interface ArtifactExpectation {
+  sha256: string;
+}
+
+export interface ArtifactResolution {
+  path: string;
+  /** active: under the active data root; legacy: the recorded absolute path; missing: neither exists. */
+  source: "active" | "legacy" | "missing";
+  /** Set when a legacy copy was used although an active one exists or the recorded path is outside the root. */
+  warning?: string;
+  /** Set when a manifest hash was given and no existing copy matches it. */
+  mismatch?: string;
 }
 
 export interface FillInput {
