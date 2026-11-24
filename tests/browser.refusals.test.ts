@@ -22,7 +22,7 @@ import { loadPersonal } from "../src/adapters/fs/config-loader.js";
 import type { Personal } from "../src/domain/candidate/personal.js";
 import type { Evidence } from "../src/domain/candidate/evidence.js";
 
-const saveAnswers = (file: string, entries: Array<{ match: string; answer: string }>) => appendAnswers(file, entries, new Date().toISOString());
+const saveAnswers = (file: string, entries: Array<{ match: string; answer: string }>) => appendAnswers(file, entries, new Date().toISOString(), 10);
 
 /**
  * Stub employment history. Invented, and kept here rather than read from

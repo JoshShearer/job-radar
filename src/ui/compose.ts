@@ -65,6 +65,23 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
   let config: Config | null = null;
   let evidence: Evidence | null = null;
   const getConfig = () => (config ??= loadConfig(paths.config));
+  const log = o.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+
+  /**
+   * How many backups a YAML write keeps, or null (delete none) when the config
+   * cannot be read. Never throws: these writes save what a human typed into a
+   * form or a paid import, `fill` needs no other config, and an unrelated broken
+   * file must not cost either. No default is assumed, because deleting is final
+   * and the owner may have set a higher limit.
+   */
+  const backupsToKeep = (file: string): number | null => {
+    try {
+      return getConfig().operations.config_backups.keep;
+    } catch (e) {
+      log(`WARNING: the config could not be read, so no old backups were deleted beside ${file}. Fix it and the next write prunes them. ${(e as Error).message}`);
+      return null;
+    }
+  };
   const cliCwd = resolve(paths.home, "data", "claude-cli-cwd");
   const cliPromptDir = resolve(paths.home, "data", "claude-cli-prompts");
 
@@ -170,7 +187,7 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
     pdf: o.pdf ?? new PlaywrightPdf(),
     browser: () => o.browser ?? new PlaywrightApplicationBrowser(paths.browserProfile),
     prompter: o.prompter ?? terminalPrompter,
-    log: o.log ?? ((line) => process.stderr.write(`${line}\n`)),
+    log,
     paths: {
       reports: paths.reports,
       backups: paths.backups,
@@ -179,10 +196,10 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
       artifacts: paths.artifacts,
       config: paths.config,
     },
-    saveLearnedAnswers: (entries) => appendAnswers(paths.personal, entries, clock.now().toISOString()),
+    saveLearnedAnswers: (entries) => appendAnswers(paths.personal, entries, clock.now().toISOString(), backupsToKeep(paths.personal), log),
     saveEvidence: (e) => {
       evidence = null;
-      return saveEvidence(paths.evidence, e, clock.now().toISOString());
+      return saveEvidence(paths.evidence, e, clock.now().toISOString(), backupsToKeep(paths.evidence), log);
     },
     writeReport: (name, content) => {
       mkdirSync(paths.reports, { recursive: true });
