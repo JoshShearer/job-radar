@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { backup, restore } from "../src/app/recovery.js";
 import { FsRecoveryStore, hashTree } from "../src/adapters/fs/recovery-store.js";
-import { FsArtifactStore } from "../src/adapters/fs/artifact-store.js";
+import { FsArtifactStore, generationIdentity } from "../src/adapters/fs/artifact-store.js";
 import { openDatabase, probeDatabase, type DB } from "../src/adapters/sqlite/db.js";
 import { SqliteStore } from "../src/adapters/sqlite/store.js";
 import { FixedClock } from "../src/kernel/clock.js";
-import { buildManifest, manifestSchema, planRetention, treeProblems } from "../src/domain/recovery/recovery-set.js";
+import { buildManifest, manifestSchema, planRetention, recordedFiles, reconcileGenerations, reconciliationDifferences, treeProblems, type GenerationRef, type SetListing } from "../src/domain/recovery/recovery-set.js";
 
 /**
  * `jr backup` / `jr restore` through their use cases over the real
@@ -89,7 +89,7 @@ describe("jr backup", () => {
   it("a crash mid-backup leaves a .partial that is never counted, pruned or reported complete", async () => {
     const first = await run();
     // Simulate a crash: a set staged but never completed.
-    const crashed = await store.stage("jr-2026-10-14T13-00-00-000Z", { withArtifacts: true });
+    const crashed = await store.stage("jr-2026-10-14T13-00-00-000Z", { withArtifacts: true, clock });
     expect(crashed.dir.endsWith(".partial")).toBe(true);
     const r = await run({ keep: 1 });
     expect(r.outcome).toBe("degraded");
@@ -282,8 +282,9 @@ describe("jr backup: every included root is accounted for", () => {
   it("the manifest's included trees must match what the walker copied and what was hashed", () => {
     const database = { schemaVersion: 1, integrityCheck: "ok", tables: 1, rowCounts: { t: 0 } };
     const h = { sha256: "0".repeat(64), bytes: 0 };
+    const window = { startedAt: "2026-10-14T00:00:00.000Z", finishedAt: "2026-10-14T00:00:00.000Z" };
     const files = { "data/jr.sqlite": h, "config/a.yaml": h };
-    const base = { name: "jr-x", createdAt: "2026-10-14T00:00:00.000Z", app: { name: "jr", version: "1" }, database, withArtifacts: true, files };
+    const base = { name: "jr-x", createdAt: "2026-10-14T00:00:00.000Z", app: { name: "jr", version: "1" }, database, withArtifacts: true, files, capture: { database: window, config: window, artifacts: window }, generations: [] };
     const config = { path: "config/" as const, state: "copied" as const, files: ["config/a.yaml"] };
     expect(() => buildManifest({ ...base, trees: [config, { path: "artifacts/", state: "absent", files: [] }] })).not.toThrow();
     // A promised tree that was never checked, a copied file that was not hashed, a hashed file that was not copied, an "absent" tree with files.
@@ -448,7 +449,7 @@ describe("jr restore", () => {
   });
 
   it("refuses a .partial or manifest-less directory", async () => {
-    const crashed = await store.stage("jr-2026-10-14T13-00-00-000Z", { withArtifacts: false });
+    const crashed = await store.stage("jr-2026-10-14T13-00-00-000Z", { withArtifacts: false, clock });
     const r1 = await restore(store, { set: crashed.dir, to: join(base, "p1"), ...live() });
     expect(r1.outcome).toBe("refused");
     const done = await run();
@@ -496,5 +497,422 @@ describe("jr restore: the restored database is checked, not just hashed", () => 
     const back = await restore(store, { set: dir, to: join(base, "bad-rows"), ...live() });
     expect(back.outcome).toBe("failed");
     expect(back.notes.join("\n")).toMatch(/table run: manifest \d+, restored \d+/);
+  });
+});
+
+/* ------------------------------------------- reconciliation (JOB-80) */
+
+describe("recovery set: the database's generations against the staged artifacts", () => {
+  type V2 = Extract<ReturnType<typeof manifestSchema.parse>, { format: 2 }>;
+  const raw = (dir: string) => JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+  const manifestOf = (dir: string) => manifestSchema.parse(raw(dir)) as V2;
+  const checked = (dir: string) => {
+    const r = manifestOf(dir).reconciliation;
+    if (r.state !== "checked") throw new Error("expected a checked reconciliation");
+    return r;
+  };
+  const nameOf = (dir: string | null) => dir!.split("/").pop()!;
+  const recordRow = (id: string, dir: string, files: Record<string, { sha256: string; bytes: number }>) =>
+    new SqliteStore(db).recordArtifact(
+      { id, opportunityId: "opp-1", kind: "resume", planKey: "k", postingMaterial: "m", evidenceVersion: "e", dir, manifest: { files, attachment: null, coverLetter: null, answers: [], repairs: 0, rejectedSentences: 0 }, createdAt: clock.now().toISOString() },
+      null,
+    );
+  /** Publish and record one generation, as `jr tailor` does. */
+  const generation = (gen: string, files: Record<string, string> = { "resume.md": `# ${gen}\n` }, root = join(home, "artifacts")) => {
+    const p = new FsArtifactStore(root).publish("opp-1", gen, files);
+    recordRow(`art-${gen}`, p.dir, p.files);
+    return p;
+  };
+  /** Run `fn` once, right after the next database snapshot is taken and before anything else is copied. */
+  const afterSnapshot = (fn: () => void) => {
+    const orig = db.backup.bind(db);
+    (db as unknown as { backup: (d: string) => Promise<unknown> }).backup = async (d) => {
+      const r = await orig(d);
+      (db as unknown as { backup: unknown }).backup = orig;
+      fn();
+      return r;
+    };
+  };
+  const restoreTo = (dir: string, name: string) => restore(store, { set: dir, to: join(base, name), ...live() });
+  const rewrite = (dir: string, f: (m: ReturnType<typeof raw>) => unknown) => writeFileSync(join(dir, "manifest.json"), JSON.stringify(f(raw(dir)), null, 2));
+
+  it("a generation published and recorded while the backup runs is listed as an orphan, and the set restores", async () => {
+    generation("gen-a");
+    afterSnapshot(() => void generation("gen-b"));
+    const liveBefore = hashTree(join(home, "artifacts/opp-1/gen-a"));
+    const r = await run();
+    expect(r.outcome).toBe("ok");
+    const m = manifestOf(r.value.dir!);
+    // The live database already references gen-b; the snapshot in the set does not.
+    expect((db.prepare("SELECT COUNT(*) AS n FROM artifact").get() as { n: number }).n).toBe(2);
+    expect(m.database.rowCounts.artifact).toBe(1);
+    const rec = checked(r.value.dir!);
+    expect(rec).toMatchObject({ referenced: 1, held: ["opp-1/gen-a"], missing: [], otherFiles: [] });
+    // gen-1 was published by the fixture and never recorded, so it is an orphan too.
+    expect(rec.orphans).toEqual([{ generation: "opp-1/gen-1", files: 2 }, { generation: "opp-1/gen-b", files: 1 }]);
+    expect(r.value.orphans).toEqual(["opp-1/gen-1", "opp-1/gen-b"]);
+    expect(r.value.missing).toEqual([]);
+    expect(r.notes.join("\n")).toMatch(/opp-1\/gen-b/);
+    expect(store.inspect(r.value.dir!).problems).toEqual([]);
+    const back = await restoreTo(r.value.dir!, "orphan");
+    expect(back.outcome).toBe("ok");
+    expect(back.notes.join("\n")).not.toMatch(/differs/);
+    expect(hashTree(join(base, "orphan/artifacts/opp-1/gen-b"))).toEqual(hashTree(join(home, "artifacts/opp-1/gen-b")));
+    expect(hashTree(join(home, "artifacts/opp-1/gen-a"))).toEqual(liveBefore);
+  });
+
+  it("records when each store was captured, and restore says config may be newer than the database", async () => {
+    const t0 = clock.now().getTime() + 60_000;
+    afterSnapshot(() => {
+      clock.advanceMs(5_000);
+      writeFileSync(join(home, "config/search/strategy.yaml"), `${readFileSync(join(home, "config/search/strategy.yaml"), "utf8")}\n# edited during the backup\n`);
+    });
+    const r = await run();
+    expect(r.outcome).toBe("ok");
+    const at = (ms: number) => new Date(ms).toISOString();
+    const { capture } = manifestOf(r.value.dir!);
+    expect(capture.database).toEqual({ startedAt: at(t0), finishedAt: at(t0 + 5_000) });
+    expect(capture.config).toEqual({ startedAt: at(t0 + 5_000), finishedAt: at(t0 + 5_000) });
+    expect(capture.artifacts).toEqual({ startedAt: at(t0 + 5_000), finishedAt: at(t0 + 5_000) });
+    const back = await restoreTo(r.value.dir!, "config-newer");
+    expect(back.outcome).toBe("ok");
+    const note = back.notes.find((n) => /config\/ was copied after/.test(n));
+    expect(note).toContain(at(t0));
+    expect(note).toContain(at(t0 + 5_000));
+    expect(note).toMatch(/newer/);
+    expect(readFileSync(join(base, "config-newer/config/search/strategy.yaml"), "utf8")).toContain("edited during the backup");
+  });
+
+  it("each store's window is taken around that store's own copy", async () => {
+    // Every reading of this clock is one second later than the last.
+    let t = Date.parse("2026-11-24T12:00:00.000Z");
+    const ticking = { now: () => new Date((t += 1000)) };
+    const r = await backup({ clock: ticking }, store, { withArtifacts: true, keep: 14 });
+    const c = manifestOf(r.value.dir!).capture;
+    const order = [c.database.startedAt, c.database.finishedAt, c.config.startedAt, c.config.finishedAt, c.artifacts!.startedAt, c.artifacts!.finishedAt];
+    expect([...new Set(order)].sort()).toEqual(order);
+  });
+
+  it("a recorded generation missing from the set degrades the backup and the restore, and the set stays verified", async () => {
+    generation("gen-a");
+    const lost = generation("gen-b");
+    rmSync(lost.dir, { recursive: true });
+    const r = await run();
+    expect(r.outcome).toBe("degraded");
+    expect(r.value.missing).toEqual(["opp-1/gen-b"]);
+    expect(r.notes.join("\n")).toMatch(/opp-1\/gen-b.*resume\.md.*not in the set/);
+    expect(checked(r.value.dir!)).toMatchObject({ referenced: 2, held: ["opp-1/gen-a"], missing: [{ generation: "opp-1/gen-b", artifactId: "art-gen-b" }] });
+    expect(store.inspect(r.value.dir!).problems).toEqual([]);
+    expect(store.list().map((s) => s.state)).toEqual(["verified"]);
+    const back = await restoreTo(r.value.dir!, "missing");
+    expect(back.outcome).toBe("degraded");
+    expect(back.value.missing).toEqual(["opp-1/gen-b"]);
+    expect(back.notes.join("\n")).toMatch(/opp-1\/gen-b/);
+    expect(existsSync(join(base, "missing/data/jr.sqlite"))).toBe(true);
+  });
+
+  it("a generation with an altered or missing file counts as missing, and says which", async () => {
+    const altered = generation("gen-a", { "resume.md": "original", "cover.md": "kept" });
+    const partial = generation("gen-b", { "resume.md": "one", "cover.md": "two" });
+    // Same length, so only the hash can tell.
+    writeFileSync(join(altered.dir, "resume.md"), "0riginal");
+    rmSync(join(partial.dir, "cover.md"));
+    const r = await run();
+    expect(r.outcome).toBe("degraded");
+    const { missing, held } = checked(r.value.dir!);
+    expect(held).toEqual([]);
+    expect(missing.map((x) => [x.generation, x.problems])).toEqual([
+      ["opp-1/gen-a", [expect.stringMatching(/^resume\.md: .*sha256/)]],
+      ["opp-1/gen-b", [expect.stringMatching(/^cover\.md: .*not in the set/)]],
+    ]);
+  });
+
+  it("a row recorded under an old root is held when the active root has the bytes, and missing when only the old root does", async () => {
+    const old = join(base, "old-home/artifacts");
+    generation("gen-moved", { "resume.md": "same" }, old);
+    new FsArtifactStore(join(home, "artifacts")).publish("opp-1", "gen-moved", { "resume.md": "same" });
+    generation("gen-left", { "resume.md": "left behind" }, old);
+    const r = await run();
+    expect(r.outcome).toBe("degraded");
+    expect(checked(r.value.dir!).held).toEqual(["opp-1/gen-moved"]);
+    expect(r.value.missing).toEqual(["opp-1/gen-left"]);
+    expect(r.notes.join("\n")).toMatch(/copy it under artifacts\//);
+    expect(Object.keys(manifestOf(r.value.dir!).files).some((f) => f.includes("gen-left"))).toBe(false);
+  });
+
+  it("artifacts/ gone while the database references generations degrades, and nothing claims none were saved", async () => {
+    generation("gen-a");
+    rmSync(join(home, "artifacts"), { recursive: true });
+    const r = await run();
+    expect(r.outcome).toBe("degraded");
+    expect(r.value.missing).toEqual(["opp-1/gen-a"]);
+    const m = manifestOf(r.value.dir!);
+    expect(m.excluded.find((e) => e.path === "artifacts/")?.reason).toMatch(/^absent/);
+    expect(JSON.stringify(m)).not.toMatch(/no generation had been saved/);
+    expect(m.capture.artifacts).not.toBeNull();
+  });
+
+  it("--without-artifacts checks nothing, says so, and is not degraded by it", async () => {
+    generation("gen-a");
+    const r = await run({ withArtifacts: false });
+    expect(r.outcome).toBe("ok");
+    const m = manifestOf(r.value.dir!);
+    expect(m.reconciliation).toMatchObject({ state: "not-checked", referenced: 1 });
+    expect(m.capture.artifacts).toBeNull();
+    expect(r.notes.join("\n")).toMatch(/1 generation.*not checked/);
+    const back = await restoreTo(r.value.dir!, "without");
+    expect(back.outcome).toBe("ok");
+    expect(back.notes.join("\n")).toMatch(/--without-artifacts/);
+  });
+
+  it("an unreadable recorded file list is listed as not checkable, never a crash and never held", async () => {
+    generation("gen-a");
+    generation("gen-b");
+    db.prepare("UPDATE artifact SET manifest_json = 'not json' WHERE id = 'art-gen-a'").run();
+    const r = await run();
+    expect(r.outcome).toBe("degraded");
+    const rec = checked(r.value.dir!);
+    expect(rec.held).toEqual(["opp-1/gen-b"]);
+    expect(rec.missing).toEqual([{ generation: "opp-1/gen-a", artifactId: "art-gen-a", problems: [expect.stringMatching(/unreadable, so it could not be checked/)] }]);
+    // Recorded, so not an orphan either.
+    expect(rec.orphans.map((o) => o.generation)).toEqual(["opp-1/gen-1"]);
+  });
+
+  describe("retention", () => {
+    it("never prunes the only set holding a recorded generation the new set lacks, and names it", async () => {
+      const g = generation("gen-a");
+      const first = await run({ keep: 1 });
+      rmSync(g.dir, { recursive: true });
+      const second = await run({ keep: 1 });
+      expect(second.outcome).toBe("degraded");
+      expect(second.value.pruned).toEqual([]);
+      expect(second.notes.join("\n")).toMatch(new RegExp(`${nameOf(first.value.dir)}.*beyond --keep.*opp-1/gen-a`));
+      // Still there after another run, and the superseded newer set goes.
+      const third = await run({ keep: 1 });
+      expect(third.value.pruned).toEqual([nameOf(second.value.dir)]);
+      expect(store.list().map((s) => s.name)).toEqual([nameOf(first.value.dir), nameOf(third.value.dir)]);
+      // Copied back, the old set is no longer needed.
+      cpSync(join(first.value.dir!, "artifacts/opp-1/gen-a"), g.dir, { recursive: true });
+      const fourth = await run({ keep: 1 });
+      expect(fourth.outcome).toBe("ok");
+      expect(fourth.value.pruned).toEqual([nameOf(first.value.dir), nameOf(third.value.dir)]);
+    });
+
+    it("a --without-artifacts run never prunes the newest set holding the generations, and is not degraded by that", async () => {
+      generation("gen-a");
+      const older = await run({ keep: 5 });
+      const full = await run({ keep: 5 });
+      const r = await run({ keep: 1, withArtifacts: false });
+      expect(r.outcome).toBe("ok");
+      expect(r.value.pruned).toEqual([nameOf(older.value.dir)]);
+      expect(store.list().map((s) => s.name)).toEqual([nameOf(full.value.dir), nameOf(r.value.dir)]);
+      expect(r.notes.join("\n")).toMatch(/opp-1\/gen-a/);
+    });
+
+    it("a format-1 set that holds the generation counts as its holder", async () => {
+      const g = generation("gen-a");
+      const first = await run({ keep: 1 });
+      rewrite(first.value.dir!, asFormat1);
+      rmSync(g.dir, { recursive: true });
+      const second = await run({ keep: 1 });
+      expect(second.value.pruned).toEqual([]);
+    });
+
+    const A = { sha256: "a".repeat(64), bytes: 1 };
+    const B = { sha256: "b".repeat(64), bytes: 1 };
+    const set = (name: string, files: Record<string, typeof A>, state: SetListing["state"] = "verified"): SetListing => ({ name, state, problems: [], ...(state === "verified" ? { files } : {}) });
+    const ref: GenerationRef = { artifactId: "x", generation: "o/g", files: { "a.md": A, "b.md": B } };
+    const both = { "artifacts/o/g/a.md": A, "artifacts/o/g/b.md": B };
+
+    it("keeps only the newest holder, and only with the recorded bytes", () => {
+      const sets = [set("jr-1", both), set("jr-2", both), set("jr-3", { ...both, "artifacts/o/g/b.md": A }), set("jr-4", {}), set("jr-5", {})];
+      const plan = planRetention(sets, 1, "jr-5", [ref]);
+      expect(plan.prune).toEqual(["jr-1", "jr-3", "jr-4"]);
+      expect(plan.keptVerified).toEqual(["jr-2", "jr-5"]);
+      expect(plan.keptForGenerations).toEqual([{ name: "jr-2", generations: ["o/g"] }]);
+    });
+
+    it("keeps nothing extra when a set inside the quota holds it, when nothing does, or when the only holder is not verified", () => {
+      expect(planRetention([set("jr-1", both), set("jr-2", both), set("jr-3", {})], 2, "jr-3", [ref])).toMatchObject({ prune: ["jr-1"], keptForGenerations: [] });
+      expect(planRetention([set("jr-1", {}), set("jr-2", {})], 1, "jr-2", [ref])).toMatchObject({ prune: ["jr-1"], keptForGenerations: [] });
+      expect(planRetention([set("jr-0", both, "unverified"), set("jr-1", {}), set("jr-2", {})], 1, "jr-2", [ref]).prune).toEqual(["jr-1"]);
+      expect(planRetention([set("jr-1", both), set("jr-2", {})], 1, "jr-2", [{ ...ref, generation: null }]).prune).toEqual(["jr-1"]);
+    });
+
+    it("when no set holds the whole generation, keeps the newest holder of each recorded file the others lack", () => {
+      const sets = [set("jr-1", { "artifacts/o/g/a.md": A }), set("jr-2", { "artifacts/o/g/b.md": B }), set("jr-3", {}), set("jr-4", {})];
+      expect(planRetention(sets, 1, "jr-4", [ref]).prune).toEqual(["jr-3"]);
+      // Other bytes under the recorded name hold nothing, however new.
+      expect(planRetention([set("jr-1", { "artifacts/o/g/a.md": A }), set("jr-2", { "artifacts/o/g/a.md": B }), set("jr-3", {})], 1, "jr-3", [ref]).prune).toEqual(["jr-2"]);
+      // The new set already holds b: only a's holder is kept.
+      expect(planRetention([...sets, set("jr-5", { "artifacts/o/g/b.md": B })], 1, "jr-5", [ref]).prune).toEqual(["jr-2", "jr-3", "jr-4"]);
+    });
+
+    it("an unreadable file list keeps the newest set with any file of that generation", () => {
+      const unreadable: GenerationRef = { ...ref, files: null };
+      const sets = [set("jr-1", { "artifacts/o/g/a.md": A }), set("jr-2", { "artifacts/o/g/a.md": B }), set("jr-3", { "artifacts/o/g2/a.md": A }), set("jr-4", {})];
+      expect(planRetention(sets, 1, "jr-4", [unreadable]).prune).toEqual(["jr-1", "jr-3"]);
+    });
+  });
+
+  const asFormat1 = (m: ReturnType<typeof raw>) => {
+    const { capture: _c, reconciliation: _r, ...rest } = m;
+    return { ...rest, format: 1 };
+  };
+
+  describe("formats", () => {
+    it("a format-1 set verifies, is counted by retention, and restores ok even with a generation missing", async () => {
+      const g = generation("gen-a");
+      rmSync(g.dir, { recursive: true });
+      const r = await run();
+      rewrite(r.value.dir!, asFormat1);
+      expect(store.inspect(r.value.dir!).problems).toEqual([]);
+      const back = await restoreTo(r.value.dir!, "v1");
+      expect(back.outcome).toBe("ok");
+      expect(back.notes.join("\n")).toMatch(/format 1.*neither/);
+      const next = await run({ keep: 1 });
+      expect(next.value.pruned).toEqual([nameOf(r.value.dir)]);
+    });
+
+    it("format 1 with reconciliation, format 2 without it, and unknown formats are not manifests; none is deleted", async () => {
+      const r = await run();
+      const good = raw(r.value.dir!);
+      for (const bad of [{ ...good, format: 1 }, { ...asFormat1(good), format: 2 }, { ...good, format: 3 }, { ...good, reconciliation: { ...good.reconciliation, extra: 1 } }]) {
+        rewrite(r.value.dir!, () => bad);
+        expect(store.list()[0]!.state).toBe("no-manifest");
+      }
+      await run({ keep: 1 });
+      expect(existsSync(r.value.dir!)).toBe(true);
+    });
+
+    const fixture = JSON.parse(readFileSync(resolve(import.meta.dirname, "fixtures/recovery-sets/sets.json"), "utf8")) as { blobs: Record<string, string>; sets: Record<string, { name: string; files: Record<string, unknown> }> };
+    const lay = (key: string) => {
+      const m = fixture.sets[key]!;
+      const dir = join(backups(), m.name);
+      for (const f of Object.keys(m.files)) {
+        mkdirSync(join(dir, f, ".."), { recursive: true });
+        writeFileSync(join(dir, f), Buffer.from(fixture.blobs[f]!, "base64"));
+      }
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
+      return dir;
+    };
+    for (const [key, outcome, missing] of [
+      ["checked", "degraded", ["opp-1/gen-0"]],
+      ["absent", "degraded", ["opp-1/gen-1", "opp-1/gen-0"]],
+      ["not-checked", "ok", []],
+      ["format-1", "ok", []],
+    ] as const) {
+      it(`the checked-in ${key} set still verifies and restores, whatever today's wording is`, async () => {
+        const dir = lay(key);
+        expect(store.inspect(dir).problems).toEqual([]);
+        expect(store.list()).toEqual([expect.objectContaining({ state: "verified", files: fixture.sets[key]!.files })]);
+        const back = await restoreTo(dir, `fixture-${key}`);
+        expect(back.outcome).toBe(outcome);
+        expect(back.value.missing).toEqual(missing);
+        expect(back.notes.join("\n")).not.toMatch(/differs/);
+      });
+    }
+  });
+
+  describe("a manifest that disagrees with its own database", () => {
+    it("a hand edit moving a missing generation to held, or dropping an orphan, restores degraded with the re-derived result", async () => {
+      const g = generation("gen-a");
+      rmSync(g.dir, { recursive: true });
+      const r = await run();
+      rewrite(r.value.dir!, (m) => ({ ...m, reconciliation: { ...m.reconciliation, held: ["opp-1/gen-a"], missing: [], orphans: [] } }));
+      const back = await restoreTo(r.value.dir!, "edited");
+      expect(back.outcome).toBe("degraded");
+      expect(back.value.missing).toEqual(["opp-1/gen-a"]);
+      const notes = back.notes.join("\n");
+      expect(notes).toMatch(/reconciliation differs/);
+      for (const field of ["held", "missing", "orphans"]) expect(notes).toMatch(new RegExp(`${field}: manifest`));
+      expect(existsSync(join(base, "edited/data/jr.sqlite"))).toBe(true);
+    });
+
+    it("a dropped orphan alone is enough to degrade the restore", async () => {
+      const r = await run();
+      rewrite(r.value.dir!, (m) => ({ ...m, reconciliation: { ...m.reconciliation, orphans: [] } }));
+      const back = await restoreTo(r.value.dir!, "dropped");
+      expect(back.outcome).toBe("degraded");
+      expect(back.value.missing).toEqual([]);
+      expect(back.notes.join("\n")).toMatch(/orphans: manifest/);
+    });
+
+    it("a state that contradicts the capture record is unverified and refused", async () => {
+      const r = await run();
+      const good = raw(r.value.dir!);
+      const without = await run({ withArtifacts: false });
+      const goodWithout = raw(without.value.dir!);
+      for (const [dir, bad, why] of [
+        [r.value.dir!, { ...good, capture: { ...good.capture, artifacts: null } }, /checked.*never captured/],
+        [r.value.dir!, { ...good, reconciliation: goodWithout.reconciliation }, /not checked.*captured/],
+        [r.value.dir!, { ...good, reconciliation: goodWithout.reconciliation, capture: goodWithout.capture }, /holds artifacts/],
+        [without.value.dir!, { ...goodWithout, excluded: goodWithout.excluded.filter((e: { path: string }) => e.path !== "artifacts/") }, /not listed as excluded/],
+      ] as const) {
+        writeFileSync(join(dir, "manifest.json"), JSON.stringify(bad));
+        expect(store.inspect(dir).problems.join("\n")).toMatch(why);
+        expect((await restoreTo(dir, "contradiction")).outcome).toBe("refused");
+      }
+    });
+
+    it("a restored database whose generations cannot be read is reported, not hidden and not fatal", async () => {
+      rmSync(generation("gen-a").dir, { recursive: true });
+      const r = await run();
+      const broken = new (class extends FsRecoveryStore {
+        override generationRefs(): never {
+          throw new Error("no such table: artifact");
+        }
+      })(backups(), null);
+      const back = await restore(broken, { set: r.value.dir!, to: join(base, "unreadable"), ...live() });
+      expect(back.outcome).toBe("degraded");
+      expect(back.notes.join("\n")).toMatch(/could not be re-checked.*no such table: artifact/);
+      // What the manifest already knew is missing is still reported.
+      expect(back.value.missing).toEqual(["opp-1/gen-a"]);
+    });
+  });
+
+  describe("pure reconciliation", () => {
+    const h = (c: string) => ({ sha256: c.repeat(64), bytes: 1 });
+    const gref = (artifactId: string, generation: string | null, files: GenerationRef["files"]): GenerationRef => ({ artifactId, generation, files });
+
+    it("compares every ref with the hashed files: held, orphans, missing, other files", () => {
+      const files = { "data/jr.sqlite": h("0"), "config/artifacts/o/z/f.md": h("0"), "artifacts/o/held/f.md": h("a"), "artifacts/o/held/extra.md": h("b"), "artifacts/p/orphan/f.md": h("c"), "artifacts/p/orphan/sub/g.md": h("c"), "artifacts/loose.txt": h("d"), "artifacts/o/loose.txt": h("e") };
+      const r = reconcileGenerations([gref("1", "o/held", { "f.md": h("a") }), gref("2", "o/gone", { "f.md": h("a") }), gref("3", null, { "f.md": h("a") })], files);
+      expect(r).toEqual({
+        state: "checked",
+        referenced: 3,
+        held: ["o/held"],
+        orphans: [{ generation: "p/orphan", files: 2 }],
+        missing: [
+          { generation: "o/gone", artifactId: "2", problems: [expect.stringMatching(/f\.md/)] },
+          { generation: null, artifactId: "3", problems: [expect.stringMatching(/names no <opportunity>\/<generation>/)] },
+        ],
+        otherFiles: ["artifacts/loose.txt", "artifacts/o/loose.txt"],
+      });
+    });
+
+    it("two rows for one generation: held only when both are, and named once", () => {
+      const files = { "artifacts/o/g/f.md": h("a") };
+      expect(reconcileGenerations([gref("1", "o/g", { "f.md": h("a") }), gref("2", "o/g", { "f.md": h("a") })], files)).toMatchObject({ referenced: 2, held: ["o/g"], missing: [] });
+      expect(reconcileGenerations([gref("1", "o/g", { "f.md": h("a") }), gref("2", "o/g", { "f.md": h("b") })], files)).toMatchObject({ held: [], missing: [{ artifactId: "2" }], orphans: [] });
+    });
+
+    it("differences ignore order and wording, and see everything else", () => {
+      const a = reconcileGenerations([gref("1", "o/g", { "f.md": h("a") }), gref("2", "o/x", { "f.md": h("a") })], { "artifacts/o/g/f.md": h("a"), "artifacts/p/q/f.md": h("a"), "artifacts/l": h("a") });
+      expect(reconciliationDifferences(a, { ...a, missing: a.missing.map((m) => ({ ...m, problems: ["worded differently"] })) })).toEqual([]);
+      expect(reconciliationDifferences({ ...a, held: ["o/g", "o/b"] }, { ...a, held: ["o/b", "o/g"] })).toEqual([]);
+      for (const other of [{ ...a, referenced: 9 }, { ...a, held: [] }, { ...a, orphans: [{ generation: "p/q", files: 2 }] }, { ...a, missing: [] }, { ...a, missing: [{ ...a.missing[0]!, artifactId: "z" }] }, { ...a, otherFiles: [] }]) expect(reconciliationDifferences(a, other)).toHaveLength(1);
+    });
+
+    it("recordedFiles reads the file list, and is null for anything it cannot check", () => {
+      expect(recordedFiles(JSON.stringify({ files: { "a.md": h("a") }, attachment: null }))).toEqual({ "a.md": { sha256: "a".repeat(64) } });
+      for (const bad of ["", "nope", "null", "[]", "{}", '{"files":{}}', '{"files":[]}', '{"files":{"a.md":{"sha256":"short"}}}']) expect(recordedFiles(bad)).toBeNull();
+    });
+
+    it("generationIdentity is the last two segments, or null when they name nothing", () => {
+      expect(generationIdentity("/home/a/artifacts/opp-1/gen-1")).toBe("opp-1/gen-1");
+      expect(generationIdentity("/home/a/artifacts/opp-1/gen-1/")).toBe("opp-1/gen-1");
+      for (const bad of ["", "/", "gen-1", "/gen-1", "/a/..", "/a/.", "../gen-1", "/x/../gen-1"]) expect(generationIdentity(bad)).toBeNull();
+    });
   });
 });

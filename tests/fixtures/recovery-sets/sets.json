@@ -1,0 +1,328 @@
+{
+ "note": "Recovery sets as written by the formats named, checked in so a later change to wording or reconciliation rules cannot stop an old set verifying and restoring. Never regenerate with product code. blobs are base64 file bytes.",
+ "blobs": {
+  "data/jr.sqlite": "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",
+  "artifacts/opp-1/gen-1/resume.md": "IyBSZXN1bWUK",
+  "artifacts/opp-2/gen-9/a.md": "b3JwaGFuCg==",
+  "artifacts/notes.txt": "c3RyYXkK",
+  "config/search.yaml": "YTogMQo="
+ },
+ "sets": {
+  "checked": {
+   "format": 2,
+   "completed": true,
+   "name": "jr-checked",
+   "createdAt": "2026-11-24T12:00:00.000Z",
+   "app": {
+    "name": "job-radar",
+    "version": "2.0.0"
+   },
+   "database": {
+    "path": "data/jr.sqlite",
+    "schemaVersion": 2,
+    "integrityCheck": "ok",
+    "tables": 2,
+    "rowCounts": {
+     "artifact": 2,
+     "schema_migration": 1
+    }
+   },
+   "included": [
+    {
+     "path": "data/jr.sqlite",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "config/",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "artifacts/",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "excluded": [
+    {
+     "path": ".env",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "files": {
+    "data/jr.sqlite": {
+     "sha256": "d0e2f5df0bc527d22aa481755de04c5b60a4e21b0c70a3302a9178661d627e9e",
+     "bytes": 2048
+    },
+    "artifacts/opp-1/gen-1/resume.md": {
+     "sha256": "8176e5bc529c0e4817e62ba5527f17d52bc2268273b5a1a68c333034ae9e0f2d",
+     "bytes": 9
+    },
+    "artifacts/opp-2/gen-9/a.md": {
+     "sha256": "2b2d2fa0c84d999ef6544e65d0488c82b9c11c4a08b7bf2925d130b366a3795b",
+     "bytes": 7
+    },
+    "artifacts/notes.txt": {
+     "sha256": "43bab6c26bc03299f3e5108f37cfa190ef6446cfe38f4229204a0d6b88e4b102",
+     "bytes": 6
+    },
+    "config/search.yaml": {
+     "sha256": "37b128c59f1f5097f73f82691cb519f1f568667faab5ced1b4ab979d36837eae",
+     "bytes": 5
+    }
+   },
+   "capture": {
+    "database": {
+     "startedAt": "2026-11-24T12:00:00.000Z",
+     "finishedAt": "2026-11-24T12:00:01.000Z"
+    },
+    "config": {
+     "startedAt": "2026-11-24T12:00:01.000Z",
+     "finishedAt": "2026-11-24T12:00:02.000Z"
+    },
+    "artifacts": {
+     "startedAt": "2026-11-24T12:00:02.000Z",
+     "finishedAt": "2026-11-24T12:00:03.000Z"
+    }
+   },
+   "reconciliation": {
+    "state": "checked",
+    "referenced": 2,
+    "held": [
+     "opp-1/gen-1"
+    ],
+    "orphans": [
+     {
+      "generation": "opp-2/gen-9",
+      "files": 1
+     }
+    ],
+    "missing": [
+     {
+      "generation": "opp-1/gen-0",
+      "artifactId": "art-lost",
+      "problems": [
+       "resume.md: wording from when this set was written"
+      ]
+     }
+    ],
+    "otherFiles": [
+     "artifacts/notes.txt"
+    ]
+   }
+  },
+  "absent": {
+   "format": 2,
+   "completed": true,
+   "name": "jr-absent",
+   "createdAt": "2026-11-24T12:00:00.000Z",
+   "app": {
+    "name": "job-radar",
+    "version": "2.0.0"
+   },
+   "database": {
+    "path": "data/jr.sqlite",
+    "schemaVersion": 2,
+    "integrityCheck": "ok",
+    "tables": 2,
+    "rowCounts": {
+     "artifact": 2,
+     "schema_migration": 1
+    }
+   },
+   "included": [
+    {
+     "path": "data/jr.sqlite",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "config/",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "excluded": [
+    {
+     "path": ".env",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "artifacts/",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "files": {
+    "data/jr.sqlite": {
+     "sha256": "d0e2f5df0bc527d22aa481755de04c5b60a4e21b0c70a3302a9178661d627e9e",
+     "bytes": 2048
+    },
+    "config/search.yaml": {
+     "sha256": "37b128c59f1f5097f73f82691cb519f1f568667faab5ced1b4ab979d36837eae",
+     "bytes": 5
+    }
+   },
+   "capture": {
+    "database": {
+     "startedAt": "2026-11-24T12:00:00.000Z",
+     "finishedAt": "2026-11-24T12:00:01.000Z"
+    },
+    "config": {
+     "startedAt": "2026-11-24T12:00:01.000Z",
+     "finishedAt": "2026-11-24T12:00:02.000Z"
+    },
+    "artifacts": {
+     "startedAt": "2026-11-24T12:00:02.000Z",
+     "finishedAt": "2026-11-24T12:00:02.000Z"
+    }
+   },
+   "reconciliation": {
+    "state": "checked",
+    "referenced": 2,
+    "held": [],
+    "orphans": [],
+    "missing": [
+     {
+      "generation": "opp-1/gen-1",
+      "artifactId": "art-held",
+      "problems": [
+       "x"
+      ]
+     },
+     {
+      "generation": "opp-1/gen-0",
+      "artifactId": "art-lost",
+      "problems": [
+       "resume.md: wording from when this set was written"
+      ]
+     }
+    ],
+    "otherFiles": []
+   }
+  },
+  "not-checked": {
+   "format": 2,
+   "completed": true,
+   "name": "jr-not-checked",
+   "createdAt": "2026-11-24T12:00:00.000Z",
+   "app": {
+    "name": "job-radar",
+    "version": "2.0.0"
+   },
+   "database": {
+    "path": "data/jr.sqlite",
+    "schemaVersion": 2,
+    "integrityCheck": "ok",
+    "tables": 2,
+    "rowCounts": {
+     "artifact": 2,
+     "schema_migration": 1
+    }
+   },
+   "included": [
+    {
+     "path": "data/jr.sqlite",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "config/",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "excluded": [
+    {
+     "path": ".env",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "artifacts/",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "files": {
+    "data/jr.sqlite": {
+     "sha256": "d0e2f5df0bc527d22aa481755de04c5b60a4e21b0c70a3302a9178661d627e9e",
+     "bytes": 2048
+    },
+    "config/search.yaml": {
+     "sha256": "37b128c59f1f5097f73f82691cb519f1f568667faab5ced1b4ab979d36837eae",
+     "bytes": 5
+    }
+   },
+   "capture": {
+    "database": {
+     "startedAt": "2026-11-24T12:00:00.000Z",
+     "finishedAt": "2026-11-24T12:00:01.000Z"
+    },
+    "config": {
+     "startedAt": "2026-11-24T12:00:01.000Z",
+     "finishedAt": "2026-11-24T12:00:02.000Z"
+    },
+    "artifacts": null
+   },
+   "reconciliation": {
+    "state": "not-checked",
+    "referenced": 2,
+    "reason": "as worded when this set was written"
+   }
+  },
+  "format-1": {
+   "format": 1,
+   "completed": true,
+   "name": "jr-format-1",
+   "createdAt": "2026-11-24T12:00:00.000Z",
+   "app": {
+    "name": "job-radar",
+    "version": "2.0.0"
+   },
+   "database": {
+    "path": "data/jr.sqlite",
+    "schemaVersion": 2,
+    "integrityCheck": "ok",
+    "tables": 2,
+    "rowCounts": {
+     "artifact": 2,
+     "schema_migration": 1
+    }
+   },
+   "included": [
+    {
+     "path": "data/jr.sqlite",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "config/",
+     "reason": "as worded when this set was written"
+    },
+    {
+     "path": "artifacts/",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "excluded": [
+    {
+     "path": ".env",
+     "reason": "as worded when this set was written"
+    }
+   ],
+   "files": {
+    "data/jr.sqlite": {
+     "sha256": "d0e2f5df0bc527d22aa481755de04c5b60a4e21b0c70a3302a9178661d627e9e",
+     "bytes": 2048
+    },
+    "artifacts/opp-1/gen-1/resume.md": {
+     "sha256": "8176e5bc529c0e4817e62ba5527f17d52bc2268273b5a1a68c333034ae9e0f2d",
+     "bytes": 9
+    },
+    "artifacts/opp-2/gen-9/a.md": {
+     "sha256": "2b2d2fa0c84d999ef6544e65d0488c82b9c11c4a08b7bf2925d130b366a3795b",
+     "bytes": 7
+    },
+    "artifacts/notes.txt": {
+     "sha256": "43bab6c26bc03299f3e5108f37cfa190ef6446cfe38f4229204a0d6b88e4b102",
+     "bytes": 6
+    },
+    "config/search.yaml": {
+     "sha256": "37b128c59f1f5097f73f82691cb519f1f568667faab5ced1b4ab979d36837eae",
+     "bytes": 5
+    }
+   }
+  }
+ }
+}

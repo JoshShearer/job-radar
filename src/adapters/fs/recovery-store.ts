@@ -9,15 +9,19 @@ import {
   manifestProblems,
   manifestSchema,
   PARTIAL_SUFFIX,
+  recordedFiles,
   SET_PREFIX,
   type BackupManifest,
   type DatabaseSnapshot,
   type FileHashes,
+  type GenerationRef,
   type SetListing,
   type TreeCopy,
   type TreePath,
 } from "../../domain/recovery/recovery-set.js";
-import { backupDatabase, probeDatabase, type DB } from "../sqlite/db.js";
+import { iso, type Clock } from "../../kernel/clock.js";
+import { backupDatabase, probeDatabase, readGenerationRows, type DB } from "../sqlite/db.js";
+import { generationIdentity } from "./artifact-store.js";
 import { writeFileAtomic } from "./yaml-writers.js";
 import { PACKAGE_ROOT } from "./paths.js";
 
@@ -52,7 +56,7 @@ export class FsRecoveryStore implements RecoveryStore {
     return null;
   }
 
-  async stage(name: string, opts: { withArtifacts: boolean }): Promise<StagedSet> {
+  async stage(name: string, opts: { withArtifacts: boolean; clock: Clock }): Promise<StagedSet> {
     if (!this.live) throw new Error("no live data to back up");
     const refusal = this.stagingProblem(opts);
     if (refusal) throw new Error(refusal);
@@ -60,14 +64,33 @@ export class FsRecoveryStore implements RecoveryStore {
     for (let i = 2; existsSync(join(this.root, finalName)) || existsSync(join(this.root, finalName + PARTIAL_SUFFIX)); i++) finalName = `${name}-${i}`;
     const dir = join(this.root, finalName + PARTIAL_SUFFIX);
     mkdirSync(dir, { recursive: true });
-    await backupDatabase(this.live.db, join(dir, DB_PATH));
-    const database = probeDatabase(join(dir, DB_PATH));
+    // The database first: a row is recorded only after its generation is renamed into place, so every
+    // generation the snapshot references is on disk by the time artifacts/ is copied.
+    const staged = join(dir, DB_PATH);
+    const databaseFrom = iso(opts.clock);
+    await backupDatabase(this.live.db, staged);
+    const databaseWindow = { startedAt: databaseFrom, finishedAt: iso(opts.clock) };
+    const database = probeDatabase(staged);
+    const generations = this.generationRefs(staged);
     // Symlinks are followed: the set holds the real bytes, so it never depends on (or dangles into) the live tree.
     const forbidden = this.canonical(this.root);
-    const trees: TreeCopy[] = [copyRoot("config/", this.live.config, dir, { skip: () => false, forbidden })];
+    const copy = (path: TreePath, src: string, skip: (name: string) => boolean) => {
+      const startedAt = iso(opts.clock);
+      const tree = copyRoot(path, src, dir, { skip, forbidden });
+      return { tree, window: { startedAt, finishedAt: iso(opts.clock) } };
+    };
+    const config = copy("config/", this.live.config, () => false);
     // A `.tmp-*` sibling is a generation still being written (or abandoned): never part of the set.
-    if (opts.withArtifacts) trees.push(copyRoot("artifacts/", this.live.artifacts, dir, { skip: (n) => n.startsWith(".tmp-"), forbidden }));
-    return { name: finalName, dir, database, trees, files: hashTree(dir) };
+    const artifacts = opts.withArtifacts ? copy("artifacts/", this.live.artifacts, (n) => n.startsWith(".tmp-")) : null;
+    return {
+      name: finalName,
+      dir,
+      database,
+      trees: artifacts ? [config.tree, artifacts.tree] : [config.tree],
+      files: hashTree(dir),
+      capture: { database: databaseWindow, config: config.window, artifacts: artifacts?.window ?? null },
+      generations,
+    };
   }
 
   complete(staged: StagedSet, manifest: BackupManifest): string {
@@ -88,7 +111,7 @@ export class FsRecoveryStore implements RecoveryStore {
         if (name.endsWith(PARTIAL_SUFFIX)) return { name, state: "partial", problems: ["incomplete: the backup that wrote it did not finish"] };
         const { manifest, problems } = this.inspect(join(this.root, name));
         if (!manifest) return { name, state: "no-manifest", problems };
-        return { name, state: problems.length === 0 ? "verified" : "unverified", problems };
+        return problems.length === 0 ? { name, state: "verified", problems, files: manifest.files } : { name, state: "unverified", problems };
       });
   }
 
@@ -155,6 +178,10 @@ export class FsRecoveryStore implements RecoveryStore {
 
   probeDatabase(file: string): DatabaseSnapshot {
     return probeDatabase(file);
+  }
+
+  generationRefs(file: string): GenerationRef[] {
+    return readGenerationRows(file).map((r) => ({ artifactId: r.id, generation: generationIdentity(r.dir), files: recordedFiles(r.manifestJson) }));
   }
 }
 
