@@ -7,7 +7,7 @@ import { appendAnswers } from "../src/adapters/fs/yaml-writers.js";
 import { loadPersonal } from "../src/adapters/fs/config-loader.js";
 import type { FieldOutcome } from "../src/adapters/browser/playwright-filler.js";
 
-const saveAnswers = (file: string, entries: Array<{ match: string; answer: string }>) => appendAnswers(file, entries, new Date().toISOString());
+const saveAnswers = (file: string, entries: Array<{ match: string; answer: string }>) => appendAnswers(file, entries, new Date().toISOString(), 10);
 
 /**
  * JOB-14. The point of the tool is that a question answered once stays

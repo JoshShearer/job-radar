@@ -253,6 +253,13 @@ export const OperationsSchema = z
       })
       .strict()
       .prefault({}),
+    /** How many timestamped `.bak` copies of personal.yaml and evidence.yaml each write keeps. */
+    config_backups: z
+      .object({
+        keep: z.number().int().min(1).default(10),
+      })
+      .strict()
+      .prefault({}),
     http: z
       .object({
         delay_ms: z

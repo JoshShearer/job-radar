@@ -179,10 +179,10 @@ export function compose(env: NodeJS.ProcessEnv = process.env, o: ComposeOverride
       artifacts: paths.artifacts,
       config: paths.config,
     },
-    saveLearnedAnswers: (entries) => appendAnswers(paths.personal, entries, clock.now().toISOString()),
+    saveLearnedAnswers: (entries) => appendAnswers(paths.personal, entries, clock.now().toISOString(), getConfig().operations.config_backups.keep, o.log ?? undefined),
     saveEvidence: (e) => {
       evidence = null;
-      return saveEvidence(paths.evidence, e, clock.now().toISOString());
+      return saveEvidence(paths.evidence, e, clock.now().toISOString(), getConfig().operations.config_backups.keep, o.log ?? undefined);
     },
     writeReport: (name, content) => {
       mkdirSync(paths.reports, { recursive: true });

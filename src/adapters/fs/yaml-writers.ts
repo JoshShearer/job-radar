@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { parseDocument, stringify, YAMLSeq } from "yaml";
 import type { Evidence } from "../../domain/candidate/evidence.js";
 
@@ -11,17 +11,82 @@ export function writeFileAtomic(file: string, content: string): void {
   renameSync(tmp, file);
 }
 
-function backupName(file: string, at: string): string {
-  return `${file}.${at.replace(/[:.]/g, "-").slice(0, 19)}.bak`;
+const STAMP = String.raw`\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-(\d+))?`;
+
+const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function stamp(at: string): string {
+  return at.replace(/[:.]/g, "-").slice(0, 19);
 }
 
-export function saveEvidence(file: string, e: Evidence, at: string): string | null {
-  let backup: string | null = null;
-  if (existsSync(file)) {
-    backup = backupName(file, at);
-    copyFileSync(file, backup);
+/**
+ * Copy `file` to `<file>.<stamp>.bak`, never overwriting an existing backup:
+ * two writes in the same second get `-1`, `-2`... suffixes.
+ */
+function backUp(file: string, at: string): string {
+  // Start above any same-second backup still on disk: pruning frees low names,
+  // and reusing one would make a newer backup sort as the oldest.
+  const same = new RegExp(`^${escapeRe(basename(file))}\\.${stamp(at)}(?:-(\\d+))?\\.bak$`);
+  let taken = -1;
+  try {
+    for (const name of readdirSync(dirname(file))) {
+      const m = same.exec(name);
+      if (m) taken = Math.max(taken, m[1] ? Number(m[1]) : 0);
+    }
+  } catch {
+    /* the EXCL copy below is the real guard */
   }
+  for (let n = taken + 1; ; n++) {
+    const backup = `${file}.${stamp(at)}${n ? `-${n}` : ""}.bak`;
+    try {
+      copyFileSync(file, backup, constants.COPYFILE_EXCL);
+      return backup;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+  }
+}
+
+/**
+ * Delete this writer's own backups of `file` beyond the newest `keep`, oldest
+ * first. Only `<base>.<YYYY-MM-DDTHH-MM-SS>[-n].bak` next to the file matches;
+ * anything else (v1-era names, `*-pre-web.bak`, another file's backups) is left
+ * alone. Runs only after the write succeeded and never touches `current`. A
+ * failure to delete is reported through `warn` and never undoes the write.
+ */
+function pruneBackups(file: string, current: string, keep: number, warn: (m: string) => void): void {
+  const base = basename(file);
+  const dir = dirname(file);
+  const own = new RegExp(`^${escapeRe(base)}\\.(${STAMP})\\.bak$`);
+  try {
+    const found: Array<{ name: string; stamp: string; n: number }> = [];
+    for (const name of readdirSync(dir)) {
+      const m = own.exec(name);
+      if (!m) continue;
+      found.push({ name, stamp: m[1]!.slice(0, 19), n: m[2] ? Number(m[2]) : 0 });
+    }
+    found.sort((a, b) => (a.stamp < b.stamp ? -1 : a.stamp > b.stamp ? 1 : a.n - b.n));
+    const surplus = found.length - Math.max(1, keep);
+    for (const f of found.slice(0, Math.max(0, surplus))) {
+      const path = join(dir, f.name);
+      if (path === current) continue;
+      try {
+        unlinkSync(path);
+      } catch (e) {
+        warn(`could not prune old backup ${path}: ${(e as Error).message}`);
+      }
+    }
+  } catch (e) {
+    warn(`could not prune backups of ${file}: ${(e as Error).message}`);
+  }
+}
+
+const stderrWarn = (m: string): void => void process.stderr.write(`${m}\n`);
+
+export function saveEvidence(file: string, e: Evidence, at: string, keep: number, warn: (m: string) => void = stderrWarn): string | null {
+  const backup = existsSync(file) ? backUp(file, at) : null;
   writeFileAtomic(file, stringify(e, { lineWidth: 0 }));
+  if (backup) pruneBackups(file, backup, keep, warn);
   return backup;
 }
 
@@ -30,11 +95,10 @@ export function saveEvidence(file: string, e: Evidence, at: string): string | nu
  * candidate's comments and formatting survive. The original is copied aside
  * first: it is a statement of fact and software is never its only copy.
  */
-export function appendAnswers(file: string, entries: ReadonlyArray<{ match: string; answer: string }>, at: string): string | null {
+export function appendAnswers(file: string, entries: ReadonlyArray<{ match: string; answer: string }>, at: string, keep: number, warn: (m: string) => void = stderrWarn): string | null {
   if (!entries.length) return null;
   const original = readFileSync(file, "utf8");
-  const backup = backupName(file, at);
-  copyFileSync(file, backup);
+  const backup = backUp(file, at);
   const doc = parseDocument(original);
   let list = doc.get("answers");
   if (!(list instanceof YAMLSeq)) {
@@ -43,5 +107,6 @@ export function appendAnswers(file: string, entries: ReadonlyArray<{ match: stri
   }
   for (const e of entries) (list as YAMLSeq).add(doc.createNode({ match: e.match, answer: e.answer }));
   writeFileAtomic(file, doc.toString({ lineWidth: 0 }));
+  pruneBackups(file, backup, keep, warn);
   return backup;
 }

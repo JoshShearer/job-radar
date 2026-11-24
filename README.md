@@ -66,10 +66,12 @@ Dependency direction is enforced by `tests/architecture.test.ts`. Domain imports
 | `candidate/evidence.yaml` | you | **every claim about you**, with ids, skills and `verified` |
 | `candidate/personal.yaml` | you | form-filling facts; `null` means unknown, never a default |
 | `policy/evaluation.yaml` | tuning | scoring weights, priority bands, routing, selection caps, lifecycle |
-| `operations.yaml` | operations | budgets, model provider and choices, mail, transport |
+| `operations.yaml` | operations | budgets, model provider and choices, mail, config backups, transport |
 | `sources.yaml` | your search | boards and watchlist |
 
 Every file is strict: an unknown key is an error, and cross-file coherence (lane weights, ordered bands, known lanes) is checked on load. The transport refuses a delay below 500 ms in config *and* in code.
+
+Every write to `personal.yaml` or `evidence.yaml` first copies the file to `<file>.<timestamp>.bak` beside it (a same-second write gets `-1`, `-2`, ...). After the write succeeds, only the newest `config_backups.keep` (default 10, minimum 1) of those are kept; the oldest are deleted. Only that exact name pattern is ever pruned: older backups with other names, such as v1-era `personal.yaml.*.bak` in `config/` or `operations.yaml.*-pre-web.bak`, are never touched, and deleting them is up to you. A backup that cannot be deleted is reported on stderr.
 
 `candidate/evidence.yaml` accepts the old `resume.yaml` shape (`bullets`, a single `headline`/`summary`). Prefer `claims` and several `headlines` / `summaries` variants: tailoring selects among them and never writes one. A claim's `scope` (`led`, `owned`, `built`, `contributed`, `used`) is derived from its wording unless set explicitly.
 
