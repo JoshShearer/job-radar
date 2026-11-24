@@ -78,3 +78,13 @@ export function probeDatabase(file: string): { schemaVersion: number; integrityC
     db.close();
   }
 }
+
+/** Every artifact row of a database file, in the order they were recorded. Read-only, like `probeDatabase`. */
+export function readGenerationRows(file: string): { id: string; dir: string; manifestJson: string }[] {
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare("SELECT id, dir, manifest_json AS manifestJson FROM artifact ORDER BY rowid").all() as { id: string; dir: string; manifestJson: string }[];
+  } finally {
+    db.close();
+  }
+}

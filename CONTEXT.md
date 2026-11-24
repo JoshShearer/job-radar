@@ -96,6 +96,13 @@ _Avoid_: rejecting, correcting, fixing
 **Generation**:
 One immutable directory of material for one opportunity (a resume, or a **pack**: cover letter and form answers). Re-rendering writes a new generation; a sent one is never overwritten. A pack is used by `fill` only after it is **approved**.
 
+**Recovery set**:
+What `jr backup` writes: a database snapshot, `config/` and `artifacts/`, with a manifest written last. **Verified** means every file still matches the manifest; only verified sets are counted, pruned or restored.
+_Avoid_: dump, archive
+
+**Orphan** and **missing** generation:
+An orphan is in a recovery set but not referenced by its database snapshot: accepted and listed. A missing generation is referenced but not in the set with its recorded bytes: never silent, always `degraded`, never a reason to make the set unverified. See ADR 0005.
+
 ### Applying
 
 **Fill** and **submit**:

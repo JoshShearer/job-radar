@@ -56,7 +56,7 @@ export class FsArtifactStore implements ArtifactStore {
    * when neither matches the mismatch is reported, never silently resolved.
    */
   resolve(dir: string, file: string, expect?: ArtifactExpectation): ArtifactResolution {
-    const active = join(this.root, basename(dirname(dir)), basename(dir), file);
+    const active = join(this.root, ...segments(dir), file);
     const legacy = join(dir, file);
     const hasActive = existsSync(active);
     const hasLegacy = !samePath(active, legacy) && existsSync(legacy);
@@ -83,6 +83,16 @@ export class FsArtifactStore implements ArtifactStore {
       mismatch: `${file}: neither copy matches the generation manifest (${tried})`,
     };
   }
+}
+
+/** `<opportunity>/<generation>`: what `resolve` looks up under the active root. Null when the recorded directory does not name one. */
+export function generationIdentity(dir: string): string | null {
+  const parts = segments(dir);
+  return parts.some((p) => p === "" || p === "." || p === "..") ? null : parts.join("/");
+}
+
+function segments(dir: string): [opportunity: string, generation: string] {
+  return [basename(dirname(dir)), basename(dir)];
 }
 
 function hashOf(p: string): string | null {
