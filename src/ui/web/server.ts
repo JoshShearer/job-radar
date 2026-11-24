@@ -319,8 +319,9 @@ async function get(s: ServerState, access: Admission & { ok: true }, res: Server
   const { others, docs } = readableFiles(g);
   if (!entry || (!others.includes(file) && !docs.includes(file))) return notFound(`${file} is not a readable file of this generation.`);
   let bytes: Buffer;
+  const found = ctx.artifacts.resolve(g.dir, file, { sha256: entry.sha256 });
   try {
-    bytes = readFileSync(ctx.artifacts.path(g.dir, file));
+    bytes = readFileSync(found.path);
   } catch {
     return notFound(`${file} is missing from disk.`);
   }
@@ -334,6 +335,7 @@ async function get(s: ServerState, access: Admission & { ok: true }, res: Server
     "cache-control": "no-store",
     "content-security-policy": file.endsWith(".pdf") ? "default-src 'none'; object-src 'self'" : DOC_CSP,
     "content-disposition": `inline; filename="${file.replace(/[^A-Za-z0-9._-]/g, "_")}"`,
+    ...(found.warning ? { "x-artifact-warning": found.warning.replace(/[^\x20-\x7e]/g, "?") } : {}),
   });
   res.end(bytes);
 }

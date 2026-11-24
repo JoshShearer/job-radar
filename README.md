@@ -118,7 +118,7 @@ The CLI adds context of its own that we cannot remove (your account email, its c
 
 Selection for assessment is by **rank**, spread across companies with per-company caps, and never gated on an absolute keyword score. Two-stage routing (a cheap triage verdict, then a dossier only when earned) is deterministic and configured in `policy/evaluation.yaml`.
 
-`jr tailor` and `jr prepare` reuse their plan unless the **posting** changed materially. An evidence edit re-composes and re-verifies the saved plan for free, so a stale plan can miss a new claim but can never assert a removed one. `--force` re-plans on purpose. Generations are immutable directories under `artifacts/`; an older one that may already have been sent is never overwritten.
+`jr tailor` and `jr prepare` reuse their plan unless the **posting** changed materially. An evidence edit re-composes and re-verifies the saved plan for free, so a stale plan can miss a new claim but can never assert a removed one. `--force` re-plans on purpose. Generations are immutable directories under `artifacts/`; an older one that may already have been sent is never overwritten. A generation is found by its logical identity (`<opportunity>/<generation>`) under the active `artifacts/` root first; the recorded absolute path is only a legacy fallback, so a stale old data directory left after a restore is never read in preference. When the generation manifest's sha256 is known (the web UI's file view), the bytes decide: a legacy copy is used, with a warning, only if the active one fails the hash and it passes; if neither matches, the mismatch is reported.
 
 ## Outbound text
 
