@@ -28,8 +28,6 @@ sources:
         company: Attentive
       - token: customerio
         company: Customer.io
-      - token: iterable
-        company: Iterable
       - token: coursera
         company: Coursera
       - token: udemy
@@ -78,10 +76,6 @@ sources:
         company: LaunchDarkly
       - token: mixpanel
         company: Mixpanel
-      - token: amplitude
-        company: Amplitude
-      - token: hightouch
-        company: Hightouch
       - token: planetscale
         company: PlanetScale
       - token: airtable
@@ -116,8 +110,6 @@ sources:
         company: Fivetran
       - token: cockroachlabs
         company: Cockroach Labs
-      - token: clickhouse
-        company: ClickHouse
       - token: grafanalabs
         company: Grafana Labs
       - token: honeycomb
@@ -200,8 +192,6 @@ sources:
         company: Salesloft
       - token: keystone
         company: Keystone
-      - token: parloa
-        company: Parloa
       - token: intercom
         company: Intercom
   lever:
@@ -221,8 +211,6 @@ sources:
         company: Olo
       - token: neon
         company: Neon
-      - token: anyscale
-        company: Anyscale
       - token: brilliant
         company: Brilliant
       - token: ro
@@ -282,8 +270,6 @@ sources:
         company: Modal
       - token: fireworks
         company: Fireworks AI
-      - token: browserbase
-        company: Browserbase
       - token: e2b
         company: E2B
       - token: braintrust
@@ -426,8 +412,6 @@ sources:
         company: Mutiny
       - token: hockeystack
         company: HockeyStack
-      - token: commonroom
-        company: Common Room
       - token: gorgias
         company: Gorgias
       - token: kustomer
@@ -442,6 +426,16 @@ sources:
         company: Mem0
       - token: letta
         company: Letta
+      - token: amplitude
+        company: Amplitude
+      - token: clickhouse
+        company: ClickHouse
+      - token: iterable
+        company: Iterable
+      - token: parloa
+        company: Parloa
+      - token: anyscale
+        company: Anyscale
   # Workable and SmartRecruiters list a board without descriptions, so a sweep
   # makes one list call plus one detail call per posting, all through the
   # rate-limited transport (docs/adr/0003-two-call-providers-fetch-every-detail.md).
@@ -481,3 +475,9 @@ watchlist:
     why: Dev platform, Next.js-native
   - company: Belong
     why: Proptech / smart building. Lever board 404'd on 2026-08-13; discover found nothing on Greenhouse/Lever/Ashby. Workable and SmartRecruiters not checked.
+  - company: Hightouch
+    why: Greenhouse board 404s (2026-11-25). Its Ashby board has one posting, from 2021; Lever 404s. Workable and SmartRecruiters not checked.
+  - company: Browserbase
+    why: Ashby board 404s (2026-11-25); nothing on Greenhouse or Lever. Workable and SmartRecruiters not checked.
+  - company: Common Room
+    why: Ashby board 404s (2026-11-25); nothing on Greenhouse or Lever. Workable and SmartRecruiters not checked.
