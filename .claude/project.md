@@ -13,7 +13,7 @@ a link: its checks are the product thesis and were written for this repo.
 | One line | Local-first job search assistant: sweeps public job boards, ranks postings deterministically, and prepares (never sends) tailored, allowlist-verified application material |
 | Default branch | `main` |
 | Agent instructions | `CLAUDE.md`. Vocabulary: `CONTEXT.md`. Decisions: `docs/adr/`. Design: `README.md` |
-| Remote | `origin` (`JoshShearer/job-radar`, private) |
+| Remote | `origin` (`JoshShearer/job-radar`, **public**: everything pushed is readable by anyone) |
 
 ## Repos
 
@@ -109,7 +109,7 @@ mechanically.
 `allowed` - this repo's commands may push a ticket branch, open its PR against `main`, merge it
 after Verify, and edit its Linear issue without asking. Base and merge target is `main`
 (`origin/HEAD`); merging deploys nothing, the daily timer runs the owner's primary checkout, which
-moves only when the owner pulls. There is no branch protection (private repo, free plan).
+moves only when the owner pulls. There is no branch protection (checked 2026-11-25; the repo is public).
 docs-only commits to the default branch: allowed.
 
 ## Worktrees

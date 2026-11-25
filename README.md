@@ -49,8 +49,8 @@ src/
   kernel/      clock, hashing, use-case results
   domain/      pure rules: text parsing, catalog, evaluation, candidate, materials, pursuit, outcomes, browser policy, budgets, prompts
   ports/       interfaces and records the app depends on (store, transport, model, mailbox, browser, pdf, artifacts)
-  app/         use cases: sweep, evaluate, assess, tailor, prepare, approve, fill, mail, pursuit, briefing, spend, legacy import
-  adapters/    SQLite, HTTP transport, ATS boards, Anthropic, Gmail/.eml, Playwright, filesystem, legacy reader
+  app/         use cases: sweep, discover, evaluate, assess, benchmark, evidence, tailor, prepare, approve, fill, mail, pursuit, briefing, spend, recovery, legacy import
+  adapters/    SQLite, HTTP transport, ATS boards, Anthropic API, Claude Code CLI, Gmail/.eml, Playwright, filesystem, legacy reader
   ui/          CLI, local web UI, report rendering, the composition root
 config.example/  search/strategy, candidate/preferences, policy/evaluation, operations, sources, candidate examples
 ```
