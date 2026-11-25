@@ -22,7 +22,38 @@ has. Subagent prompts get the sections their phase names, verbatim.
 ## Step 4: lane setup
 
 `pnpm install --frozen-lockfile`, `npm run cli -- init`, confirm `npx playwright install chromium`
-has been run on this machine, then `$OPS gates`. Link nothing from the primary.
+has been run on this machine, then the two blocks below, then `$OPS guard --snapshot` and
+`$OPS gates`. Link nothing from the primary.
+
+`init` copies seven files from `config.example/`. Five are untracked, and `branch` refuses a dirty
+lane. Remove them, only when byte-identical to the example; on a difference stop and look:
+
+```bash
+(
+cd "$RUN_WT" || exit 1
+for f in operations.yaml sources.yaml candidate/preferences.yaml policy/evaluation.yaml search/strategy.yaml; do
+  [ -e "config/$f" ] || continue
+  cmp "config/$f" "config.example/$f" && rm -- "config/$f" || { echo "config/$f differs from its example: stop"; exit 1; }
+done
+[ -z "$(git status --short)" ] || { git status --short; echo "lane is dirty: stop"; exit 1; }
+)
+```
+
+The other two, `config/candidate/personal.yaml` and `evidence.yaml`, are ignored and fenced. Check
+that each is identical to its example, then pin it:
+
+```bash
+(
+cd "$RUN_WT" || exit 1
+for f in personal.yaml evidence.yaml; do
+  cmp "config/candidate/$f" "config.example/candidate/$f" && $OPS fence --pin "$RUN_WT/config/candidate/$f" || exit 1
+done
+)
+```
+
+`data/`, with the lane's own `jr.sqlite`, stays: `.claude/project.md` "Environment fences" allows it.
+An agent that needs config for a CLI probe uses a temp home (`JR_HOME` inline on that one process,
+never exported), or runs `init` again and removes the five files before it returns.
 
 ## Phase 0: Triage
 
