@@ -11,7 +11,6 @@ Open items for version 2, as of the migration (2026-10-14). Each one was observe
 
 - **Locations named only in the title are not read.** Cloudflare and others put the city in the title ("Senior Customer Engineer, Named - Toronto Canada") and only "Hybrid" in the location field, so such roles are eligible and warned "location unknown". v1 behaved the same. A title-location rule must not misfire on titles like "Majors - Southwest".
 - **The search strategy's negative signal `go` matches "go-to-market"** (a GTM posting showed "Wants go"). Inherited from v1's config; `golang` in `config/search/strategy.yaml` would fix it.
-- **Eight configured boards return 404** (daily sweep, 2026-11-25): greenhouse amplitude, hightouch, clickhouse, iterable, parloa; lever anyscale; ashby commonroom, browserbase. `config.example/sources.yaml` lists all eight too. Checked the same day with `jr discover` and by reading the boards' postings: amplitude (47 postings), clickhouse (209), iterable (19), parloa (38) and anyscale (24) are now on Ashby under the same token. Hightouch's Ashby board has one posting, from 2021, so it is not its current board. Nothing found for commonroom or browserbase. Moving a board means removing the dead entry as well: `jr discover --add` only adds.
 
 ## Form filling
 
